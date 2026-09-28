@@ -26,6 +26,7 @@ class Products extends Table {
   IntColumn get priceCents => integer()(); // store money as integer cents
   IntColumn get costCents => integer().nullable()();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
+  IntColumn get lowStockThreshold => integer().withDefault(const Constant(5))();
   DateTimeColumn get createdAt =>
       dateTime().clientDefault(() => DateTime.now())();
 
@@ -105,7 +106,22 @@ class Users extends Table {
   TextColumn get passwordHash => text().nullable()(); // admin/manager
   TextColumn get role => text()(); // cashier | manager | owner
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
+  IntColumn get failedAttempts => integer().withDefault(const Constant(0))();
+  DateTimeColumn get lockedUntil => dateTime().nullable()();
+  TextColumn get recoveryQuestion => text().nullable()();
+  TextColumn get recoveryAnswerHash => text().nullable()();
 
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class SaleReversals extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get saleId => text().references(Sales, #id).unique()();
+  TextColumn get actorId => text().references(Users, #id)();
+  TextColumn get kind => text()(); // void | refund
+  IntColumn get amountCents => integer()();
+  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -146,6 +162,7 @@ class AuditLogs extends Table {
   Inventory,
   InventoryMovements,
   Sales,
+  SaleReversals,
   SaleItems,
   Payments,
   Users,
@@ -158,7 +175,7 @@ class AppDatabase extends _$AppDatabase {
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -178,6 +195,14 @@ class AppDatabase extends _$AppDatabase {
                 'GROUP BY product_id');
             await customStatement('UPDATE sale_items SET line_total_cents = '
                 'quantity * unit_price_cents');
+          }
+          if (from < 3) {
+            await m.addColumn(products, products.lowStockThreshold);
+            await m.addColumn(users, users.failedAttempts);
+            await m.addColumn(users, users.lockedUntil);
+            await m.addColumn(users, users.recoveryQuestion);
+            await m.addColumn(users, users.recoveryAnswerHash);
+            await m.createTable(saleReversals);
           }
         },
         beforeOpen: (details) async {

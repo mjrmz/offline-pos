@@ -1,11 +1,15 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../../core/models/cart.dart';
+import '../../core/models/active_user.dart';
 import '../../core/models/product.dart';
 import '../../core/services/sale_service.dart';
+import '../../core/services/auth_service.dart';
+import '../../core/services/catalog_service.dart';
+import '../../shared/utils/safe_message.dart';
 import '../../data/daos/pos_repository.dart';
 
 String money(int cents) =>
-    '₱${cents ~/ 100}.${(cents % 100).toString().padLeft(2, '0')}';
+    '\u20B1${cents ~/ 100}.${(cents % 100).toString().padLeft(2, '0')}';
 int? tryParseMoney(String value) {
   if (!RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(value.trim())) return null;
   final parts = value.trim().split('.');
@@ -39,7 +43,13 @@ String? quantityValidationMessage(String value) {
 
 class CheckoutScreen extends StatefulWidget {
   final PosRepository repository;
-  const CheckoutScreen({super.key, required this.repository});
+  final ActiveUser user;
+  final AuthService auth;
+  const CheckoutScreen(
+      {super.key,
+      required this.repository,
+      required this.user,
+      required this.auth});
   @override
   State<CheckoutScreen> createState() => _CheckoutScreenState();
 }
@@ -48,7 +58,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
   final cart = Cart();
   final barcodeController = TextEditingController();
   final cashController = TextEditingController();
-  late final SaleService sales = SaleService(widget.repository);
+  late final SaleService sales = SaleService(widget.repository, widget.auth);
   List<PosProduct> products = [];
   String? message;
   bool busy = false;
@@ -70,7 +80,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final rows = await widget.repository.products();
       if (mounted) setState(() => products = rows);
     } catch (e) {
-      if (mounted) setState(() => message = '$e');
+      if (mounted) setState(() => message = safeMessage(e));
     }
   }
 
@@ -85,7 +95,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         barcodeController.clear();
       });
     } catch (e) {
-      setState(() => message = '$e');
+      setState(() => message = safeMessage(e));
     }
   }
 
@@ -114,7 +124,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       }
       await refresh();
     } catch (e) {
-      if (mounted) setState(() => message = '$e');
+      if (mounted) setState(() => message = safeMessage(e));
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -131,16 +141,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
         : null;
     return Scaffold(
       appBar: AppBar(title: const Text('POS Checkout'), actions: [
-        TextButton(
-            onPressed: busy
-                ? null
-                : () async {
-                    await Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) =>
-                            ProductScreen(repository: widget.repository)));
-                    await refresh();
-                  },
-            child: const Text('Products & categories'))
+        if (widget.user.can(PosPermission.manageCatalog))
+          TextButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      await Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) =>
+                              ProductScreen(repository: widget.repository, auth: widget.auth)));
+                      await refresh();
+                    },
+              child: const Text('Products & categories'))
       ]),
       body: AbsorbPointer(
           absorbing: busy,
@@ -174,7 +185,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
             ...cart.lines.map((line) => ListTile(
                 title: Text(line.product.name),
                 subtitle: Text(
-                    '${money(line.product.priceCents)} × ${line.quantity} = ${money(line.totalCents)}'),
+                    '${money(line.product.priceCents)} \u00D7 ${line.quantity} = ${money(line.totalCents)}'),
                 trailing: SizedBox(
                     width: 135,
                     child: Row(children: [
@@ -221,7 +232,7 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                         cashError != null
                     ? null
                     : checkout,
-                child: Text(busy ? 'Completing…' : 'Complete sale')),
+                child: Text(busy ? 'Completing\u2026' : 'Complete sale')),
           ])),
     );
   }
@@ -229,12 +240,14 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
 class ProductScreen extends StatefulWidget {
   final PosRepository repository;
-  const ProductScreen({super.key, required this.repository});
+  final AuthService auth;
+  const ProductScreen({super.key, required this.repository, required this.auth});
   @override
   State<ProductScreen> createState() => _ProductScreenState();
 }
 
 class _ProductScreenState extends State<ProductScreen> {
+  late final catalog = CatalogService(widget.repository, widget.auth);
   List<PosProduct> products = [];
   String? error;
   @override
@@ -261,6 +274,7 @@ class _ProductScreenState extends State<ProductScreen> {
             ? '0'
             : '${product.costCents ~/ 100}.${(product.costCents % 100).toString().padLeft(2, '0')}');
     final stock = TextEditingController(text: '0');
+    final threshold = TextEditingController(text: '${product?.lowStockThreshold ?? 5}');
     final categories = await widget.repository.categories();
     String? categoryId = product?.categoryId;
     bool active = product?.isActive ?? true;
@@ -302,6 +316,7 @@ class _ProductScreenState extends State<ProductScreen> {
                                 decoration: const InputDecoration(
                                     labelText: 'Starting stock'),
                                 keyboardType: TextInputType.number),
+                          TextField(controller: threshold, decoration: const InputDecoration(labelText: 'Low-stock threshold'), keyboardType: TextInputType.number),
                           DropdownButtonFormField<String?>(
                               initialValue: categoryId,
                               decoration:
@@ -330,13 +345,14 @@ class _ProductScreenState extends State<ProductScreen> {
                               final costCents = tryParseMoney(cost.text);
                               final startingStock =
                                   int.tryParse(stock.text.trim());
+                              final lowStockThreshold = int.tryParse(threshold.text.trim());
                               if (priceCents == null ||
                                   costCents == null ||
-                                  startingStock == null) {
+                                  startingStock == null || lowStockThreshold == null || lowStockThreshold < 0) {
                                 throw StateError(
                                     'Enter valid price, cost, and starting stock');
                               }
-                              await widget.repository.saveProduct(
+                              await catalog.saveProduct(
                                   id: product?.id,
                                   name: name.text,
                                   sku: sku.text,
@@ -345,11 +361,12 @@ class _ProductScreenState extends State<ProductScreen> {
                                   priceCents: priceCents,
                                   costCents: costCents,
                                   startingStock: startingStock,
+                                  lowStockThreshold: lowStockThreshold,
                                   isActive: active);
                               if (context.mounted) Navigator.pop(context);
                               await refresh();
                             } catch (e) {
-                              if (mounted) setState(() => error = '$e');
+                              if (mounted) setState(() => error = safeMessage(e));
                             }
                           },
                           child: const Text('Save'))
@@ -360,6 +377,7 @@ class _ProductScreenState extends State<ProductScreen> {
     price.dispose();
     cost.dispose();
     stock.dispose();
+    threshold.dispose();
   }
 
   Future<void> addCategory() async {
@@ -378,10 +396,10 @@ class _ProductScreenState extends State<ProductScreen> {
                   FilledButton(
                       onPressed: () async {
                         try {
-                          await widget.repository.addCategory(name.text);
+                          await catalog.addCategory(name.text);
                           if (context.mounted) Navigator.pop(context);
                         } catch (e) {
-                          if (mounted) setState(() => error = '$e');
+                          if (mounted) setState(() => error = safeMessage(e));
                         }
                       },
                       child: const Text('Save'))
@@ -406,7 +424,7 @@ class _ProductScreenState extends State<ProductScreen> {
                 builder: (context, snapshot) => ListTile(
                   title: Text(p.name),
                   subtitle: Text(
-                      '${money(p.priceCents)} · Stock: ${snapshot.data ?? '…'}${p.isActive ? '' : ' · Inactive'}'),
+                      '${money(p.priceCents)} \u00B7 Stock: ${snapshot.data ?? '\u2026'}${p.isActive ? '' : ' \u00B7 Inactive'}'),
                   trailing: IconButton(
                       icon: const Icon(Icons.edit), onPressed: () => edit(p)),
                 ),
@@ -414,3 +432,4 @@ class _ProductScreenState extends State<ProductScreen> {
         ]),
       );
 }
+

@@ -7,7 +7,8 @@ class PosProduct {
   final String? sku;
   final String? categoryId;
   final int costCents;
+  final int lowStockThreshold;
   const PosProduct(
       this.id, this.name, this.barcode, this.priceCents, this.isActive,
-      [this.sku, this.categoryId, this.costCents = 0]);
+      [this.sku, this.categoryId, this.costCents = 0, this.lowStockThreshold = 5]);
 }

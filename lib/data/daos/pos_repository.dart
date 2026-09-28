@@ -1,5 +1,7 @@
 import 'package:drift/drift.dart';
 import '../../core/models/product.dart';
+import '../../core/models/active_user.dart';
+import 'auth_repository.dart';
 import '../database.dart';
 
 class SaleLineRequest {
@@ -25,7 +27,8 @@ class PosRepository {
       row.isActive,
       row.sku,
       row.categoryId,
-      row.costCents ?? 0);
+      row.costCents ?? 0,
+      row.lowStockThreshold);
 
   Future<List<Category>> categories() => (db.select(db.categories)
         ..orderBy([(c) => OrderingTerm(expression: c.name)]))
@@ -77,11 +80,12 @@ class PosRepository {
       required int priceCents,
       required int costCents,
       int startingStock = 0,
+      int lowStockThreshold = 5,
       bool isActive = true}) async {
     if (name.trim().isEmpty ||
         priceCents < 0 ||
         costCents < 0 ||
-        startingStock < 0) {
+        startingStock < 0 || lowStockThreshold < 0) {
       throw ArgumentError('Invalid product values');
     }
     final normalizedSku = sku?.trim().isEmpty == true ? null : sku?.trim();
@@ -99,6 +103,7 @@ class PosRepository {
                 categoryId: Value(categoryId),
                 priceCents: Value(priceCents),
                 costCents: Value(costCents),
+                lowStockThreshold: Value(lowStockThreshold),
                 isActive: Value(isActive)));
         if (count != 1) throw StateError('Product not found');
         return id;
@@ -111,6 +116,7 @@ class PosRepository {
               categoryId: Value(categoryId),
               priceCents: priceCents,
               costCents: Value(costCents),
+              lowStockThreshold: Value(lowStockThreshold),
               isActive: Value(isActive)));
       await db
           .into(db.inventory)
@@ -140,9 +146,13 @@ class PosRepository {
             ..where((m) => m.productId.equals(productId)))
           .get();
 
-  Future<CommittedSale> completeCashSale(
-          List<SaleLineRequest> items, int cashReceivedCents) =>
+  Future<CommittedSale> completeCashSale(List<SaleLineRequest> items,
+          int cashReceivedCents, String cashierId) =>
       db.transaction(() async {
+        final actor = await AuthRepository(db).requireActive(cashierId);
+        if (!actor.can(PosPermission.sell)) {
+          throw StateError('Not authorized to sell');
+        }
         if (items.isEmpty) throw StateError('Cart is empty');
         final merged = <String, int>{};
         for (final item in items) {
@@ -167,16 +177,6 @@ class PosRepository {
           total += product.priceCents * entry.value;
         }
         if (cashReceivedCents < total) throw StateError('Insufficient cash');
-        const cashierId = 'phase2-local-cashier';
-        final cashier = await (db.select(db.users)
-              ..where((u) => u.id.equals(cashierId)))
-            .getSingleOrNull();
-        if (cashier == null) {
-          await db.into(db.users).insert(UsersCompanion.insert(
-              id: const Value(cashierId),
-              name: 'Local cashier',
-              role: 'cashier'));
-        }
         final sale = await db.into(db.sales).insertReturning(
             SalesCompanion.insert(cashierId: cashierId, totalCents: total));
         for (final (product, quantity) in details) {

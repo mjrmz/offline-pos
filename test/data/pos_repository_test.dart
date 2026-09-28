@@ -3,15 +3,22 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/core/models/cart.dart';
 import 'package:modern_offline_pos/core/services/sale_service.dart';
+import 'package:modern_offline_pos/core/services/auth_service.dart';
+import 'package:modern_offline_pos/data/daos/auth_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
 
 void main() {
   late AppDatabase db;
   late PosRepository repo;
-  setUp(() {
+  late AuthService auth;
+  setUp(() async {
     db = AppDatabase.forTesting(NativeDatabase.memory());
     repo = PosRepository(db);
+    auth = AuthService(AuthRepository(db));
+    final id = await auth.bootstrap(
+        'Test owner', 'password123', 'Question?', 'answer');
+    await auth.login(id, 'password123');
   });
   tearDown(() => db.close());
 
@@ -41,7 +48,7 @@ void main() {
     final cart = Cart()
       ..add((await repo.barcode('480000000001'))!)
       ..add((await repo.barcode('480000000001'))!);
-    final result = await SaleService(repo).checkout(cart, 10000);
+    final result = await SaleService(repo, auth).checkout(cart, 10000);
     expect(result.totalCents, 8000);
     expect(result.changeCents, 2000);
     expect(cart.isEmpty, true);
@@ -71,7 +78,7 @@ void main() {
     final cart = Cart()..add((await repo.products()).single);
     cart.setQuantity(id, 9);
     await expectLater(
-        SaleService(repo).checkout(cart, 40000), throwsStateError);
+        SaleService(repo, auth).checkout(cart, 40000), throwsStateError);
     expect(cart.lines.single.quantity, 9);
     expect(await repo.stock(id), 8);
     expect(await db.select(db.sales).get(), isEmpty);
@@ -79,10 +86,12 @@ void main() {
     expect(await db.select(db.payments).get(), isEmpty);
     expect((await repo.movements(id)).length, 1);
     cart.setQuantity(id, 2);
-    await expectLater(SaleService(repo).checkout(cart, 5000), throwsStateError);
+    await expectLater(
+        SaleService(repo, auth).checkout(cart, 5000), throwsStateError);
     expect(await db.select(db.sales).get(), isEmpty);
     cart.clear();
-    await expectLater(SaleService(repo).checkout(cart, 0), throwsStateError);
+    await expectLater(
+        SaleService(repo, auth).checkout(cart, 0), throwsStateError);
   });
 
   test('inactive product rejected at lookup and transaction', () async {
@@ -101,7 +110,8 @@ void main() {
         costCents: 0,
         isActive: false);
     await expectLater(repo.barcode('abc'), throwsStateError);
-    await expectLater(SaleService(repo).checkout(cart, 4000), throwsStateError);
+    await expectLater(
+        SaleService(repo, auth).checkout(cart, 4000), throwsStateError);
     expect(await db.select(db.sales).get(), isEmpty);
   });
 
@@ -112,7 +122,8 @@ void main() {
     final cart = Cart()..add((await repo.products()).single);
     await db.customStatement(
         "CREATE TRIGGER fail_payment BEFORE INSERT ON payments BEGIN SELECT RAISE(ABORT, 'forced failure'); END");
-    await expectLater(SaleService(repo).checkout(cart, 4000), throwsException);
+    await expectLater(
+        SaleService(repo, auth).checkout(cart, 4000), throwsException);
     expect(cart.isEmpty, false);
     expect(await repo.stock(id), 10);
     expect((await repo.movements(id)).length, 1);
@@ -127,7 +138,7 @@ void main() {
     final cart = Cart()..add((await repo.products()).single);
     final gate = Completer<void>();
     final delayed = _DelayedRepository(db, gate);
-    final service = SaleService(delayed);
+    final service = SaleService(delayed, auth);
     final first = service.checkout(cart, 4000);
     await expectLater(service.checkout(cart, 4000), throwsStateError);
     gate.complete();
@@ -141,7 +152,7 @@ void main() {
     final id = await repo.saveProduct(
         name: 'Coke', priceCents: 4000, costCents: 0, startingStock: 10);
     final cart = Cart()..add((await repo.products()).single);
-    final service = SaleService(repo);
+    final service = SaleService(repo, auth);
     await expectLater(service.checkout(cart, 0), throwsStateError);
     await expectLater(service.checkout(cart, -1), throwsStateError);
     await expectLater(service.checkout(cart, 3999), throwsStateError);
@@ -158,9 +169,9 @@ class _DelayedRepository extends PosRepository {
   final Completer<void> gate;
   _DelayedRepository(super.db, this.gate);
   @override
-  Future<CommittedSale> completeCashSale(
-      List<SaleLineRequest> items, int cashReceivedCents) async {
+  Future<CommittedSale> completeCashSale(List<SaleLineRequest> items,
+      int cashReceivedCents, String cashierId) async {
     await gate.future;
-    return super.completeCashSale(items, cashReceivedCents);
+    return super.completeCashSale(items, cashReceivedCents, cashierId);
   }
 }

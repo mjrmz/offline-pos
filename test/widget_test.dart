@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
+import 'package:modern_offline_pos/core/services/auth_service.dart';
+import 'package:modern_offline_pos/data/daos/auth_repository.dart';
 import 'package:modern_offline_pos/features/pos_checkout/checkout_screen.dart';
 
 void main() {
@@ -41,10 +43,15 @@ void main() {
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
     final repo = PosRepository(db);
+    final auth = AuthService(AuthRepository(db));
+    final ownerId =
+        await auth.bootstrap('Owner', 'password123', 'Question?', 'answer');
+    await auth.login(ownerId, 'password123');
     final id = await repo.saveProduct(
         name: 'Coke', priceCents: 4000, costCents: 0, startingStock: 10);
-    await tester
-        .pumpWidget(MaterialApp(home: CheckoutScreen(repository: repo)));
+    await tester.pumpWidget(MaterialApp(
+        home:
+            CheckoutScreen(repository: repo, user: auth.current!, auth: auth)));
     await tester.pumpAndSettle();
     await tester.tap(find.byIcon(Icons.add).first);
     await tester.pump();

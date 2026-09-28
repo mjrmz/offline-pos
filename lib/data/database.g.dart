@@ -301,6 +301,14 @@ class $ProductsTable extends Products with TableInfo<$ProductsTable, Product> {
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('CHECK ("is_active" IN (0, 1))'),
       defaultValue: const Constant(true));
+  static const VerificationMeta _lowStockThresholdMeta =
+      const VerificationMeta('lowStockThreshold');
+  @override
+  late final GeneratedColumn<int> lowStockThreshold = GeneratedColumn<int>(
+      'low_stock_threshold', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(5));
   static const VerificationMeta _createdAtMeta =
       const VerificationMeta('createdAt');
   @override
@@ -319,6 +327,7 @@ class $ProductsTable extends Products with TableInfo<$ProductsTable, Product> {
         priceCents,
         costCents,
         isActive,
+        lowStockThreshold,
         createdAt
       ];
   @override
@@ -370,6 +379,12 @@ class $ProductsTable extends Products with TableInfo<$ProductsTable, Product> {
       context.handle(_isActiveMeta,
           isActive.isAcceptableOrUnknown(data['is_active']!, _isActiveMeta));
     }
+    if (data.containsKey('low_stock_threshold')) {
+      context.handle(
+          _lowStockThresholdMeta,
+          lowStockThreshold.isAcceptableOrUnknown(
+              data['low_stock_threshold']!, _lowStockThresholdMeta));
+    }
     if (data.containsKey('created_at')) {
       context.handle(_createdAtMeta,
           createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
@@ -399,6 +414,8 @@ class $ProductsTable extends Products with TableInfo<$ProductsTable, Product> {
           .read(DriftSqlType.int, data['${effectivePrefix}cost_cents']),
       isActive: attachedDatabase.typeMapping
           .read(DriftSqlType.bool, data['${effectivePrefix}is_active'])!,
+      lowStockThreshold: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}low_stock_threshold'])!,
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
     );
@@ -419,6 +436,7 @@ class Product extends DataClass implements Insertable<Product> {
   final int priceCents;
   final int? costCents;
   final bool isActive;
+  final int lowStockThreshold;
   final DateTime createdAt;
   const Product(
       {required this.id,
@@ -429,6 +447,7 @@ class Product extends DataClass implements Insertable<Product> {
       required this.priceCents,
       this.costCents,
       required this.isActive,
+      required this.lowStockThreshold,
       required this.createdAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -449,6 +468,7 @@ class Product extends DataClass implements Insertable<Product> {
       map['cost_cents'] = Variable<int>(costCents);
     }
     map['is_active'] = Variable<bool>(isActive);
+    map['low_stock_threshold'] = Variable<int>(lowStockThreshold);
     map['created_at'] = Variable<DateTime>(createdAt);
     return map;
   }
@@ -469,6 +489,7 @@ class Product extends DataClass implements Insertable<Product> {
           ? const Value.absent()
           : Value(costCents),
       isActive: Value(isActive),
+      lowStockThreshold: Value(lowStockThreshold),
       createdAt: Value(createdAt),
     );
   }
@@ -485,6 +506,7 @@ class Product extends DataClass implements Insertable<Product> {
       priceCents: serializer.fromJson<int>(json['priceCents']),
       costCents: serializer.fromJson<int?>(json['costCents']),
       isActive: serializer.fromJson<bool>(json['isActive']),
+      lowStockThreshold: serializer.fromJson<int>(json['lowStockThreshold']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
   }
@@ -500,6 +522,7 @@ class Product extends DataClass implements Insertable<Product> {
       'priceCents': serializer.toJson<int>(priceCents),
       'costCents': serializer.toJson<int?>(costCents),
       'isActive': serializer.toJson<bool>(isActive),
+      'lowStockThreshold': serializer.toJson<int>(lowStockThreshold),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
   }
@@ -513,6 +536,7 @@ class Product extends DataClass implements Insertable<Product> {
           int? priceCents,
           Value<int?> costCents = const Value.absent(),
           bool? isActive,
+          int? lowStockThreshold,
           DateTime? createdAt}) =>
       Product(
         id: id ?? this.id,
@@ -523,6 +547,7 @@ class Product extends DataClass implements Insertable<Product> {
         priceCents: priceCents ?? this.priceCents,
         costCents: costCents.present ? costCents.value : this.costCents,
         isActive: isActive ?? this.isActive,
+        lowStockThreshold: lowStockThreshold ?? this.lowStockThreshold,
         createdAt: createdAt ?? this.createdAt,
       );
   Product copyWithCompanion(ProductsCompanion data) {
@@ -537,6 +562,9 @@ class Product extends DataClass implements Insertable<Product> {
           data.priceCents.present ? data.priceCents.value : this.priceCents,
       costCents: data.costCents.present ? data.costCents.value : this.costCents,
       isActive: data.isActive.present ? data.isActive.value : this.isActive,
+      lowStockThreshold: data.lowStockThreshold.present
+          ? data.lowStockThreshold.value
+          : this.lowStockThreshold,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -552,6 +580,7 @@ class Product extends DataClass implements Insertable<Product> {
           ..write('priceCents: $priceCents, ')
           ..write('costCents: $costCents, ')
           ..write('isActive: $isActive, ')
+          ..write('lowStockThreshold: $lowStockThreshold, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
@@ -559,7 +588,7 @@ class Product extends DataClass implements Insertable<Product> {
 
   @override
   int get hashCode => Object.hash(id, sku, barcode, categoryId, name,
-      priceCents, costCents, isActive, createdAt);
+      priceCents, costCents, isActive, lowStockThreshold, createdAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -572,6 +601,7 @@ class Product extends DataClass implements Insertable<Product> {
           other.priceCents == this.priceCents &&
           other.costCents == this.costCents &&
           other.isActive == this.isActive &&
+          other.lowStockThreshold == this.lowStockThreshold &&
           other.createdAt == this.createdAt);
 }
 
@@ -584,6 +614,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
   final Value<int> priceCents;
   final Value<int?> costCents;
   final Value<bool> isActive;
+  final Value<int> lowStockThreshold;
   final Value<DateTime> createdAt;
   final Value<int> rowid;
   const ProductsCompanion({
@@ -595,6 +626,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     this.priceCents = const Value.absent(),
     this.costCents = const Value.absent(),
     this.isActive = const Value.absent(),
+    this.lowStockThreshold = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -607,6 +639,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     required int priceCents,
     this.costCents = const Value.absent(),
     this.isActive = const Value.absent(),
+    this.lowStockThreshold = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : name = Value(name),
@@ -620,6 +653,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     Expression<int>? priceCents,
     Expression<int>? costCents,
     Expression<bool>? isActive,
+    Expression<int>? lowStockThreshold,
     Expression<DateTime>? createdAt,
     Expression<int>? rowid,
   }) {
@@ -632,6 +666,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       if (priceCents != null) 'price_cents': priceCents,
       if (costCents != null) 'cost_cents': costCents,
       if (isActive != null) 'is_active': isActive,
+      if (lowStockThreshold != null) 'low_stock_threshold': lowStockThreshold,
       if (createdAt != null) 'created_at': createdAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -646,6 +681,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       Value<int>? priceCents,
       Value<int?>? costCents,
       Value<bool>? isActive,
+      Value<int>? lowStockThreshold,
       Value<DateTime>? createdAt,
       Value<int>? rowid}) {
     return ProductsCompanion(
@@ -657,6 +693,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       priceCents: priceCents ?? this.priceCents,
       costCents: costCents ?? this.costCents,
       isActive: isActive ?? this.isActive,
+      lowStockThreshold: lowStockThreshold ?? this.lowStockThreshold,
       createdAt: createdAt ?? this.createdAt,
       rowid: rowid ?? this.rowid,
     );
@@ -689,6 +726,9 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     if (isActive.present) {
       map['is_active'] = Variable<bool>(isActive.value);
     }
+    if (lowStockThreshold.present) {
+      map['low_stock_threshold'] = Variable<int>(lowStockThreshold.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -709,6 +749,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
           ..write('priceCents: $priceCents, ')
           ..write('costCents: $costCents, ')
           ..write('isActive: $isActive, ')
+          ..write('lowStockThreshold: $lowStockThreshold, ')
           ..write('createdAt: $createdAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -1310,9 +1351,45 @@ class $UsersTable extends Users with TableInfo<$UsersTable, User> {
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('CHECK ("is_active" IN (0, 1))'),
       defaultValue: const Constant(true));
+  static const VerificationMeta _failedAttemptsMeta =
+      const VerificationMeta('failedAttempts');
   @override
-  List<GeneratedColumn> get $columns =>
-      [id, name, pinHash, passwordHash, role, isActive];
+  late final GeneratedColumn<int> failedAttempts = GeneratedColumn<int>(
+      'failed_attempts', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _lockedUntilMeta =
+      const VerificationMeta('lockedUntil');
+  @override
+  late final GeneratedColumn<DateTime> lockedUntil = GeneratedColumn<DateTime>(
+      'locked_until', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _recoveryQuestionMeta =
+      const VerificationMeta('recoveryQuestion');
+  @override
+  late final GeneratedColumn<String> recoveryQuestion = GeneratedColumn<String>(
+      'recovery_question', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _recoveryAnswerHashMeta =
+      const VerificationMeta('recoveryAnswerHash');
+  @override
+  late final GeneratedColumn<String> recoveryAnswerHash =
+      GeneratedColumn<String>('recovery_answer_hash', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        name,
+        pinHash,
+        passwordHash,
+        role,
+        isActive,
+        failedAttempts,
+        lockedUntil,
+        recoveryQuestion,
+        recoveryAnswerHash
+      ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1352,6 +1429,30 @@ class $UsersTable extends Users with TableInfo<$UsersTable, User> {
       context.handle(_isActiveMeta,
           isActive.isAcceptableOrUnknown(data['is_active']!, _isActiveMeta));
     }
+    if (data.containsKey('failed_attempts')) {
+      context.handle(
+          _failedAttemptsMeta,
+          failedAttempts.isAcceptableOrUnknown(
+              data['failed_attempts']!, _failedAttemptsMeta));
+    }
+    if (data.containsKey('locked_until')) {
+      context.handle(
+          _lockedUntilMeta,
+          lockedUntil.isAcceptableOrUnknown(
+              data['locked_until']!, _lockedUntilMeta));
+    }
+    if (data.containsKey('recovery_question')) {
+      context.handle(
+          _recoveryQuestionMeta,
+          recoveryQuestion.isAcceptableOrUnknown(
+              data['recovery_question']!, _recoveryQuestionMeta));
+    }
+    if (data.containsKey('recovery_answer_hash')) {
+      context.handle(
+          _recoveryAnswerHashMeta,
+          recoveryAnswerHash.isAcceptableOrUnknown(
+              data['recovery_answer_hash']!, _recoveryAnswerHashMeta));
+    }
     return context;
   }
 
@@ -1373,6 +1474,14 @@ class $UsersTable extends Users with TableInfo<$UsersTable, User> {
           .read(DriftSqlType.string, data['${effectivePrefix}role'])!,
       isActive: attachedDatabase.typeMapping
           .read(DriftSqlType.bool, data['${effectivePrefix}is_active'])!,
+      failedAttempts: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}failed_attempts'])!,
+      lockedUntil: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}locked_until']),
+      recoveryQuestion: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}recovery_question']),
+      recoveryAnswerHash: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}recovery_answer_hash']),
     );
   }
 
@@ -1389,13 +1498,21 @@ class User extends DataClass implements Insertable<User> {
   final String? passwordHash;
   final String role;
   final bool isActive;
+  final int failedAttempts;
+  final DateTime? lockedUntil;
+  final String? recoveryQuestion;
+  final String? recoveryAnswerHash;
   const User(
       {required this.id,
       required this.name,
       this.pinHash,
       this.passwordHash,
       required this.role,
-      required this.isActive});
+      required this.isActive,
+      required this.failedAttempts,
+      this.lockedUntil,
+      this.recoveryQuestion,
+      this.recoveryAnswerHash});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -1409,6 +1526,16 @@ class User extends DataClass implements Insertable<User> {
     }
     map['role'] = Variable<String>(role);
     map['is_active'] = Variable<bool>(isActive);
+    map['failed_attempts'] = Variable<int>(failedAttempts);
+    if (!nullToAbsent || lockedUntil != null) {
+      map['locked_until'] = Variable<DateTime>(lockedUntil);
+    }
+    if (!nullToAbsent || recoveryQuestion != null) {
+      map['recovery_question'] = Variable<String>(recoveryQuestion);
+    }
+    if (!nullToAbsent || recoveryAnswerHash != null) {
+      map['recovery_answer_hash'] = Variable<String>(recoveryAnswerHash);
+    }
     return map;
   }
 
@@ -1424,6 +1551,16 @@ class User extends DataClass implements Insertable<User> {
           : Value(passwordHash),
       role: Value(role),
       isActive: Value(isActive),
+      failedAttempts: Value(failedAttempts),
+      lockedUntil: lockedUntil == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lockedUntil),
+      recoveryQuestion: recoveryQuestion == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recoveryQuestion),
+      recoveryAnswerHash: recoveryAnswerHash == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recoveryAnswerHash),
     );
   }
 
@@ -1437,6 +1574,11 @@ class User extends DataClass implements Insertable<User> {
       passwordHash: serializer.fromJson<String?>(json['passwordHash']),
       role: serializer.fromJson<String>(json['role']),
       isActive: serializer.fromJson<bool>(json['isActive']),
+      failedAttempts: serializer.fromJson<int>(json['failedAttempts']),
+      lockedUntil: serializer.fromJson<DateTime?>(json['lockedUntil']),
+      recoveryQuestion: serializer.fromJson<String?>(json['recoveryQuestion']),
+      recoveryAnswerHash:
+          serializer.fromJson<String?>(json['recoveryAnswerHash']),
     );
   }
   @override
@@ -1449,6 +1591,10 @@ class User extends DataClass implements Insertable<User> {
       'passwordHash': serializer.toJson<String?>(passwordHash),
       'role': serializer.toJson<String>(role),
       'isActive': serializer.toJson<bool>(isActive),
+      'failedAttempts': serializer.toJson<int>(failedAttempts),
+      'lockedUntil': serializer.toJson<DateTime?>(lockedUntil),
+      'recoveryQuestion': serializer.toJson<String?>(recoveryQuestion),
+      'recoveryAnswerHash': serializer.toJson<String?>(recoveryAnswerHash),
     };
   }
 
@@ -1458,7 +1604,11 @@ class User extends DataClass implements Insertable<User> {
           Value<String?> pinHash = const Value.absent(),
           Value<String?> passwordHash = const Value.absent(),
           String? role,
-          bool? isActive}) =>
+          bool? isActive,
+          int? failedAttempts,
+          Value<DateTime?> lockedUntil = const Value.absent(),
+          Value<String?> recoveryQuestion = const Value.absent(),
+          Value<String?> recoveryAnswerHash = const Value.absent()}) =>
       User(
         id: id ?? this.id,
         name: name ?? this.name,
@@ -1467,6 +1617,14 @@ class User extends DataClass implements Insertable<User> {
             passwordHash.present ? passwordHash.value : this.passwordHash,
         role: role ?? this.role,
         isActive: isActive ?? this.isActive,
+        failedAttempts: failedAttempts ?? this.failedAttempts,
+        lockedUntil: lockedUntil.present ? lockedUntil.value : this.lockedUntil,
+        recoveryQuestion: recoveryQuestion.present
+            ? recoveryQuestion.value
+            : this.recoveryQuestion,
+        recoveryAnswerHash: recoveryAnswerHash.present
+            ? recoveryAnswerHash.value
+            : this.recoveryAnswerHash,
       );
   User copyWithCompanion(UsersCompanion data) {
     return User(
@@ -1478,6 +1636,17 @@ class User extends DataClass implements Insertable<User> {
           : this.passwordHash,
       role: data.role.present ? data.role.value : this.role,
       isActive: data.isActive.present ? data.isActive.value : this.isActive,
+      failedAttempts: data.failedAttempts.present
+          ? data.failedAttempts.value
+          : this.failedAttempts,
+      lockedUntil:
+          data.lockedUntil.present ? data.lockedUntil.value : this.lockedUntil,
+      recoveryQuestion: data.recoveryQuestion.present
+          ? data.recoveryQuestion.value
+          : this.recoveryQuestion,
+      recoveryAnswerHash: data.recoveryAnswerHash.present
+          ? data.recoveryAnswerHash.value
+          : this.recoveryAnswerHash,
     );
   }
 
@@ -1489,14 +1658,27 @@ class User extends DataClass implements Insertable<User> {
           ..write('pinHash: $pinHash, ')
           ..write('passwordHash: $passwordHash, ')
           ..write('role: $role, ')
-          ..write('isActive: $isActive')
+          ..write('isActive: $isActive, ')
+          ..write('failedAttempts: $failedAttempts, ')
+          ..write('lockedUntil: $lockedUntil, ')
+          ..write('recoveryQuestion: $recoveryQuestion, ')
+          ..write('recoveryAnswerHash: $recoveryAnswerHash')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, name, pinHash, passwordHash, role, isActive);
+  int get hashCode => Object.hash(
+      id,
+      name,
+      pinHash,
+      passwordHash,
+      role,
+      isActive,
+      failedAttempts,
+      lockedUntil,
+      recoveryQuestion,
+      recoveryAnswerHash);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1506,7 +1688,11 @@ class User extends DataClass implements Insertable<User> {
           other.pinHash == this.pinHash &&
           other.passwordHash == this.passwordHash &&
           other.role == this.role &&
-          other.isActive == this.isActive);
+          other.isActive == this.isActive &&
+          other.failedAttempts == this.failedAttempts &&
+          other.lockedUntil == this.lockedUntil &&
+          other.recoveryQuestion == this.recoveryQuestion &&
+          other.recoveryAnswerHash == this.recoveryAnswerHash);
 }
 
 class UsersCompanion extends UpdateCompanion<User> {
@@ -1516,6 +1702,10 @@ class UsersCompanion extends UpdateCompanion<User> {
   final Value<String?> passwordHash;
   final Value<String> role;
   final Value<bool> isActive;
+  final Value<int> failedAttempts;
+  final Value<DateTime?> lockedUntil;
+  final Value<String?> recoveryQuestion;
+  final Value<String?> recoveryAnswerHash;
   final Value<int> rowid;
   const UsersCompanion({
     this.id = const Value.absent(),
@@ -1524,6 +1714,10 @@ class UsersCompanion extends UpdateCompanion<User> {
     this.passwordHash = const Value.absent(),
     this.role = const Value.absent(),
     this.isActive = const Value.absent(),
+    this.failedAttempts = const Value.absent(),
+    this.lockedUntil = const Value.absent(),
+    this.recoveryQuestion = const Value.absent(),
+    this.recoveryAnswerHash = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   UsersCompanion.insert({
@@ -1533,6 +1727,10 @@ class UsersCompanion extends UpdateCompanion<User> {
     this.passwordHash = const Value.absent(),
     required String role,
     this.isActive = const Value.absent(),
+    this.failedAttempts = const Value.absent(),
+    this.lockedUntil = const Value.absent(),
+    this.recoveryQuestion = const Value.absent(),
+    this.recoveryAnswerHash = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : name = Value(name),
         role = Value(role);
@@ -1543,6 +1741,10 @@ class UsersCompanion extends UpdateCompanion<User> {
     Expression<String>? passwordHash,
     Expression<String>? role,
     Expression<bool>? isActive,
+    Expression<int>? failedAttempts,
+    Expression<DateTime>? lockedUntil,
+    Expression<String>? recoveryQuestion,
+    Expression<String>? recoveryAnswerHash,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1552,6 +1754,11 @@ class UsersCompanion extends UpdateCompanion<User> {
       if (passwordHash != null) 'password_hash': passwordHash,
       if (role != null) 'role': role,
       if (isActive != null) 'is_active': isActive,
+      if (failedAttempts != null) 'failed_attempts': failedAttempts,
+      if (lockedUntil != null) 'locked_until': lockedUntil,
+      if (recoveryQuestion != null) 'recovery_question': recoveryQuestion,
+      if (recoveryAnswerHash != null)
+        'recovery_answer_hash': recoveryAnswerHash,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1563,6 +1770,10 @@ class UsersCompanion extends UpdateCompanion<User> {
       Value<String?>? passwordHash,
       Value<String>? role,
       Value<bool>? isActive,
+      Value<int>? failedAttempts,
+      Value<DateTime?>? lockedUntil,
+      Value<String?>? recoveryQuestion,
+      Value<String?>? recoveryAnswerHash,
       Value<int>? rowid}) {
     return UsersCompanion(
       id: id ?? this.id,
@@ -1571,6 +1782,10 @@ class UsersCompanion extends UpdateCompanion<User> {
       passwordHash: passwordHash ?? this.passwordHash,
       role: role ?? this.role,
       isActive: isActive ?? this.isActive,
+      failedAttempts: failedAttempts ?? this.failedAttempts,
+      lockedUntil: lockedUntil ?? this.lockedUntil,
+      recoveryQuestion: recoveryQuestion ?? this.recoveryQuestion,
+      recoveryAnswerHash: recoveryAnswerHash ?? this.recoveryAnswerHash,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1596,6 +1811,18 @@ class UsersCompanion extends UpdateCompanion<User> {
     if (isActive.present) {
       map['is_active'] = Variable<bool>(isActive.value);
     }
+    if (failedAttempts.present) {
+      map['failed_attempts'] = Variable<int>(failedAttempts.value);
+    }
+    if (lockedUntil.present) {
+      map['locked_until'] = Variable<DateTime>(lockedUntil.value);
+    }
+    if (recoveryQuestion.present) {
+      map['recovery_question'] = Variable<String>(recoveryQuestion.value);
+    }
+    if (recoveryAnswerHash.present) {
+      map['recovery_answer_hash'] = Variable<String>(recoveryAnswerHash.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1611,6 +1838,10 @@ class UsersCompanion extends UpdateCompanion<User> {
           ..write('passwordHash: $passwordHash, ')
           ..write('role: $role, ')
           ..write('isActive: $isActive, ')
+          ..write('failedAttempts: $failedAttempts, ')
+          ..write('lockedUntil: $lockedUntil, ')
+          ..write('recoveryQuestion: $recoveryQuestion, ')
+          ..write('recoveryAnswerHash: $recoveryAnswerHash, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1920,6 +2151,358 @@ class SalesCompanion extends UpdateCompanion<Sale> {
           ..write('cashierId: $cashierId, ')
           ..write('totalCents: $totalCents, ')
           ..write('status: $status, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $SaleReversalsTable extends SaleReversals
+    with TableInfo<$SaleReversalsTable, SaleReversal> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SaleReversalsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      clientDefault: () => _uuid());
+  static const VerificationMeta _saleIdMeta = const VerificationMeta('saleId');
+  @override
+  late final GeneratedColumn<String> saleId = GeneratedColumn<String>(
+      'sale_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('UNIQUE REFERENCES sales (id)'));
+  static const VerificationMeta _actorIdMeta =
+      const VerificationMeta('actorId');
+  @override
+  late final GeneratedColumn<String> actorId = GeneratedColumn<String>(
+      'actor_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('REFERENCES users (id)'));
+  static const VerificationMeta _kindMeta = const VerificationMeta('kind');
+  @override
+  late final GeneratedColumn<String> kind = GeneratedColumn<String>(
+      'kind', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _amountCentsMeta =
+      const VerificationMeta('amountCents');
+  @override
+  late final GeneratedColumn<int> amountCents = GeneratedColumn<int>(
+      'amount_cents', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      clientDefault: () => DateTime.now());
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, saleId, actorId, kind, amountCents, createdAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'sale_reversals';
+  @override
+  VerificationContext validateIntegrity(Insertable<SaleReversal> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('sale_id')) {
+      context.handle(_saleIdMeta,
+          saleId.isAcceptableOrUnknown(data['sale_id']!, _saleIdMeta));
+    } else if (isInserting) {
+      context.missing(_saleIdMeta);
+    }
+    if (data.containsKey('actor_id')) {
+      context.handle(_actorIdMeta,
+          actorId.isAcceptableOrUnknown(data['actor_id']!, _actorIdMeta));
+    } else if (isInserting) {
+      context.missing(_actorIdMeta);
+    }
+    if (data.containsKey('kind')) {
+      context.handle(
+          _kindMeta, kind.isAcceptableOrUnknown(data['kind']!, _kindMeta));
+    } else if (isInserting) {
+      context.missing(_kindMeta);
+    }
+    if (data.containsKey('amount_cents')) {
+      context.handle(
+          _amountCentsMeta,
+          amountCents.isAcceptableOrUnknown(
+              data['amount_cents']!, _amountCentsMeta));
+    } else if (isInserting) {
+      context.missing(_amountCentsMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  SaleReversal map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SaleReversal(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      saleId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sale_id'])!,
+      actorId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}actor_id'])!,
+      kind: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}kind'])!,
+      amountCents: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}amount_cents'])!,
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+    );
+  }
+
+  @override
+  $SaleReversalsTable createAlias(String alias) {
+    return $SaleReversalsTable(attachedDatabase, alias);
+  }
+}
+
+class SaleReversal extends DataClass implements Insertable<SaleReversal> {
+  final String id;
+  final String saleId;
+  final String actorId;
+  final String kind;
+  final int amountCents;
+  final DateTime createdAt;
+  const SaleReversal(
+      {required this.id,
+      required this.saleId,
+      required this.actorId,
+      required this.kind,
+      required this.amountCents,
+      required this.createdAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['sale_id'] = Variable<String>(saleId);
+    map['actor_id'] = Variable<String>(actorId);
+    map['kind'] = Variable<String>(kind);
+    map['amount_cents'] = Variable<int>(amountCents);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  SaleReversalsCompanion toCompanion(bool nullToAbsent) {
+    return SaleReversalsCompanion(
+      id: Value(id),
+      saleId: Value(saleId),
+      actorId: Value(actorId),
+      kind: Value(kind),
+      amountCents: Value(amountCents),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory SaleReversal.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SaleReversal(
+      id: serializer.fromJson<String>(json['id']),
+      saleId: serializer.fromJson<String>(json['saleId']),
+      actorId: serializer.fromJson<String>(json['actorId']),
+      kind: serializer.fromJson<String>(json['kind']),
+      amountCents: serializer.fromJson<int>(json['amountCents']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'saleId': serializer.toJson<String>(saleId),
+      'actorId': serializer.toJson<String>(actorId),
+      'kind': serializer.toJson<String>(kind),
+      'amountCents': serializer.toJson<int>(amountCents),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  SaleReversal copyWith(
+          {String? id,
+          String? saleId,
+          String? actorId,
+          String? kind,
+          int? amountCents,
+          DateTime? createdAt}) =>
+      SaleReversal(
+        id: id ?? this.id,
+        saleId: saleId ?? this.saleId,
+        actorId: actorId ?? this.actorId,
+        kind: kind ?? this.kind,
+        amountCents: amountCents ?? this.amountCents,
+        createdAt: createdAt ?? this.createdAt,
+      );
+  SaleReversal copyWithCompanion(SaleReversalsCompanion data) {
+    return SaleReversal(
+      id: data.id.present ? data.id.value : this.id,
+      saleId: data.saleId.present ? data.saleId.value : this.saleId,
+      actorId: data.actorId.present ? data.actorId.value : this.actorId,
+      kind: data.kind.present ? data.kind.value : this.kind,
+      amountCents:
+          data.amountCents.present ? data.amountCents.value : this.amountCents,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SaleReversal(')
+          ..write('id: $id, ')
+          ..write('saleId: $saleId, ')
+          ..write('actorId: $actorId, ')
+          ..write('kind: $kind, ')
+          ..write('amountCents: $amountCents, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, saleId, actorId, kind, amountCents, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SaleReversal &&
+          other.id == this.id &&
+          other.saleId == this.saleId &&
+          other.actorId == this.actorId &&
+          other.kind == this.kind &&
+          other.amountCents == this.amountCents &&
+          other.createdAt == this.createdAt);
+}
+
+class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
+  final Value<String> id;
+  final Value<String> saleId;
+  final Value<String> actorId;
+  final Value<String> kind;
+  final Value<int> amountCents;
+  final Value<DateTime> createdAt;
+  final Value<int> rowid;
+  const SaleReversalsCompanion({
+    this.id = const Value.absent(),
+    this.saleId = const Value.absent(),
+    this.actorId = const Value.absent(),
+    this.kind = const Value.absent(),
+    this.amountCents = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SaleReversalsCompanion.insert({
+    this.id = const Value.absent(),
+    required String saleId,
+    required String actorId,
+    required String kind,
+    required int amountCents,
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : saleId = Value(saleId),
+        actorId = Value(actorId),
+        kind = Value(kind),
+        amountCents = Value(amountCents);
+  static Insertable<SaleReversal> custom({
+    Expression<String>? id,
+    Expression<String>? saleId,
+    Expression<String>? actorId,
+    Expression<String>? kind,
+    Expression<int>? amountCents,
+    Expression<DateTime>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (saleId != null) 'sale_id': saleId,
+      if (actorId != null) 'actor_id': actorId,
+      if (kind != null) 'kind': kind,
+      if (amountCents != null) 'amount_cents': amountCents,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SaleReversalsCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? saleId,
+      Value<String>? actorId,
+      Value<String>? kind,
+      Value<int>? amountCents,
+      Value<DateTime>? createdAt,
+      Value<int>? rowid}) {
+    return SaleReversalsCompanion(
+      id: id ?? this.id,
+      saleId: saleId ?? this.saleId,
+      actorId: actorId ?? this.actorId,
+      kind: kind ?? this.kind,
+      amountCents: amountCents ?? this.amountCents,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (saleId.present) {
+      map['sale_id'] = Variable<String>(saleId.value);
+    }
+    if (actorId.present) {
+      map['actor_id'] = Variable<String>(actorId.value);
+    }
+    if (kind.present) {
+      map['kind'] = Variable<String>(kind.value);
+    }
+    if (amountCents.present) {
+      map['amount_cents'] = Variable<int>(amountCents.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SaleReversalsCompanion(')
+          ..write('id: $id, ')
+          ..write('saleId: $saleId, ')
+          ..write('actorId: $actorId, ')
+          ..write('kind: $kind, ')
+          ..write('amountCents: $amountCents, ')
           ..write('createdAt: $createdAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -3286,6 +3869,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       $InventoryMovementsTable(this);
   late final $UsersTable users = $UsersTable(this);
   late final $SalesTable sales = $SalesTable(this);
+  late final $SaleReversalsTable saleReversals = $SaleReversalsTable(this);
   late final $SaleItemsTable saleItems = $SaleItemsTable(this);
   late final $PaymentsTable payments = $PaymentsTable(this);
   late final $CashSessionsTable cashSessions = $CashSessionsTable(this);
@@ -3301,6 +3885,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         inventoryMovements,
         users,
         sales,
+        saleReversals,
         saleItems,
         payments,
         cashSessions,
@@ -3633,6 +4218,7 @@ typedef $$ProductsTableCreateCompanionBuilder = ProductsCompanion Function({
   required int priceCents,
   Value<int?> costCents,
   Value<bool> isActive,
+  Value<int> lowStockThreshold,
   Value<DateTime> createdAt,
   Value<int> rowid,
 });
@@ -3645,6 +4231,7 @@ typedef $$ProductsTableUpdateCompanionBuilder = ProductsCompanion Function({
   Value<int> priceCents,
   Value<int?> costCents,
   Value<bool> isActive,
+  Value<int> lowStockThreshold,
   Value<DateTime> createdAt,
   Value<int> rowid,
 });
@@ -3745,6 +4332,10 @@ class $$ProductsTableFilterComposer
 
   ColumnFilters<bool> get isActive => $composableBuilder(
       column: $table.isActive, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get lowStockThreshold => $composableBuilder(
+      column: $table.lowStockThreshold,
+      builder: (column) => ColumnFilters(column));
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
@@ -3863,6 +4454,10 @@ class $$ProductsTableOrderingComposer
   ColumnOrderings<bool> get isActive => $composableBuilder(
       column: $table.isActive, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<int> get lowStockThreshold => $composableBuilder(
+      column: $table.lowStockThreshold,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
 
@@ -3916,6 +4511,9 @@ class $$ProductsTableAnnotationComposer
 
   GeneratedColumn<bool> get isActive =>
       $composableBuilder(column: $table.isActive, builder: (column) => column);
+
+  GeneratedColumn<int> get lowStockThreshold => $composableBuilder(
+      column: $table.lowStockThreshold, builder: (column) => column);
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -4040,6 +4638,7 @@ class $$ProductsTableTableManager extends RootTableManager<
             Value<int> priceCents = const Value.absent(),
             Value<int?> costCents = const Value.absent(),
             Value<bool> isActive = const Value.absent(),
+            Value<int> lowStockThreshold = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -4052,6 +4651,7 @@ class $$ProductsTableTableManager extends RootTableManager<
             priceCents: priceCents,
             costCents: costCents,
             isActive: isActive,
+            lowStockThreshold: lowStockThreshold,
             createdAt: createdAt,
             rowid: rowid,
           ),
@@ -4064,6 +4664,7 @@ class $$ProductsTableTableManager extends RootTableManager<
             required int priceCents,
             Value<int?> costCents = const Value.absent(),
             Value<bool> isActive = const Value.absent(),
+            Value<int> lowStockThreshold = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -4076,6 +4677,7 @@ class $$ProductsTableTableManager extends RootTableManager<
             priceCents: priceCents,
             costCents: costCents,
             isActive: isActive,
+            lowStockThreshold: lowStockThreshold,
             createdAt: createdAt,
             rowid: rowid,
           ),
@@ -4715,6 +5317,10 @@ typedef $$UsersTableCreateCompanionBuilder = UsersCompanion Function({
   Value<String?> passwordHash,
   required String role,
   Value<bool> isActive,
+  Value<int> failedAttempts,
+  Value<DateTime?> lockedUntil,
+  Value<String?> recoveryQuestion,
+  Value<String?> recoveryAnswerHash,
   Value<int> rowid,
 });
 typedef $$UsersTableUpdateCompanionBuilder = UsersCompanion Function({
@@ -4724,6 +5330,10 @@ typedef $$UsersTableUpdateCompanionBuilder = UsersCompanion Function({
   Value<String?> passwordHash,
   Value<String> role,
   Value<bool> isActive,
+  Value<int> failedAttempts,
+  Value<DateTime?> lockedUntil,
+  Value<String?> recoveryQuestion,
+  Value<String?> recoveryAnswerHash,
   Value<int> rowid,
 });
 
@@ -4741,6 +5351,21 @@ final class $$UsersTableReferences
         .filter((f) => f.cashierId.id.sqlEquals($_itemColumn<String>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_salesRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+
+  static MultiTypedResultKey<$SaleReversalsTable, List<SaleReversal>>
+      _saleReversalsRefsTable(_$AppDatabase db) =>
+          MultiTypedResultKey.fromTable(db.saleReversals,
+              aliasName:
+                  $_aliasNameGenerator(db.users.id, db.saleReversals.actorId));
+
+  $$SaleReversalsTableProcessedTableManager get saleReversalsRefs {
+    final manager = $$SaleReversalsTableTableManager($_db, $_db.saleReversals)
+        .filter((f) => f.actorId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_saleReversalsRefsTable($_db));
     return ProcessedTableManager(
         manager.$state.copyWith(prefetchedData: cache));
   }
@@ -4788,6 +5413,21 @@ class $$UsersTableFilterComposer extends Composer<_$AppDatabase, $UsersTable> {
   ColumnFilters<bool> get isActive => $composableBuilder(
       column: $table.isActive, builder: (column) => ColumnFilters(column));
 
+  ColumnFilters<int> get failedAttempts => $composableBuilder(
+      column: $table.failedAttempts,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get lockedUntil => $composableBuilder(
+      column: $table.lockedUntil, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get recoveryQuestion => $composableBuilder(
+      column: $table.recoveryQuestion,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get recoveryAnswerHash => $composableBuilder(
+      column: $table.recoveryAnswerHash,
+      builder: (column) => ColumnFilters(column));
+
   Expression<bool> salesRefs(
       Expression<bool> Function($$SalesTableFilterComposer f) f) {
     final $$SalesTableFilterComposer composer = $composerBuilder(
@@ -4801,6 +5441,27 @@ class $$UsersTableFilterComposer extends Composer<_$AppDatabase, $UsersTable> {
             $$SalesTableFilterComposer(
               $db: $db,
               $table: $db.sales,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+
+  Expression<bool> saleReversalsRefs(
+      Expression<bool> Function($$SaleReversalsTableFilterComposer f) f) {
+    final $$SaleReversalsTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.saleReversals,
+        getReferencedColumn: (t) => t.actorId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SaleReversalsTableFilterComposer(
+              $db: $db,
+              $table: $db.saleReversals,
               $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
               joinBuilder: joinBuilder,
               $removeJoinBuilderFromRootComposer:
@@ -4858,6 +5519,21 @@ class $$UsersTableOrderingComposer
 
   ColumnOrderings<bool> get isActive => $composableBuilder(
       column: $table.isActive, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get failedAttempts => $composableBuilder(
+      column: $table.failedAttempts,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get lockedUntil => $composableBuilder(
+      column: $table.lockedUntil, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get recoveryQuestion => $composableBuilder(
+      column: $table.recoveryQuestion,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get recoveryAnswerHash => $composableBuilder(
+      column: $table.recoveryAnswerHash,
+      builder: (column) => ColumnOrderings(column));
 }
 
 class $$UsersTableAnnotationComposer
@@ -4887,6 +5563,18 @@ class $$UsersTableAnnotationComposer
   GeneratedColumn<bool> get isActive =>
       $composableBuilder(column: $table.isActive, builder: (column) => column);
 
+  GeneratedColumn<int> get failedAttempts => $composableBuilder(
+      column: $table.failedAttempts, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get lockedUntil => $composableBuilder(
+      column: $table.lockedUntil, builder: (column) => column);
+
+  GeneratedColumn<String> get recoveryQuestion => $composableBuilder(
+      column: $table.recoveryQuestion, builder: (column) => column);
+
+  GeneratedColumn<String> get recoveryAnswerHash => $composableBuilder(
+      column: $table.recoveryAnswerHash, builder: (column) => column);
+
   Expression<T> salesRefs<T extends Object>(
       Expression<T> Function($$SalesTableAnnotationComposer a) f) {
     final $$SalesTableAnnotationComposer composer = $composerBuilder(
@@ -4900,6 +5588,27 @@ class $$UsersTableAnnotationComposer
             $$SalesTableAnnotationComposer(
               $db: $db,
               $table: $db.sales,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+
+  Expression<T> saleReversalsRefs<T extends Object>(
+      Expression<T> Function($$SaleReversalsTableAnnotationComposer a) f) {
+    final $$SaleReversalsTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.saleReversals,
+        getReferencedColumn: (t) => t.actorId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SaleReversalsTableAnnotationComposer(
+              $db: $db,
+              $table: $db.saleReversals,
               $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
               joinBuilder: joinBuilder,
               $removeJoinBuilderFromRootComposer:
@@ -4941,7 +5650,8 @@ class $$UsersTableTableManager extends RootTableManager<
     $$UsersTableUpdateCompanionBuilder,
     (User, $$UsersTableReferences),
     User,
-    PrefetchHooks Function({bool salesRefs, bool cashSessionsRefs})> {
+    PrefetchHooks Function(
+        {bool salesRefs, bool saleReversalsRefs, bool cashSessionsRefs})> {
   $$UsersTableTableManager(_$AppDatabase db, $UsersTable table)
       : super(TableManagerState(
           db: db,
@@ -4959,6 +5669,10 @@ class $$UsersTableTableManager extends RootTableManager<
             Value<String?> passwordHash = const Value.absent(),
             Value<String> role = const Value.absent(),
             Value<bool> isActive = const Value.absent(),
+            Value<int> failedAttempts = const Value.absent(),
+            Value<DateTime?> lockedUntil = const Value.absent(),
+            Value<String?> recoveryQuestion = const Value.absent(),
+            Value<String?> recoveryAnswerHash = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               UsersCompanion(
@@ -4968,6 +5682,10 @@ class $$UsersTableTableManager extends RootTableManager<
             passwordHash: passwordHash,
             role: role,
             isActive: isActive,
+            failedAttempts: failedAttempts,
+            lockedUntil: lockedUntil,
+            recoveryQuestion: recoveryQuestion,
+            recoveryAnswerHash: recoveryAnswerHash,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4977,6 +5695,10 @@ class $$UsersTableTableManager extends RootTableManager<
             Value<String?> passwordHash = const Value.absent(),
             required String role,
             Value<bool> isActive = const Value.absent(),
+            Value<int> failedAttempts = const Value.absent(),
+            Value<DateTime?> lockedUntil = const Value.absent(),
+            Value<String?> recoveryQuestion = const Value.absent(),
+            Value<String?> recoveryAnswerHash = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               UsersCompanion.insert(
@@ -4986,6 +5708,10 @@ class $$UsersTableTableManager extends RootTableManager<
             passwordHash: passwordHash,
             role: role,
             isActive: isActive,
+            failedAttempts: failedAttempts,
+            lockedUntil: lockedUntil,
+            recoveryQuestion: recoveryQuestion,
+            recoveryAnswerHash: recoveryAnswerHash,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
@@ -4993,11 +5719,14 @@ class $$UsersTableTableManager extends RootTableManager<
                   (e.readTable(table), $$UsersTableReferences(db, table, e)))
               .toList(),
           prefetchHooksCallback: (
-              {salesRefs = false, cashSessionsRefs = false}) {
+              {salesRefs = false,
+              saleReversalsRefs = false,
+              cashSessionsRefs = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [
                 if (salesRefs) db.sales,
+                if (saleReversalsRefs) db.saleReversals,
                 if (cashSessionsRefs) db.cashSessions
               ],
               addJoins: null,
@@ -5013,6 +5742,18 @@ class $$UsersTableTableManager extends RootTableManager<
                         referencedItemsForCurrentItem:
                             (item, referencedItems) => referencedItems
                                 .where((e) => e.cashierId == item.id),
+                        typedResults: items),
+                  if (saleReversalsRefs)
+                    await $_getPrefetchedData<User, $UsersTable, SaleReversal>(
+                        currentTable: table,
+                        referencedTable:
+                            $$UsersTableReferences._saleReversalsRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$UsersTableReferences(db, table, p0)
+                                .saleReversalsRefs,
+                        referencedItemsForCurrentItem: (item,
+                                referencedItems) =>
+                            referencedItems.where((e) => e.actorId == item.id),
                         typedResults: items),
                   if (cashSessionsRefs)
                     await $_getPrefetchedData<User, $UsersTable, CashSession>(
@@ -5044,7 +5785,8 @@ typedef $$UsersTableProcessedTableManager = ProcessedTableManager<
     $$UsersTableUpdateCompanionBuilder,
     (User, $$UsersTableReferences),
     User,
-    PrefetchHooks Function({bool salesRefs, bool cashSessionsRefs})>;
+    PrefetchHooks Function(
+        {bool salesRefs, bool saleReversalsRefs, bool cashSessionsRefs})>;
 typedef $$SalesTableCreateCompanionBuilder = SalesCompanion Function({
   Value<String> id,
   required String cashierId,
@@ -5078,6 +5820,21 @@ final class $$SalesTableReferences
     if (item == null) return manager;
     return ProcessedTableManager(
         manager.$state.copyWith(prefetchedData: [item]));
+  }
+
+  static MultiTypedResultKey<$SaleReversalsTable, List<SaleReversal>>
+      _saleReversalsRefsTable(_$AppDatabase db) =>
+          MultiTypedResultKey.fromTable(db.saleReversals,
+              aliasName:
+                  $_aliasNameGenerator(db.sales.id, db.saleReversals.saleId));
+
+  $$SaleReversalsTableProcessedTableManager get saleReversalsRefs {
+    final manager = $$SaleReversalsTableTableManager($_db, $_db.saleReversals)
+        .filter((f) => f.saleId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_saleReversalsRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
   }
 
   static MultiTypedResultKey<$SaleItemsTable, List<SaleItem>>
@@ -5147,6 +5904,27 @@ class $$SalesTableFilterComposer extends Composer<_$AppDatabase, $SalesTable> {
                   $removeJoinBuilderFromRootComposer,
             ));
     return composer;
+  }
+
+  Expression<bool> saleReversalsRefs(
+      Expression<bool> Function($$SaleReversalsTableFilterComposer f) f) {
+    final $$SaleReversalsTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.saleReversals,
+        getReferencedColumn: (t) => t.saleId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SaleReversalsTableFilterComposer(
+              $db: $db,
+              $table: $db.saleReversals,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
   }
 
   Expression<bool> saleItemsRefs(
@@ -5275,6 +6053,27 @@ class $$SalesTableAnnotationComposer
     return composer;
   }
 
+  Expression<T> saleReversalsRefs<T extends Object>(
+      Expression<T> Function($$SaleReversalsTableAnnotationComposer a) f) {
+    final $$SaleReversalsTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.saleReversals,
+        getReferencedColumn: (t) => t.saleId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SaleReversalsTableAnnotationComposer(
+              $db: $db,
+              $table: $db.saleReversals,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+
   Expression<T> saleItemsRefs<T extends Object>(
       Expression<T> Function($$SaleItemsTableAnnotationComposer a) f) {
     final $$SaleItemsTableAnnotationComposer composer = $composerBuilder(
@@ -5330,7 +6129,10 @@ class $$SalesTableTableManager extends RootTableManager<
     (Sale, $$SalesTableReferences),
     Sale,
     PrefetchHooks Function(
-        {bool cashierId, bool saleItemsRefs, bool paymentsRefs})> {
+        {bool cashierId,
+        bool saleReversalsRefs,
+        bool saleItemsRefs,
+        bool paymentsRefs})> {
   $$SalesTableTableManager(_$AppDatabase db, $SalesTable table)
       : super(TableManagerState(
           db: db,
@@ -5379,11 +6181,13 @@ class $$SalesTableTableManager extends RootTableManager<
               .toList(),
           prefetchHooksCallback: (
               {cashierId = false,
+              saleReversalsRefs = false,
               saleItemsRefs = false,
               paymentsRefs = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [
+                if (saleReversalsRefs) db.saleReversals,
                 if (saleItemsRefs) db.saleItems,
                 if (paymentsRefs) db.payments
               ],
@@ -5414,6 +6218,18 @@ class $$SalesTableTableManager extends RootTableManager<
               },
               getPrefetchedDataCallback: (items) async {
                 return [
+                  if (saleReversalsRefs)
+                    await $_getPrefetchedData<Sale, $SalesTable, SaleReversal>(
+                        currentTable: table,
+                        referencedTable:
+                            $$SalesTableReferences._saleReversalsRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$SalesTableReferences(db, table, p0)
+                                .saleReversalsRefs,
+                        referencedItemsForCurrentItem: (item,
+                                referencedItems) =>
+                            referencedItems.where((e) => e.saleId == item.id),
+                        typedResults: items),
                   if (saleItemsRefs)
                     await $_getPrefetchedData<Sale, $SalesTable, SaleItem>(
                         currentTable: table,
@@ -5455,7 +6271,375 @@ typedef $$SalesTableProcessedTableManager = ProcessedTableManager<
     (Sale, $$SalesTableReferences),
     Sale,
     PrefetchHooks Function(
-        {bool cashierId, bool saleItemsRefs, bool paymentsRefs})>;
+        {bool cashierId,
+        bool saleReversalsRefs,
+        bool saleItemsRefs,
+        bool paymentsRefs})>;
+typedef $$SaleReversalsTableCreateCompanionBuilder = SaleReversalsCompanion
+    Function({
+  Value<String> id,
+  required String saleId,
+  required String actorId,
+  required String kind,
+  required int amountCents,
+  Value<DateTime> createdAt,
+  Value<int> rowid,
+});
+typedef $$SaleReversalsTableUpdateCompanionBuilder = SaleReversalsCompanion
+    Function({
+  Value<String> id,
+  Value<String> saleId,
+  Value<String> actorId,
+  Value<String> kind,
+  Value<int> amountCents,
+  Value<DateTime> createdAt,
+  Value<int> rowid,
+});
+
+final class $$SaleReversalsTableReferences
+    extends BaseReferences<_$AppDatabase, $SaleReversalsTable, SaleReversal> {
+  $$SaleReversalsTableReferences(
+      super.$_db, super.$_table, super.$_typedResult);
+
+  static $SalesTable _saleIdTable(_$AppDatabase db) => db.sales
+      .createAlias($_aliasNameGenerator(db.saleReversals.saleId, db.sales.id));
+
+  $$SalesTableProcessedTableManager get saleId {
+    final $_column = $_itemColumn<String>('sale_id')!;
+
+    final manager = $$SalesTableTableManager($_db, $_db.sales)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_saleIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+
+  static $UsersTable _actorIdTable(_$AppDatabase db) => db.users
+      .createAlias($_aliasNameGenerator(db.saleReversals.actorId, db.users.id));
+
+  $$UsersTableProcessedTableManager get actorId {
+    final $_column = $_itemColumn<String>('actor_id')!;
+
+    final manager = $$UsersTableTableManager($_db, $_db.users)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_actorIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
+
+class $$SaleReversalsTableFilterComposer
+    extends Composer<_$AppDatabase, $SaleReversalsTable> {
+  $$SaleReversalsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get kind => $composableBuilder(
+      column: $table.kind, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get amountCents => $composableBuilder(
+      column: $table.amountCents, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  $$SalesTableFilterComposer get saleId {
+    final $$SalesTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.saleId,
+        referencedTable: $db.sales,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SalesTableFilterComposer(
+              $db: $db,
+              $table: $db.sales,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$UsersTableFilterComposer get actorId {
+    final $$UsersTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.actorId,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableFilterComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$SaleReversalsTableOrderingComposer
+    extends Composer<_$AppDatabase, $SaleReversalsTable> {
+  $$SaleReversalsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get kind => $composableBuilder(
+      column: $table.kind, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get amountCents => $composableBuilder(
+      column: $table.amountCents, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  $$SalesTableOrderingComposer get saleId {
+    final $$SalesTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.saleId,
+        referencedTable: $db.sales,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SalesTableOrderingComposer(
+              $db: $db,
+              $table: $db.sales,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$UsersTableOrderingComposer get actorId {
+    final $$UsersTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.actorId,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableOrderingComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$SaleReversalsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SaleReversalsTable> {
+  $$SaleReversalsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get kind =>
+      $composableBuilder(column: $table.kind, builder: (column) => column);
+
+  GeneratedColumn<int> get amountCents => $composableBuilder(
+      column: $table.amountCents, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  $$SalesTableAnnotationComposer get saleId {
+    final $$SalesTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.saleId,
+        referencedTable: $db.sales,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SalesTableAnnotationComposer(
+              $db: $db,
+              $table: $db.sales,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$UsersTableAnnotationComposer get actorId {
+    final $$UsersTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.actorId,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableAnnotationComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$SaleReversalsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $SaleReversalsTable,
+    SaleReversal,
+    $$SaleReversalsTableFilterComposer,
+    $$SaleReversalsTableOrderingComposer,
+    $$SaleReversalsTableAnnotationComposer,
+    $$SaleReversalsTableCreateCompanionBuilder,
+    $$SaleReversalsTableUpdateCompanionBuilder,
+    (SaleReversal, $$SaleReversalsTableReferences),
+    SaleReversal,
+    PrefetchHooks Function({bool saleId, bool actorId})> {
+  $$SaleReversalsTableTableManager(_$AppDatabase db, $SaleReversalsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SaleReversalsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SaleReversalsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SaleReversalsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> saleId = const Value.absent(),
+            Value<String> actorId = const Value.absent(),
+            Value<String> kind = const Value.absent(),
+            Value<int> amountCents = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              SaleReversalsCompanion(
+            id: id,
+            saleId: saleId,
+            actorId: actorId,
+            kind: kind,
+            amountCents: amountCents,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            required String saleId,
+            required String actorId,
+            required String kind,
+            required int amountCents,
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              SaleReversalsCompanion.insert(
+            id: id,
+            saleId: saleId,
+            actorId: actorId,
+            kind: kind,
+            amountCents: amountCents,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$SaleReversalsTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: ({saleId = false, actorId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (saleId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.saleId,
+                    referencedTable:
+                        $$SaleReversalsTableReferences._saleIdTable(db),
+                    referencedColumn:
+                        $$SaleReversalsTableReferences._saleIdTable(db).id,
+                  ) as T;
+                }
+                if (actorId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.actorId,
+                    referencedTable:
+                        $$SaleReversalsTableReferences._actorIdTable(db),
+                    referencedColumn:
+                        $$SaleReversalsTableReferences._actorIdTable(db).id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$SaleReversalsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $SaleReversalsTable,
+    SaleReversal,
+    $$SaleReversalsTableFilterComposer,
+    $$SaleReversalsTableOrderingComposer,
+    $$SaleReversalsTableAnnotationComposer,
+    $$SaleReversalsTableCreateCompanionBuilder,
+    $$SaleReversalsTableUpdateCompanionBuilder,
+    (SaleReversal, $$SaleReversalsTableReferences),
+    SaleReversal,
+    PrefetchHooks Function({bool saleId, bool actorId})>;
 typedef $$SaleItemsTableCreateCompanionBuilder = SaleItemsCompanion Function({
   Value<String> id,
   required String saleId,
@@ -6570,6 +7754,8 @@ class $AppDatabaseManager {
       $$UsersTableTableManager(_db, _db.users);
   $$SalesTableTableManager get sales =>
       $$SalesTableTableManager(_db, _db.sales);
+  $$SaleReversalsTableTableManager get saleReversals =>
+      $$SaleReversalsTableTableManager(_db, _db.saleReversals);
   $$SaleItemsTableTableManager get saleItems =>
       $$SaleItemsTableTableManager(_db, _db.saleItems);
   $$PaymentsTableTableManager get payments =>

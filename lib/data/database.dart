@@ -9,6 +9,7 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:uuid/uuid.dart';
 
 part 'database.g.dart';
 
@@ -20,6 +21,7 @@ class Products extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get sku => text().nullable()();
   TextColumn get barcode => text().nullable()();
+  TextColumn get categoryId => text().nullable().references(Categories, #id)();
   TextColumn get name => text()();
   IntColumn get priceCents => integer()(); // store money as integer cents
   IntColumn get costCents => integer().nullable()();
@@ -31,11 +33,28 @@ class Products extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class Categories extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get name => text()();
+  TextColumn get parentCategoryId =>
+      text().nullable().references(Categories, #id)();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class Inventory extends Table {
+  TextColumn get productId => text().references(Products, #id)();
+  IntColumn get quantity => integer().withDefault(const Constant(0))();
+  @override
+  Set<Column> get primaryKey => {productId};
+}
+
 class InventoryMovements extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get productId => text().references(Products, #id)();
   IntColumn get quantityDelta => integer()(); // +50 stock in, -2 sale, etc.
-  TextColumn get reason => text()(); // 'sale' | 'purchase' | 'adjustment' | 'damaged'
+  TextColumn get reason =>
+      text()(); // 'sale' | 'purchase' | 'adjustment' | 'damaged'
   TextColumn get referenceId => text().nullable()(); // e.g. Sale.id
   DateTimeColumn get createdAt =>
       dateTime().clientDefault(() => DateTime.now())();
@@ -48,8 +67,8 @@ class Sales extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get cashierId => text().references(Users, #id)();
   IntColumn get totalCents => integer()();
-  TextColumn get status =>
-      text().withDefault(const Constant('completed'))(); // completed | voided | refunded
+  TextColumn get status => text().withDefault(
+      const Constant('completed'))(); // completed | voided | refunded
   DateTimeColumn get createdAt =>
       dateTime().clientDefault(() => DateTime.now())();
 
@@ -63,6 +82,7 @@ class SaleItems extends Table {
   TextColumn get productId => text().references(Products, #id)();
   IntColumn get quantity => integer()();
   IntColumn get unitPriceCents => integer()();
+  IntColumn get lineTotalCents => integer().withDefault(const Constant(0))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -122,6 +142,8 @@ class AuditLogs extends Table {
 
 @DriftDatabase(tables: [
   Products,
+  Categories,
+  Inventory,
   InventoryMovements,
   Sales,
   SaleItems,
@@ -132,10 +154,11 @@ class AuditLogs extends Table {
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
+  AppDatabase.forTesting(super.executor);
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -143,10 +166,19 @@ class AppDatabase extends _$AppDatabase {
           await m.createAll();
         },
         onUpgrade: (m, from, to) async {
-          // Example pattern for future migrations:
-          // if (from < 2) {
-          //   await m.addColumn(products, products.someNewColumn);
-          // }
+          if (from < 2) {
+            await m.createTable(categories);
+            await m.addColumn(products, products.categoryId);
+            await m.createTable(inventory);
+            await m.addColumn(saleItems, saleItems.lineTotalCents);
+            // Existing Phase 1 movement rows are the only prior stock source.
+            await customStatement(
+                'INSERT INTO inventory (product_id, quantity) '
+                'SELECT product_id, SUM(quantity_delta) FROM inventory_movements '
+                'GROUP BY product_id');
+            await customStatement('UPDATE sale_items SET line_total_cents = '
+                'quantity * unit_price_cents');
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -165,6 +197,5 @@ LazyDatabase _openConnection() {
 }
 
 String _uuid() {
-  // Replace with package:uuid's Uuid().v4() in the real app.
-  return DateTime.now().microsecondsSinceEpoch.toString();
+  return const Uuid().v4();
 }

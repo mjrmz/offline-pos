@@ -135,6 +135,23 @@ void main() {
     expect(await repo.stock(id), 1);
     expect((await db.select(db.sales).get()).length, 1);
   });
+
+  test('core rejects zero and insufficient cash without any sale writes',
+      () async {
+    final id = await repo.saveProduct(
+        name: 'Coke', priceCents: 4000, costCents: 0, startingStock: 10);
+    final cart = Cart()..add((await repo.products()).single);
+    final service = SaleService(repo);
+    await expectLater(service.checkout(cart, 0), throwsStateError);
+    await expectLater(service.checkout(cart, -1), throwsStateError);
+    await expectLater(service.checkout(cart, 3999), throwsStateError);
+    expect(cart.isEmpty, false);
+    expect(await repo.stock(id), 10);
+    expect((await repo.movements(id)).length, 1);
+    expect(await db.select(db.sales).get(), isEmpty);
+    expect(await db.select(db.saleItems).get(), isEmpty);
+    expect(await db.select(db.payments).get(), isEmpty);
+  });
 }
 
 class _DelayedRepository extends PosRepository {

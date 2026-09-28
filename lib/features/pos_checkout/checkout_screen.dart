@@ -6,14 +6,35 @@ import '../../data/daos/pos_repository.dart';
 
 String money(int cents) =>
     '₱${cents ~/ 100}.${(cents % 100).toString().padLeft(2, '0')}';
-int parseMoney(String value) {
-  if (!RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(value.trim())) {
-    throw const FormatException(
-        'Enter a valid amount (up to 2 decimal places)');
-  }
+int? tryParseMoney(String value) {
+  if (!RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(value.trim())) return null;
   final parts = value.trim().split('.');
-  return int.parse(parts[0]) * 100 +
-      (parts.length == 1 ? 0 : int.parse(parts[1].padRight(2, '0')));
+  final pesos = int.tryParse(parts[0]);
+  final fraction =
+      parts.length == 1 ? 0 : int.tryParse(parts[1].padRight(2, '0'));
+  if (pesos == null ||
+      fraction == null ||
+      pesos > (0x7fffffffffffffff - fraction) ~/ 100) {
+    return null;
+  }
+  return pesos * 100 + fraction;
+}
+
+String? cashValidationMessage(String value, int totalCents) {
+  if (value.trim().isEmpty) return 'Enter cash received';
+  final cents = tryParseMoney(value);
+  if (cents == null) return 'Enter a valid amount (up to 2 decimal places)';
+  if (cents <= 0) return 'Cash received must be greater than zero';
+  if (cents < totalCents) return 'Cash received is below the total';
+  return null;
+}
+
+String? quantityValidationMessage(String value) {
+  final quantity = int.tryParse(value.trim());
+  if (quantity == null || quantity <= 0) {
+    return 'Quantity must be a positive whole number';
+  }
+  return null;
 }
 
 class CheckoutScreen extends StatefulWidget {
@@ -70,13 +91,20 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   Future<void> checkout() async {
     if (busy) return;
+    final validation =
+        cashValidationMessage(cashController.text, cart.totalCents);
+    if (cart.isEmpty || cart.totalCents <= 0 || validation != null) {
+      setState(
+          () => message = validation ?? 'Add a product with a positive total');
+      return;
+    }
+    final cashCents = tryParseMoney(cashController.text)!;
     setState(() {
       busy = true;
       message = null;
     });
     try {
-      final result =
-          await sales.checkout(cart, parseMoney(cashController.text));
+      final result = await sales.checkout(cart, cashCents);
       if (mounted) {
         setState(() {
           message =
@@ -94,10 +122,13 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
 
   @override
   Widget build(BuildContext context) {
-    int? change;
-    try {
-      change = parseMoney(cashController.text) - cart.totalCents;
-    } catch (_) {}
+    final cashCents = tryParseMoney(cashController.text);
+    final cashError = cart.isEmpty
+        ? null
+        : cashValidationMessage(cashController.text, cart.totalCents);
+    final change = cashError == null && cashCents != null
+        ? cashCents - cart.totalCents
+        : null;
     return Scaffold(
       appBar: AppBar(title: const Text('POS Checkout'), actions: [
         TextButton(
@@ -155,17 +186,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                               initialValue: '${line.quantity}',
                               keyboardType: TextInputType.number,
                               onFieldSubmitted: (value) {
-                                final quantity = int.tryParse(value);
-                                if (quantity == null) {
-                                  setState(() => message = 'Invalid quantity');
+                                final validation =
+                                    quantityValidationMessage(value);
+                                if (validation != null) {
+                                  setState(() => message = validation);
                                   return;
                                 }
-                                try {
-                                  setState(() => cart.setQuantity(
-                                      line.product.id, quantity));
-                                } catch (e) {
-                                  setState(() => message = '$e');
-                                }
+                                final quantity = int.tryParse(value.trim());
+                                setState(() {
+                                  cart.setQuantity(line.product.id, quantity!);
+                                  message = null;
+                                });
                               })),
                       IconButton(
                           onPressed: () =>
@@ -179,11 +210,17 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
                 controller: cashController,
                 keyboardType:
                     const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Cash received'),
+                decoration: InputDecoration(
+                    labelText: 'Cash received', errorText: cashError),
                 onChanged: (_) => setState(() {})),
             if (change != null && change >= 0) Text('Change: ${money(change)}'),
             FilledButton(
-                onPressed: busy || cart.isEmpty ? null : checkout,
+                onPressed: busy ||
+                        cart.isEmpty ||
+                        cart.totalCents <= 0 ||
+                        cashError != null
+                    ? null
+                    : checkout,
                 child: Text(busy ? 'Completing…' : 'Complete sale')),
           ])),
     );
@@ -289,15 +326,25 @@ class _ProductScreenState extends State<ProductScreen> {
                       FilledButton(
                           onPressed: () async {
                             try {
+                              final priceCents = tryParseMoney(price.text);
+                              final costCents = tryParseMoney(cost.text);
+                              final startingStock =
+                                  int.tryParse(stock.text.trim());
+                              if (priceCents == null ||
+                                  costCents == null ||
+                                  startingStock == null) {
+                                throw StateError(
+                                    'Enter valid price, cost, and starting stock');
+                              }
                               await widget.repository.saveProduct(
                                   id: product?.id,
                                   name: name.text,
                                   sku: sku.text,
                                   barcode: barcode.text,
                                   categoryId: categoryId,
-                                  priceCents: parseMoney(price.text),
-                                  costCents: parseMoney(cost.text),
-                                  startingStock: int.parse(stock.text),
+                                  priceCents: priceCents,
+                                  costCents: costCents,
+                                  startingStock: startingStock,
                                   isActive: active);
                               if (context.mounted) Navigator.pop(context);
                               await refresh();

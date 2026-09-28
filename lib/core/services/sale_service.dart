@@ -15,6 +15,10 @@ class SaleService {
   Future<SaleResult> checkout(Cart cart, int cashReceivedCents) async {
     if (_inFlight) throw StateError('Checkout is already in progress');
     if (cart.isEmpty) throw StateError('Cart is empty');
+    if (cart.totalCents <= 0) throw StateError('Sale total must be positive');
+    if (cashReceivedCents <= 0) {
+      throw StateError('Cash received must be positive');
+    }
     if (cashReceivedCents < cart.totalCents) {
       throw StateError('Insufficient cash');
     }

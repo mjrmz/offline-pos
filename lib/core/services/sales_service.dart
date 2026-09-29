@@ -5,9 +5,7 @@ import 'auth_service.dart';
 class SalesService {
   final SalesRepository repository;
   final AuthService auth;
-  final DateTime Function() now;
-  SalesService(this.repository, this.auth, {DateTime Function()? clock})
-      : now = clock ?? DateTime.now;
+  SalesService(this.repository, this.auth);
   Future<List<SaleSummary>> history() {
     return repository.history(auth.requireSession(PosPermission.viewOwnSales));
   }
@@ -19,12 +17,15 @@ class SalesService {
 
   Future<void> voidSale(String saleId) {
     return repository.reverse(
-        auth.requireSession(PosPermission.reverseSale), saleId, 'void', now());
+        auth.requireSession(PosPermission.reverseSale), saleId, 'void',
+        stockRestored: true);
   }
 
-  Future<void> refundSale(String saleId) {
-    return repository.reverse(auth.requireSession(PosPermission.reverseSale),
-        saleId, 'refund', now());
+  Future<void> refundSale(String saleId,
+      {required bool returnToSellableStock}) {
+    return repository.reverse(
+        auth.requireSession(PosPermission.reverseSale), saleId, 'refund',
+        stockRestored: returnToSellableStock);
   }
 
   Future<DailyReport> report(DateTime date) {

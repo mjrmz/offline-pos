@@ -32,8 +32,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final sales = SalesService(widget.salesRepository, widget.auth);
     final pages = <Widget>[
       CheckoutScreen(repository: widget.pos, user: user, auth: widget.auth),
-      SalesHistoryScreen(sales: sales, user: user),
-      if (user.can(PosPermission.reports)) ReportsScreen(sales: sales),
+      SalesHistoryScreen(sales: sales, user: user, active: page == 1),
+      if (user.can(PosPermission.reports))
+        ReportsScreen(sales: sales, active: page == 2),
       if (user.can(PosPermission.manageUsers)) UsersScreen(auth: widget.auth),
     ];
     final labels = <String>[

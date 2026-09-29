@@ -6,7 +6,8 @@ import '../pos_checkout/checkout_screen.dart';
 
 class ReportsScreen extends StatefulWidget {
   final SalesService sales;
-  const ReportsScreen({super.key, required this.sales});
+  final bool active;
+  const ReportsScreen({super.key, required this.sales, this.active = true});
   @override
   State<ReportsScreen> createState() => _ReportsScreenState();
 }
@@ -18,7 +19,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   void initState() {
     super.initState();
-    refresh();
+    if (widget.active) refresh();
+  }
+
+  @override
+  void didUpdateWidget(covariant ReportsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) refresh();
   }
 
   Future<void> refresh() async {

@@ -7,11 +7,12 @@ class AuthService {
   static const lockDuration = Duration(minutes: 2);
   final AuthRepository repository;
   final DateTime Function() now;
-  ActiveUser? current;
+  ActiveUser? _current;
+  ActiveUser? get current => _current;
   AuthService(this.repository, {DateTime Function()? clock})
       : now = clock ?? DateTime.now;
   ActiveUser requireSession(PosPermission permission) {
-    final user = current;
+    final user = _current;
     if (user == null) throw StateError('Please log in');
     user.require(permission);
     return user;
@@ -75,20 +76,26 @@ class AuthService {
           : 'Invalid credentials');
     }
     await repository.succeeded(row.id);
-    current = await repository.requireActive(row.id);
-    return current!;
+    _current = await repository.requireActive(row.id);
+    return _current!;
   }
 
   Future<void> logout() async {
-    final user = current;
-    try { if (user != null) await repository.audit(user.id, 'logout'); }
-    finally { current = null; }
+    final user = _current;
+    try {
+      if (user != null) await repository.audit(user.id, 'logout');
+    } finally {
+      _current = null;
+    }
   }
 
   Future<void> lock() async {
-    final user = current;
-    try { if (user != null) await repository.audit(user.id, 'register_locked'); }
-    finally { current = null; }
+    final user = _current;
+    try {
+      if (user != null) await repository.audit(user.id, 'register_locked');
+    } finally {
+      _current = null;
+    }
   }
 
   Future<void> recover(

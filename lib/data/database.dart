@@ -121,7 +121,9 @@ class SaleReversals extends Table {
   TextColumn get actorId => text().references(Users, #id)();
   TextColumn get kind => text()(); // void | refund
   IntColumn get amountCents => integer()();
-  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
+  BoolColumn get stockRestored => boolean().withDefault(const Constant(true))();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -175,7 +177,7 @@ class AppDatabase extends _$AppDatabase {
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -203,6 +205,9 @@ class AppDatabase extends _$AppDatabase {
             await m.addColumn(users, users.recoveryQuestion);
             await m.addColumn(users, users.recoveryAnswerHash);
             await m.createTable(saleReversals);
+          }
+          if (from == 3) {
+            await m.addColumn(saleReversals, saleReversals.stockRestored);
           }
         },
         beforeOpen: (details) async {

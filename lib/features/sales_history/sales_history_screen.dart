@@ -8,8 +8,9 @@ import '../pos_checkout/checkout_screen.dart';
 class SalesHistoryScreen extends StatefulWidget {
   final SalesService sales;
   final ActiveUser user;
+  final bool active;
   const SalesHistoryScreen(
-      {super.key, required this.sales, required this.user});
+      {super.key, required this.sales, required this.user, this.active = true});
   @override
   State<SalesHistoryScreen> createState() => _SalesHistoryScreenState();
 }
@@ -20,7 +21,13 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
   @override
   void initState() {
     super.initState();
-    refresh();
+    if (widget.active) refresh();
+  }
+
+  @override
+  void didUpdateWidget(covariant SalesHistoryScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !oldWidget.active) refresh();
   }
 
   Future<void> refresh() async {
@@ -59,6 +66,10 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                         if (detail.reversal != null)
                           Text(
                               '${detail.reversal!.kind} by user ${detail.reversal!.actorId} at ${detail.reversal!.createdAt}'),
+                        if (detail.reversal != null)
+                          Text(detail.reversal!.stockRestored
+                              ? 'Stock restored to sellable inventory'
+                              : 'Stock not returned to sellable inventory'),
                       ])),
                   actions: [
                     if (widget.user.can(PosPermission.reverseSale) &&
@@ -74,7 +85,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                             Navigator.pop(context);
                             await reverse(saleId, true);
                           },
-                          child: const Text('Refund')),
+                          child: const Text('Record full refund')),
                     ],
                     TextButton(
                         onPressed: () => Navigator.pop(context),
@@ -86,25 +97,29 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
   }
 
   Future<void> reverse(String saleId, bool refund) async {
-    final confirmed = await showDialog<bool>(
+    final decision = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-                title: Text(refund ? 'Full refund' : 'Void sale'),
+                title: Text(refund ? 'Record full refund' : 'Void sale'),
                 content: Text(refund
-                    ? 'Record a full cash refund and restore all sold stock?'
-                    : 'Cancel this same-day sale and restore all sold stock?'),
+                    ? 'Return items to sellable stock?'
+                    : 'Void this sale and restore all sold stock?'),
                 actions: [
                   TextButton(
-                      onPressed: () => Navigator.pop(context, false),
+                      onPressed: () => Navigator.pop(context),
                       child: const Text('Cancel')),
+                  if (refund)
+                    TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('No')),
                   FilledButton(
                       onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Confirm'))
+                      child: Text(refund ? 'Yes' : 'Confirm'))
                 ]));
-    if (confirmed != true) return;
+    if (decision == null) return;
     try {
       if (refund) {
-        await widget.sales.refundSale(saleId);
+        await widget.sales.refundSale(saleId, returnToSellableStock: decision);
       } else {
         await widget.sales.voidSale(saleId);
       }

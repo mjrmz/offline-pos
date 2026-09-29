@@ -81,8 +81,8 @@ class SalesRepository {
     return SaleDetail(summary, items, names, reversal);
   }
 
-  Future<void> reverse(
-          ActiveUser actor, String saleId, String kind, DateTime now) =>
+  Future<void> reverse(ActiveUser actor, String saleId, String kind,
+          {required bool stockRestored}) =>
       db.transaction(() async {
         final live = await _actor(actor);
         if (!live.can(PosPermission.reverseSale)) {
@@ -98,11 +98,8 @@ class SalesRepository {
         if (sale.status != 'completed') {
           throw StateError('Sale already voided or refunded');
         }
-        if (kind == 'void' &&
-            (sale.createdAt.year != now.year ||
-                sale.createdAt.month != now.month ||
-                sale.createdAt.day != now.day)) {
-          throw StateError('Only same-day sales can be voided; use refund');
+        if (kind == 'void' && !stockRestored) {
+          throw StateError('Voids must restore stock');
         }
         final newStatus = kind == 'void' ? 'voided' : 'refunded';
         final count = await (db.update(db.sales)
@@ -114,25 +111,28 @@ class SalesRepository {
             saleId: saleId,
             actorId: live.id,
             kind: kind,
-            amountCents: sale.totalCents));
-        final items = await (db.select(db.saleItems)
-              ..where((i) => i.saleId.equals(saleId)))
-            .get();
-        for (final item in items) {
-          final inventory = await (db.select(db.inventory)
-                ..where((i) => i.productId.equals(item.productId)))
-              .getSingleOrNull();
-          if (inventory == null) throw StateError('Inventory row missing');
-          await (db.update(db.inventory)
-                ..where((i) => i.productId.equals(item.productId)))
-              .write(InventoryCompanion(
-                  quantity: Value(inventory.quantity + item.quantity)));
-          await db.into(db.inventoryMovements).insert(
-              InventoryMovementsCompanion.insert(
-                  productId: item.productId,
-                  quantityDelta: item.quantity,
-                  reason: kind,
-                  referenceId: Value(saleId)));
+            amountCents: sale.totalCents,
+            stockRestored: Value(stockRestored)));
+        if (stockRestored) {
+          final items = await (db.select(db.saleItems)
+                ..where((i) => i.saleId.equals(saleId)))
+              .get();
+          for (final item in items) {
+            final inventory = await (db.select(db.inventory)
+                  ..where((i) => i.productId.equals(item.productId)))
+                .getSingleOrNull();
+            if (inventory == null) throw StateError('Inventory row missing');
+            await (db.update(db.inventory)
+                  ..where((i) => i.productId.equals(item.productId)))
+                .write(InventoryCompanion(
+                    quantity: Value(inventory.quantity + item.quantity)));
+            await db.into(db.inventoryMovements).insert(
+                InventoryMovementsCompanion.insert(
+                    productId: item.productId,
+                    quantityDelta: item.quantity,
+                    reason: kind,
+                    referenceId: Value(saleId)));
+          }
         }
         await AuthRepository(db).audit(
             live.id, kind == 'void' ? 'sale_voided' : 'sale_refunded', saleId);

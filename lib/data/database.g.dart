@@ -2199,6 +2199,16 @@ class $SaleReversalsTable extends SaleReversals
   late final GeneratedColumn<int> amountCents = GeneratedColumn<int>(
       'amount_cents', aliasedName, false,
       type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _stockRestoredMeta =
+      const VerificationMeta('stockRestored');
+  @override
+  late final GeneratedColumn<bool> stockRestored = GeneratedColumn<bool>(
+      'stock_restored', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("stock_restored" IN (0, 1))'),
+      defaultValue: const Constant(true));
   static const VerificationMeta _createdAtMeta =
       const VerificationMeta('createdAt');
   @override
@@ -2209,7 +2219,7 @@ class $SaleReversalsTable extends SaleReversals
       clientDefault: () => DateTime.now());
   @override
   List<GeneratedColumn> get $columns =>
-      [id, saleId, actorId, kind, amountCents, createdAt];
+      [id, saleId, actorId, kind, amountCents, stockRestored, createdAt];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -2249,6 +2259,12 @@ class $SaleReversalsTable extends SaleReversals
     } else if (isInserting) {
       context.missing(_amountCentsMeta);
     }
+    if (data.containsKey('stock_restored')) {
+      context.handle(
+          _stockRestoredMeta,
+          stockRestored.isAcceptableOrUnknown(
+              data['stock_restored']!, _stockRestoredMeta));
+    }
     if (data.containsKey('created_at')) {
       context.handle(_createdAtMeta,
           createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
@@ -2272,6 +2288,8 @@ class $SaleReversalsTable extends SaleReversals
           .read(DriftSqlType.string, data['${effectivePrefix}kind'])!,
       amountCents: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}amount_cents'])!,
+      stockRestored: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}stock_restored'])!,
       createdAt: attachedDatabase.typeMapping
           .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
     );
@@ -2289,6 +2307,7 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
   final String actorId;
   final String kind;
   final int amountCents;
+  final bool stockRestored;
   final DateTime createdAt;
   const SaleReversal(
       {required this.id,
@@ -2296,6 +2315,7 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
       required this.actorId,
       required this.kind,
       required this.amountCents,
+      required this.stockRestored,
       required this.createdAt});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -2305,6 +2325,7 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
     map['actor_id'] = Variable<String>(actorId);
     map['kind'] = Variable<String>(kind);
     map['amount_cents'] = Variable<int>(amountCents);
+    map['stock_restored'] = Variable<bool>(stockRestored);
     map['created_at'] = Variable<DateTime>(createdAt);
     return map;
   }
@@ -2316,6 +2337,7 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
       actorId: Value(actorId),
       kind: Value(kind),
       amountCents: Value(amountCents),
+      stockRestored: Value(stockRestored),
       createdAt: Value(createdAt),
     );
   }
@@ -2329,6 +2351,7 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
       actorId: serializer.fromJson<String>(json['actorId']),
       kind: serializer.fromJson<String>(json['kind']),
       amountCents: serializer.fromJson<int>(json['amountCents']),
+      stockRestored: serializer.fromJson<bool>(json['stockRestored']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
   }
@@ -2341,6 +2364,7 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
       'actorId': serializer.toJson<String>(actorId),
       'kind': serializer.toJson<String>(kind),
       'amountCents': serializer.toJson<int>(amountCents),
+      'stockRestored': serializer.toJson<bool>(stockRestored),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
   }
@@ -2351,6 +2375,7 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
           String? actorId,
           String? kind,
           int? amountCents,
+          bool? stockRestored,
           DateTime? createdAt}) =>
       SaleReversal(
         id: id ?? this.id,
@@ -2358,6 +2383,7 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
         actorId: actorId ?? this.actorId,
         kind: kind ?? this.kind,
         amountCents: amountCents ?? this.amountCents,
+        stockRestored: stockRestored ?? this.stockRestored,
         createdAt: createdAt ?? this.createdAt,
       );
   SaleReversal copyWithCompanion(SaleReversalsCompanion data) {
@@ -2368,6 +2394,9 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
       kind: data.kind.present ? data.kind.value : this.kind,
       amountCents:
           data.amountCents.present ? data.amountCents.value : this.amountCents,
+      stockRestored: data.stockRestored.present
+          ? data.stockRestored.value
+          : this.stockRestored,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
   }
@@ -2380,14 +2409,15 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
           ..write('actorId: $actorId, ')
           ..write('kind: $kind, ')
           ..write('amountCents: $amountCents, ')
+          ..write('stockRestored: $stockRestored, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, saleId, actorId, kind, amountCents, createdAt);
+  int get hashCode => Object.hash(
+      id, saleId, actorId, kind, amountCents, stockRestored, createdAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -2397,6 +2427,7 @@ class SaleReversal extends DataClass implements Insertable<SaleReversal> {
           other.actorId == this.actorId &&
           other.kind == this.kind &&
           other.amountCents == this.amountCents &&
+          other.stockRestored == this.stockRestored &&
           other.createdAt == this.createdAt);
 }
 
@@ -2406,6 +2437,7 @@ class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
   final Value<String> actorId;
   final Value<String> kind;
   final Value<int> amountCents;
+  final Value<bool> stockRestored;
   final Value<DateTime> createdAt;
   final Value<int> rowid;
   const SaleReversalsCompanion({
@@ -2414,6 +2446,7 @@ class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
     this.actorId = const Value.absent(),
     this.kind = const Value.absent(),
     this.amountCents = const Value.absent(),
+    this.stockRestored = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -2423,6 +2456,7 @@ class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
     required String actorId,
     required String kind,
     required int amountCents,
+    this.stockRestored = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : saleId = Value(saleId),
@@ -2435,6 +2469,7 @@ class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
     Expression<String>? actorId,
     Expression<String>? kind,
     Expression<int>? amountCents,
+    Expression<bool>? stockRestored,
     Expression<DateTime>? createdAt,
     Expression<int>? rowid,
   }) {
@@ -2444,6 +2479,7 @@ class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
       if (actorId != null) 'actor_id': actorId,
       if (kind != null) 'kind': kind,
       if (amountCents != null) 'amount_cents': amountCents,
+      if (stockRestored != null) 'stock_restored': stockRestored,
       if (createdAt != null) 'created_at': createdAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -2455,6 +2491,7 @@ class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
       Value<String>? actorId,
       Value<String>? kind,
       Value<int>? amountCents,
+      Value<bool>? stockRestored,
       Value<DateTime>? createdAt,
       Value<int>? rowid}) {
     return SaleReversalsCompanion(
@@ -2463,6 +2500,7 @@ class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
       actorId: actorId ?? this.actorId,
       kind: kind ?? this.kind,
       amountCents: amountCents ?? this.amountCents,
+      stockRestored: stockRestored ?? this.stockRestored,
       createdAt: createdAt ?? this.createdAt,
       rowid: rowid ?? this.rowid,
     );
@@ -2486,6 +2524,9 @@ class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
     if (amountCents.present) {
       map['amount_cents'] = Variable<int>(amountCents.value);
     }
+    if (stockRestored.present) {
+      map['stock_restored'] = Variable<bool>(stockRestored.value);
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -2503,6 +2544,7 @@ class SaleReversalsCompanion extends UpdateCompanion<SaleReversal> {
           ..write('actorId: $actorId, ')
           ..write('kind: $kind, ')
           ..write('amountCents: $amountCents, ')
+          ..write('stockRestored: $stockRestored, ')
           ..write('createdAt: $createdAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -6282,6 +6324,7 @@ typedef $$SaleReversalsTableCreateCompanionBuilder = SaleReversalsCompanion
   required String actorId,
   required String kind,
   required int amountCents,
+  Value<bool> stockRestored,
   Value<DateTime> createdAt,
   Value<int> rowid,
 });
@@ -6292,6 +6335,7 @@ typedef $$SaleReversalsTableUpdateCompanionBuilder = SaleReversalsCompanion
   Value<String> actorId,
   Value<String> kind,
   Value<int> amountCents,
+  Value<bool> stockRestored,
   Value<DateTime> createdAt,
   Value<int> rowid,
 });
@@ -6347,6 +6391,9 @@ class $$SaleReversalsTableFilterComposer
 
   ColumnFilters<int> get amountCents => $composableBuilder(
       column: $table.amountCents, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get stockRestored => $composableBuilder(
+      column: $table.stockRestored, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnFilters(column));
@@ -6410,6 +6457,10 @@ class $$SaleReversalsTableOrderingComposer
   ColumnOrderings<int> get amountCents => $composableBuilder(
       column: $table.amountCents, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<bool> get stockRestored => $composableBuilder(
+      column: $table.stockRestored,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
       column: $table.createdAt, builder: (column) => ColumnOrderings(column));
 
@@ -6471,6 +6522,9 @@ class $$SaleReversalsTableAnnotationComposer
 
   GeneratedColumn<int> get amountCents => $composableBuilder(
       column: $table.amountCents, builder: (column) => column);
+
+  GeneratedColumn<bool> get stockRestored => $composableBuilder(
+      column: $table.stockRestored, builder: (column) => column);
 
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -6544,6 +6598,7 @@ class $$SaleReversalsTableTableManager extends RootTableManager<
             Value<String> actorId = const Value.absent(),
             Value<String> kind = const Value.absent(),
             Value<int> amountCents = const Value.absent(),
+            Value<bool> stockRestored = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -6553,6 +6608,7 @@ class $$SaleReversalsTableTableManager extends RootTableManager<
             actorId: actorId,
             kind: kind,
             amountCents: amountCents,
+            stockRestored: stockRestored,
             createdAt: createdAt,
             rowid: rowid,
           ),
@@ -6562,6 +6618,7 @@ class $$SaleReversalsTableTableManager extends RootTableManager<
             required String actorId,
             required String kind,
             required int amountCents,
+            Value<bool> stockRestored = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
@@ -6571,6 +6628,7 @@ class $$SaleReversalsTableTableManager extends RootTableManager<
             actorId: actorId,
             kind: kind,
             amountCents: amountCents,
+            stockRestored: stockRestored,
             createdAt: createdAt,
             rowid: rowid,
           ),

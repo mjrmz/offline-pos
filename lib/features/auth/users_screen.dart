@@ -37,6 +37,7 @@ class _UsersScreenState extends State<UsersScreen> {
     final name = TextEditingController();
     final secret = TextEditingController();
     var role = UserRole.cashier;
+    String? dialogError;
     await showDialog<void>(
         context: context,
         builder: (context) => StatefulBuilder(
@@ -46,6 +47,9 @@ class _UsersScreenState extends State<UsersScreen> {
                         width: 400,
                         child:
                             Column(mainAxisSize: MainAxisSize.min, children: [
+                          if (dialogError != null)
+                            Text(dialogError!,
+                                style: const TextStyle(color: Colors.red)),
                           TextField(
                               controller: name,
                               decoration:
@@ -82,9 +86,7 @@ class _UsersScreenState extends State<UsersScreen> {
                               if (context.mounted) Navigator.pop(context);
                               await refresh();
                             } catch (e) {
-                              if (mounted) {
-                                setState(() => error = safeMessage(e));
-                              }
+                              update(() => dialogError = safeMessage(e));
                             }
                           },
                           child: const Text('Create'))
@@ -95,34 +97,41 @@ class _UsersScreenState extends State<UsersScreen> {
 
   Future<void> reset(ActiveUser user) async {
     final secret = TextEditingController();
+    String? dialogError;
     await showDialog<void>(
         context: context,
-        builder: (context) => AlertDialog(
-                title: Text('Reset ${user.name} credential'),
-                content: TextField(
-                    controller: secret,
-                    obscureText: true,
-                    decoration: InputDecoration(
-                        labelText: user.role == UserRole.cashier
-                            ? 'New 4–6 digit PIN'
-                            : 'New password (8+ characters)')),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Cancel')),
-                  FilledButton(
-                      onPressed: () async {
-                        try {
-                          await widget.auth
-                              .resetCredential(user.id, secret.text);
-                          if (context.mounted) Navigator.pop(context);
-                          await refresh();
-                        } catch (e) {
-                          if (mounted) setState(() => error = safeMessage(e));
-                        }
-                      },
-                      child: const Text('Save'))
-                ]));
+        builder: (context) => StatefulBuilder(
+            builder: (context, update) => AlertDialog(
+                    title: Text('Reset ${user.name} credential'),
+                    content: Column(mainAxisSize: MainAxisSize.min, children: [
+                      if (dialogError != null)
+                        Text(dialogError!,
+                            style: const TextStyle(color: Colors.red)),
+                      TextField(
+                          controller: secret,
+                          obscureText: true,
+                          decoration: InputDecoration(
+                              labelText: user.role == UserRole.cashier
+                                  ? 'New 4–6 digit PIN'
+                                  : 'New password (8+ characters)'))
+                    ]),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () async {
+                            try {
+                              await widget.auth
+                                  .resetCredential(user.id, secret.text);
+                              if (context.mounted) Navigator.pop(context);
+                              await refresh();
+                            } catch (e) {
+                              update(() => dialogError = safeMessage(e));
+                            }
+                          },
+                          child: const Text('Save'))
+                    ])));
     secret.dispose();
   }
 

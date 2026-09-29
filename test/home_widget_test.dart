@@ -1,6 +1,7 @@
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:modern_offline_pos/core/services/auth_service.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
@@ -11,6 +12,7 @@ import 'package:modern_offline_pos/features/dashboard/home_screen.dart';
 void main() {
   testWidgets('sale appears when history and reports tabs open',
       (tester) async {
+    SharedPreferences.setMockInitialValues({});
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
     final auth = AuthService(AuthRepository(db));
@@ -35,7 +37,12 @@ void main() {
     await tester.pump();
     await tester.scrollUntilVisible(find.text('Complete sale'), 200,
         scrollable: find.byType(Scrollable).first);
-    expect(tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Complete sale')).onPressed, isNotNull);
+    expect(
+        tester
+            .widget<FilledButton>(
+                find.widgetWithText(FilledButton, 'Complete sale'))
+            .onPressed,
+        isNotNull);
     await tester.tap(find.text('Complete sale'));
     await tester.pumpAndSettle();
     expect(find.textContaining('complete. Change:'), findsOneWidget);

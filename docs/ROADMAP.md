@@ -50,6 +50,9 @@ set. The next real step is Phase 1 — not further feature planning.
 - 58mm/80mm thermal printer (ESC/POS) — sale commits before printing,
   reprint always available
 - Cash drawer trigger via printer connection
+- **Software status**: implementation is complete for the Android and Windows
+  printer transport matrix documented in docs/HARDWARE.md. Physical peripheral
+  testing is still pending; Phase 4 is not complete.
 - **Exit criteria**: tested against real hardware (see docs/HARDWARE.md and
   docs/EQUIPMENT_SOURCING.md), not just emulators
 

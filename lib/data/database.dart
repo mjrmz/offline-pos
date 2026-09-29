@@ -81,6 +81,7 @@ class SaleItems extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get saleId => text().references(Sales, #id)();
   TextColumn get productId => text().references(Products, #id)();
+  TextColumn get productName => text().withDefault(const Constant(''))();
   IntColumn get quantity => integer()();
   IntColumn get unitPriceCents => integer()();
   IntColumn get lineTotalCents => integer().withDefault(const Constant(0))();
@@ -154,6 +155,24 @@ class AuditLogs extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class Settings extends Table {
+  IntColumn get id => integer()();
+  TextColumn get storeName => text().withDefault(const Constant(''))();
+  BoolColumn get printerEnabled =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get printerTransport =>
+      text().withDefault(const Constant('lan'))();
+  TextColumn get printerHost => text().withDefault(const Constant(''))();
+  IntColumn get printerPort => integer().withDefault(const Constant(9100))();
+  TextColumn get printerDeviceId => text().withDefault(const Constant(''))();
+  TextColumn get printerDeviceName => text().withDefault(const Constant(''))();
+  IntColumn get printerWidthMm => integer().withDefault(const Constant(80))();
+  BoolColumn get drawerEnabled =>
+      boolean().withDefault(const Constant(false))();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
@@ -170,6 +189,7 @@ class AuditLogs extends Table {
   Users,
   CashSessions,
   AuditLogs,
+  Settings,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
@@ -177,7 +197,7 @@ class AppDatabase extends _$AppDatabase {
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -208,6 +228,14 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from == 3) {
             await m.addColumn(saleReversals, saleReversals.stockRestored);
+          }
+          if (from < 5) {
+            await m.addColumn(saleItems, saleItems.productName);
+            await customStatement('UPDATE sale_items SET product_name = '
+                'COALESCE((SELECT name FROM products WHERE products.id = sale_items.product_id), \'Unknown product\')');
+          }
+          if (from < 6) {
+            await m.createTable(settings);
           }
         },
         beforeOpen: (details) async {

@@ -15,7 +15,9 @@ class SaleDetail {
   final List<SaleItem> items;
   final List<String> productNames;
   final SaleReversal? reversal;
-  const SaleDetail(this.summary, this.items, this.productNames, this.reversal);
+  final int paymentAmountCents;
+  const SaleDetail(this.summary, this.items, this.productNames, this.reversal,
+      [this.paymentAmountCents = 0]);
 }
 
 class DailyReport {
@@ -73,12 +75,18 @@ class SalesRepository {
       final product = await (db.select(db.products)
             ..where((p) => p.id.equals(item.productId)))
           .getSingleOrNull();
-      names.add(product?.name ?? 'Unknown product');
+      names.add(item.productName.isNotEmpty
+          ? item.productName
+          : (product?.name ?? 'Unknown product'));
     }
     final reversal = await (db.select(db.saleReversals)
           ..where((r) => r.saleId.equals(saleId)))
         .getSingleOrNull();
-    return SaleDetail(summary, items, names, reversal);
+    final payment = await (db.select(db.payments)
+          ..where((p) => p.saleId.equals(saleId)))
+        .getSingleOrNull();
+    return SaleDetail(
+        summary, items, names, reversal, payment?.amountCents ?? 0);
   }
 
   Future<void> reverse(ActiveUser actor, String saleId, String kind,

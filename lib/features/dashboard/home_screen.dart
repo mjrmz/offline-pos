@@ -8,6 +8,12 @@ import '../auth/users_screen.dart';
 import '../pos_checkout/checkout_screen.dart';
 import '../sales_history/sales_history_screen.dart';
 import '../reports/reports_screen.dart';
+import '../../hardware/printer/receipt_service.dart';
+import '../../data/daos/printer_settings_repository.dart';
+import '../../hardware/printer/receipt_printer.dart';
+import '../../hardware/printer/device_transports.dart';
+import '../../hardware/cash_drawer/cash_drawer.dart';
+import '../settings/printer_settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final AuthService auth;
@@ -26,22 +32,38 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int page = 0;
+  late final settings = PrinterSettingsStore(widget.pos.db);
+  late final deviceClient = PluginPrinterClient();
+  late final transport = ConfiguredPrinterTransport(LanEscPosTransport(),
+      UsbEscPosTransport(deviceClient), BluetoothEscPosTransport(deviceClient));
   @override
   Widget build(BuildContext context) {
     final user = widget.auth.current!;
     final sales = SalesService(widget.salesRepository, widget.auth);
+    final printer = EscPosReceiptPrinter(transport);
+    final receipts =
+        ReceiptService(sales, settings, printer, EscPosCashDrawer(transport));
     final pages = <Widget>[
-      CheckoutScreen(repository: widget.pos, user: user, auth: widget.auth),
-      SalesHistoryScreen(sales: sales, user: user, active: page == 1),
+      CheckoutScreen(
+          repository: widget.pos,
+          user: user,
+          auth: widget.auth,
+          receipts: receipts),
+      SalesHistoryScreen(
+          sales: sales, user: user, active: page == 1, receipts: receipts),
       if (user.can(PosPermission.reports))
         ReportsScreen(sales: sales, active: page == 2),
       if (user.can(PosPermission.manageUsers)) UsersScreen(auth: widget.auth),
+      if (user.can(PosPermission.manageUsers))
+        PrinterSettingsScreen(
+            store: settings, printer: printer, devices: deviceClient),
     ];
     final labels = <String>[
       'Checkout',
       'Sales history',
       if (user.can(PosPermission.reports)) 'Reports',
-      if (user.can(PosPermission.manageUsers)) 'Users'
+      if (user.can(PosPermission.manageUsers)) 'Users',
+      if (user.can(PosPermission.manageUsers)) 'Printer'
     ];
     return Scaffold(
         appBar:
@@ -75,7 +97,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             ? Icons.receipt_long
                             : label == 'Reports'
                                 ? Icons.bar_chart
-                                : Icons.people),
+                                : label == 'Printer'
+                                    ? Icons.print
+                                    : Icons.people),
                     label: label)
             ]));
   }

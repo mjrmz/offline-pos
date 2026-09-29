@@ -85,7 +85,8 @@ class PosRepository {
     if (name.trim().isEmpty ||
         priceCents < 0 ||
         costCents < 0 ||
-        startingStock < 0 || lowStockThreshold < 0) {
+        startingStock < 0 ||
+        lowStockThreshold < 0) {
       throw ArgumentError('Invalid product values');
     }
     final normalizedSku = sku?.trim().isEmpty == true ? null : sku?.trim();
@@ -183,6 +184,7 @@ class PosRepository {
           await db.into(db.saleItems).insert(SaleItemsCompanion.insert(
               saleId: sale.id,
               productId: product.id,
+              productName: Value(product.name),
               quantity: quantity,
               unitPriceCents: product.priceCents,
               lineTotalCents: Value(product.priceCents * quantity)));

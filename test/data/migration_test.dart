@@ -5,6 +5,24 @@ import 'package:modern_offline_pos/data/database.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
 void main() {
+  test('v5 to v6 adds Settings without changing existing sales', () async {
+    final dir = await Directory.systemTemp.createTemp('pos-migration-');
+    final file = File('${dir.path}/phase4.sqlite');
+    final raw = sqlite.sqlite3.open(file.path);
+    raw.execute(
+        'CREATE TABLE sales (id TEXT PRIMARY KEY, cashier_id TEXT NOT NULL, total_cents INTEGER NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    raw.execute("INSERT INTO sales VALUES ('s1', 'u1', 1200, 'completed', 0)");
+    raw.execute('PRAGMA user_version = 5');
+    raw.dispose();
+    final db = AppDatabase.forTesting(NativeDatabase(file));
+    try {
+      expect((await db.select(db.sales).get()).single.totalCents, 1200);
+      expect(await db.select(db.settings).get(), isEmpty);
+    } finally {
+      await db.close();
+      await dir.delete(recursive: true);
+    }
+  });
   test('v3 reversal migration marks existing restored stock', () async {
     final dir = await Directory.systemTemp.createTemp('pos-migration-');
     final file = File('${dir.path}/legacy.sqlite');
@@ -13,6 +31,10 @@ void main() {
         'sale_id TEXT NOT NULL UNIQUE, actor_id TEXT NOT NULL, '
         'kind TEXT NOT NULL, amount_cents INTEGER NOT NULL, '
         'created_at INTEGER NOT NULL)');
+    raw.execute(
+        'CREATE TABLE products (id TEXT PRIMARY KEY, name TEXT NOT NULL)');
+    raw.execute(
+        'CREATE TABLE sale_items (id TEXT PRIMARY KEY, product_id TEXT NOT NULL)');
     raw.execute("INSERT INTO sale_reversals VALUES "
         "('r1', 's1', 'u1', 'refund', 4000, 0)");
     raw.execute('PRAGMA user_version = 3');

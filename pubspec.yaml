@@ -16,7 +16,9 @@ dependencies:
   cryptography: ^2.7.0
   uuid: ^4.4.0
   bcrypt: ^1.2.0
-
+  mobile_scanner: ^7.4.2
+  shared_preferences: ^2.5.5
+  thermal_printer_flutter: 2.1.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

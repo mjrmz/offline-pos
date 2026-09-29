@@ -6,9 +6,16 @@ of the app never needs to know which platform or peripheral it's talking to.
 ## Receipt printers (58mm / 80mm thermal)
 
 - Communicate via ESC/POS commands.
-- Support USB, Bluetooth, and network (LAN) printers depending on what's
-  common in-market — USB and Bluetooth are the most likely for small PH
-  retail shops.
+- The Phase 4 software supports the following printer transports on its
+  current Android and Windows targets:
+
+  | Platform | LAN (raw TCP ESC/POS) | USB | Bluetooth |
+  |---|---|---|---|
+  | Windows | Supported | Supported via a selected Windows printer queue | Unsupported |
+  | Android | Supported | Unsupported by the selected printer package | Supported for a paired ESC/POS printer |
+
+- The receipt model and ESC/POS encoder are shared across transports. The
+  configured transport also sends the cash-drawer kick command.
 - Flow: complete the database transaction and commit the sale **first**,
   then attempt to print. If the printer is disconnected or fails:
   - The sale still stands (it's already committed).
@@ -27,16 +34,17 @@ of the app never needs to know which platform or peripheral it's talking to.
   scan → text input → lookup, no special driver needed.
 - Also support manual barcode entry as a fallback (scanner disconnected,
   damaged barcode, etc.).
-- On mobile/tablet without a physical scanner, support camera-based
-  scanning as an alternative input method.
+- On Android mobile/tablet without a physical scanner, camera scanning is an
+  alternative input method. Its result uses the same barcode lookup and cart
+  path as typed and keyboard-emulation scanner input.
 
 ## Platform notes
 
-- **Android/iOS**: most mature ecosystem for POS peripherals — favor this
-  platform for early hardware testing.
-- **Windows/macOS/Linux desktop**: test explicitly with the actual printer
-  and scanner models you intend to support before launch — desktop
-  peripheral support in Flutter is less traveled than mobile.
+- **Android and Windows**: the matrix above describes implemented printer
+  software paths. Each path still requires testing with actual printer and
+  drawer models before the Phase 4 exit criterion is met.
+- **iOS/macOS/Linux**: peripheral support is part of the later cross-platform
+  rollout; the Phase 4 printer matrix does not claim support on those targets.
 
 ## Digital weighing scale (weight-based pricing toggle)
 

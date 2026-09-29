@@ -2582,6 +2582,14 @@ class $SaleItemsTable extends SaleItems
       requiredDuringInsert: true,
       defaultConstraints:
           GeneratedColumn.constraintIsAlways('REFERENCES products (id)'));
+  static const VerificationMeta _productNameMeta =
+      const VerificationMeta('productName');
+  @override
+  late final GeneratedColumn<String> productName = GeneratedColumn<String>(
+      'product_name', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
   static const VerificationMeta _quantityMeta =
       const VerificationMeta('quantity');
   @override
@@ -2603,8 +2611,15 @@ class $SaleItemsTable extends SaleItems
       requiredDuringInsert: false,
       defaultValue: const Constant(0));
   @override
-  List<GeneratedColumn> get $columns =>
-      [id, saleId, productId, quantity, unitPriceCents, lineTotalCents];
+  List<GeneratedColumn> get $columns => [
+        id,
+        saleId,
+        productId,
+        productName,
+        quantity,
+        unitPriceCents,
+        lineTotalCents
+      ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -2629,6 +2644,12 @@ class $SaleItemsTable extends SaleItems
           productId.isAcceptableOrUnknown(data['product_id']!, _productIdMeta));
     } else if (isInserting) {
       context.missing(_productIdMeta);
+    }
+    if (data.containsKey('product_name')) {
+      context.handle(
+          _productNameMeta,
+          productName.isAcceptableOrUnknown(
+              data['product_name']!, _productNameMeta));
     }
     if (data.containsKey('quantity')) {
       context.handle(_quantityMeta,
@@ -2665,6 +2686,8 @@ class $SaleItemsTable extends SaleItems
           .read(DriftSqlType.string, data['${effectivePrefix}sale_id'])!,
       productId: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}product_id'])!,
+      productName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}product_name'])!,
       quantity: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}quantity'])!,
       unitPriceCents: attachedDatabase.typeMapping
@@ -2684,6 +2707,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
   final String id;
   final String saleId;
   final String productId;
+  final String productName;
   final int quantity;
   final int unitPriceCents;
   final int lineTotalCents;
@@ -2691,6 +2715,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       {required this.id,
       required this.saleId,
       required this.productId,
+      required this.productName,
       required this.quantity,
       required this.unitPriceCents,
       required this.lineTotalCents});
@@ -2700,6 +2725,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
     map['id'] = Variable<String>(id);
     map['sale_id'] = Variable<String>(saleId);
     map['product_id'] = Variable<String>(productId);
+    map['product_name'] = Variable<String>(productName);
     map['quantity'] = Variable<int>(quantity);
     map['unit_price_cents'] = Variable<int>(unitPriceCents);
     map['line_total_cents'] = Variable<int>(lineTotalCents);
@@ -2711,6 +2737,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       id: Value(id),
       saleId: Value(saleId),
       productId: Value(productId),
+      productName: Value(productName),
       quantity: Value(quantity),
       unitPriceCents: Value(unitPriceCents),
       lineTotalCents: Value(lineTotalCents),
@@ -2724,6 +2751,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       id: serializer.fromJson<String>(json['id']),
       saleId: serializer.fromJson<String>(json['saleId']),
       productId: serializer.fromJson<String>(json['productId']),
+      productName: serializer.fromJson<String>(json['productName']),
       quantity: serializer.fromJson<int>(json['quantity']),
       unitPriceCents: serializer.fromJson<int>(json['unitPriceCents']),
       lineTotalCents: serializer.fromJson<int>(json['lineTotalCents']),
@@ -2736,6 +2764,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       'id': serializer.toJson<String>(id),
       'saleId': serializer.toJson<String>(saleId),
       'productId': serializer.toJson<String>(productId),
+      'productName': serializer.toJson<String>(productName),
       'quantity': serializer.toJson<int>(quantity),
       'unitPriceCents': serializer.toJson<int>(unitPriceCents),
       'lineTotalCents': serializer.toJson<int>(lineTotalCents),
@@ -2746,6 +2775,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
           {String? id,
           String? saleId,
           String? productId,
+          String? productName,
           int? quantity,
           int? unitPriceCents,
           int? lineTotalCents}) =>
@@ -2753,6 +2783,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
         id: id ?? this.id,
         saleId: saleId ?? this.saleId,
         productId: productId ?? this.productId,
+        productName: productName ?? this.productName,
         quantity: quantity ?? this.quantity,
         unitPriceCents: unitPriceCents ?? this.unitPriceCents,
         lineTotalCents: lineTotalCents ?? this.lineTotalCents,
@@ -2762,6 +2793,8 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       id: data.id.present ? data.id.value : this.id,
       saleId: data.saleId.present ? data.saleId.value : this.saleId,
       productId: data.productId.present ? data.productId.value : this.productId,
+      productName:
+          data.productName.present ? data.productName.value : this.productName,
       quantity: data.quantity.present ? data.quantity.value : this.quantity,
       unitPriceCents: data.unitPriceCents.present
           ? data.unitPriceCents.value
@@ -2778,6 +2811,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
           ..write('id: $id, ')
           ..write('saleId: $saleId, ')
           ..write('productId: $productId, ')
+          ..write('productName: $productName, ')
           ..write('quantity: $quantity, ')
           ..write('unitPriceCents: $unitPriceCents, ')
           ..write('lineTotalCents: $lineTotalCents')
@@ -2786,8 +2820,8 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
   }
 
   @override
-  int get hashCode => Object.hash(
-      id, saleId, productId, quantity, unitPriceCents, lineTotalCents);
+  int get hashCode => Object.hash(id, saleId, productId, productName, quantity,
+      unitPriceCents, lineTotalCents);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -2795,6 +2829,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
           other.id == this.id &&
           other.saleId == this.saleId &&
           other.productId == this.productId &&
+          other.productName == this.productName &&
           other.quantity == this.quantity &&
           other.unitPriceCents == this.unitPriceCents &&
           other.lineTotalCents == this.lineTotalCents);
@@ -2804,6 +2839,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
   final Value<String> id;
   final Value<String> saleId;
   final Value<String> productId;
+  final Value<String> productName;
   final Value<int> quantity;
   final Value<int> unitPriceCents;
   final Value<int> lineTotalCents;
@@ -2812,6 +2848,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
     this.id = const Value.absent(),
     this.saleId = const Value.absent(),
     this.productId = const Value.absent(),
+    this.productName = const Value.absent(),
     this.quantity = const Value.absent(),
     this.unitPriceCents = const Value.absent(),
     this.lineTotalCents = const Value.absent(),
@@ -2821,6 +2858,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
     this.id = const Value.absent(),
     required String saleId,
     required String productId,
+    this.productName = const Value.absent(),
     required int quantity,
     required int unitPriceCents,
     this.lineTotalCents = const Value.absent(),
@@ -2833,6 +2871,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
     Expression<String>? id,
     Expression<String>? saleId,
     Expression<String>? productId,
+    Expression<String>? productName,
     Expression<int>? quantity,
     Expression<int>? unitPriceCents,
     Expression<int>? lineTotalCents,
@@ -2842,6 +2881,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
       if (id != null) 'id': id,
       if (saleId != null) 'sale_id': saleId,
       if (productId != null) 'product_id': productId,
+      if (productName != null) 'product_name': productName,
       if (quantity != null) 'quantity': quantity,
       if (unitPriceCents != null) 'unit_price_cents': unitPriceCents,
       if (lineTotalCents != null) 'line_total_cents': lineTotalCents,
@@ -2853,6 +2893,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
       {Value<String>? id,
       Value<String>? saleId,
       Value<String>? productId,
+      Value<String>? productName,
       Value<int>? quantity,
       Value<int>? unitPriceCents,
       Value<int>? lineTotalCents,
@@ -2861,6 +2902,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
       id: id ?? this.id,
       saleId: saleId ?? this.saleId,
       productId: productId ?? this.productId,
+      productName: productName ?? this.productName,
       quantity: quantity ?? this.quantity,
       unitPriceCents: unitPriceCents ?? this.unitPriceCents,
       lineTotalCents: lineTotalCents ?? this.lineTotalCents,
@@ -2879,6 +2921,9 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
     }
     if (productId.present) {
       map['product_id'] = Variable<String>(productId.value);
+    }
+    if (productName.present) {
+      map['product_name'] = Variable<String>(productName.value);
     }
     if (quantity.present) {
       map['quantity'] = Variable<int>(quantity.value);
@@ -2901,6 +2946,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
           ..write('id: $id, ')
           ..write('saleId: $saleId, ')
           ..write('productId: $productId, ')
+          ..write('productName: $productName, ')
           ..write('quantity: $quantity, ')
           ..write('unitPriceCents: $unitPriceCents, ')
           ..write('lineTotalCents: $lineTotalCents, ')
@@ -3901,6 +3947,531 @@ class AuditLogsCompanion extends UpdateCompanion<AuditLog> {
   }
 }
 
+class $SettingsTable extends Settings with TableInfo<$SettingsTable, Setting> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SettingsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _storeNameMeta =
+      const VerificationMeta('storeName');
+  @override
+  late final GeneratedColumn<String> storeName = GeneratedColumn<String>(
+      'store_name', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _printerEnabledMeta =
+      const VerificationMeta('printerEnabled');
+  @override
+  late final GeneratedColumn<bool> printerEnabled = GeneratedColumn<bool>(
+      'printer_enabled', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("printer_enabled" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _printerTransportMeta =
+      const VerificationMeta('printerTransport');
+  @override
+  late final GeneratedColumn<String> printerTransport = GeneratedColumn<String>(
+      'printer_transport', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('lan'));
+  static const VerificationMeta _printerHostMeta =
+      const VerificationMeta('printerHost');
+  @override
+  late final GeneratedColumn<String> printerHost = GeneratedColumn<String>(
+      'printer_host', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _printerPortMeta =
+      const VerificationMeta('printerPort');
+  @override
+  late final GeneratedColumn<int> printerPort = GeneratedColumn<int>(
+      'printer_port', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(9100));
+  static const VerificationMeta _printerDeviceIdMeta =
+      const VerificationMeta('printerDeviceId');
+  @override
+  late final GeneratedColumn<String> printerDeviceId = GeneratedColumn<String>(
+      'printer_device_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _printerDeviceNameMeta =
+      const VerificationMeta('printerDeviceName');
+  @override
+  late final GeneratedColumn<String> printerDeviceName =
+      GeneratedColumn<String>('printer_device_name', aliasedName, false,
+          type: DriftSqlType.string,
+          requiredDuringInsert: false,
+          defaultValue: const Constant(''));
+  static const VerificationMeta _printerWidthMmMeta =
+      const VerificationMeta('printerWidthMm');
+  @override
+  late final GeneratedColumn<int> printerWidthMm = GeneratedColumn<int>(
+      'printer_width_mm', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(80));
+  static const VerificationMeta _drawerEnabledMeta =
+      const VerificationMeta('drawerEnabled');
+  @override
+  late final GeneratedColumn<bool> drawerEnabled = GeneratedColumn<bool>(
+      'drawer_enabled', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'CHECK ("drawer_enabled" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        storeName,
+        printerEnabled,
+        printerTransport,
+        printerHost,
+        printerPort,
+        printerDeviceId,
+        printerDeviceName,
+        printerWidthMm,
+        drawerEnabled
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'settings';
+  @override
+  VerificationContext validateIntegrity(Insertable<Setting> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('store_name')) {
+      context.handle(_storeNameMeta,
+          storeName.isAcceptableOrUnknown(data['store_name']!, _storeNameMeta));
+    }
+    if (data.containsKey('printer_enabled')) {
+      context.handle(
+          _printerEnabledMeta,
+          printerEnabled.isAcceptableOrUnknown(
+              data['printer_enabled']!, _printerEnabledMeta));
+    }
+    if (data.containsKey('printer_transport')) {
+      context.handle(
+          _printerTransportMeta,
+          printerTransport.isAcceptableOrUnknown(
+              data['printer_transport']!, _printerTransportMeta));
+    }
+    if (data.containsKey('printer_host')) {
+      context.handle(
+          _printerHostMeta,
+          printerHost.isAcceptableOrUnknown(
+              data['printer_host']!, _printerHostMeta));
+    }
+    if (data.containsKey('printer_port')) {
+      context.handle(
+          _printerPortMeta,
+          printerPort.isAcceptableOrUnknown(
+              data['printer_port']!, _printerPortMeta));
+    }
+    if (data.containsKey('printer_device_id')) {
+      context.handle(
+          _printerDeviceIdMeta,
+          printerDeviceId.isAcceptableOrUnknown(
+              data['printer_device_id']!, _printerDeviceIdMeta));
+    }
+    if (data.containsKey('printer_device_name')) {
+      context.handle(
+          _printerDeviceNameMeta,
+          printerDeviceName.isAcceptableOrUnknown(
+              data['printer_device_name']!, _printerDeviceNameMeta));
+    }
+    if (data.containsKey('printer_width_mm')) {
+      context.handle(
+          _printerWidthMmMeta,
+          printerWidthMm.isAcceptableOrUnknown(
+              data['printer_width_mm']!, _printerWidthMmMeta));
+    }
+    if (data.containsKey('drawer_enabled')) {
+      context.handle(
+          _drawerEnabledMeta,
+          drawerEnabled.isAcceptableOrUnknown(
+              data['drawer_enabled']!, _drawerEnabledMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  Setting map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Setting(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      storeName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}store_name'])!,
+      printerEnabled: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}printer_enabled'])!,
+      printerTransport: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}printer_transport'])!,
+      printerHost: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}printer_host'])!,
+      printerPort: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}printer_port'])!,
+      printerDeviceId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}printer_device_id'])!,
+      printerDeviceName: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}printer_device_name'])!,
+      printerWidthMm: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}printer_width_mm'])!,
+      drawerEnabled: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}drawer_enabled'])!,
+    );
+  }
+
+  @override
+  $SettingsTable createAlias(String alias) {
+    return $SettingsTable(attachedDatabase, alias);
+  }
+}
+
+class Setting extends DataClass implements Insertable<Setting> {
+  final int id;
+  final String storeName;
+  final bool printerEnabled;
+  final String printerTransport;
+  final String printerHost;
+  final int printerPort;
+  final String printerDeviceId;
+  final String printerDeviceName;
+  final int printerWidthMm;
+  final bool drawerEnabled;
+  const Setting(
+      {required this.id,
+      required this.storeName,
+      required this.printerEnabled,
+      required this.printerTransport,
+      required this.printerHost,
+      required this.printerPort,
+      required this.printerDeviceId,
+      required this.printerDeviceName,
+      required this.printerWidthMm,
+      required this.drawerEnabled});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['store_name'] = Variable<String>(storeName);
+    map['printer_enabled'] = Variable<bool>(printerEnabled);
+    map['printer_transport'] = Variable<String>(printerTransport);
+    map['printer_host'] = Variable<String>(printerHost);
+    map['printer_port'] = Variable<int>(printerPort);
+    map['printer_device_id'] = Variable<String>(printerDeviceId);
+    map['printer_device_name'] = Variable<String>(printerDeviceName);
+    map['printer_width_mm'] = Variable<int>(printerWidthMm);
+    map['drawer_enabled'] = Variable<bool>(drawerEnabled);
+    return map;
+  }
+
+  SettingsCompanion toCompanion(bool nullToAbsent) {
+    return SettingsCompanion(
+      id: Value(id),
+      storeName: Value(storeName),
+      printerEnabled: Value(printerEnabled),
+      printerTransport: Value(printerTransport),
+      printerHost: Value(printerHost),
+      printerPort: Value(printerPort),
+      printerDeviceId: Value(printerDeviceId),
+      printerDeviceName: Value(printerDeviceName),
+      printerWidthMm: Value(printerWidthMm),
+      drawerEnabled: Value(drawerEnabled),
+    );
+  }
+
+  factory Setting.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Setting(
+      id: serializer.fromJson<int>(json['id']),
+      storeName: serializer.fromJson<String>(json['storeName']),
+      printerEnabled: serializer.fromJson<bool>(json['printerEnabled']),
+      printerTransport: serializer.fromJson<String>(json['printerTransport']),
+      printerHost: serializer.fromJson<String>(json['printerHost']),
+      printerPort: serializer.fromJson<int>(json['printerPort']),
+      printerDeviceId: serializer.fromJson<String>(json['printerDeviceId']),
+      printerDeviceName: serializer.fromJson<String>(json['printerDeviceName']),
+      printerWidthMm: serializer.fromJson<int>(json['printerWidthMm']),
+      drawerEnabled: serializer.fromJson<bool>(json['drawerEnabled']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'storeName': serializer.toJson<String>(storeName),
+      'printerEnabled': serializer.toJson<bool>(printerEnabled),
+      'printerTransport': serializer.toJson<String>(printerTransport),
+      'printerHost': serializer.toJson<String>(printerHost),
+      'printerPort': serializer.toJson<int>(printerPort),
+      'printerDeviceId': serializer.toJson<String>(printerDeviceId),
+      'printerDeviceName': serializer.toJson<String>(printerDeviceName),
+      'printerWidthMm': serializer.toJson<int>(printerWidthMm),
+      'drawerEnabled': serializer.toJson<bool>(drawerEnabled),
+    };
+  }
+
+  Setting copyWith(
+          {int? id,
+          String? storeName,
+          bool? printerEnabled,
+          String? printerTransport,
+          String? printerHost,
+          int? printerPort,
+          String? printerDeviceId,
+          String? printerDeviceName,
+          int? printerWidthMm,
+          bool? drawerEnabled}) =>
+      Setting(
+        id: id ?? this.id,
+        storeName: storeName ?? this.storeName,
+        printerEnabled: printerEnabled ?? this.printerEnabled,
+        printerTransport: printerTransport ?? this.printerTransport,
+        printerHost: printerHost ?? this.printerHost,
+        printerPort: printerPort ?? this.printerPort,
+        printerDeviceId: printerDeviceId ?? this.printerDeviceId,
+        printerDeviceName: printerDeviceName ?? this.printerDeviceName,
+        printerWidthMm: printerWidthMm ?? this.printerWidthMm,
+        drawerEnabled: drawerEnabled ?? this.drawerEnabled,
+      );
+  Setting copyWithCompanion(SettingsCompanion data) {
+    return Setting(
+      id: data.id.present ? data.id.value : this.id,
+      storeName: data.storeName.present ? data.storeName.value : this.storeName,
+      printerEnabled: data.printerEnabled.present
+          ? data.printerEnabled.value
+          : this.printerEnabled,
+      printerTransport: data.printerTransport.present
+          ? data.printerTransport.value
+          : this.printerTransport,
+      printerHost:
+          data.printerHost.present ? data.printerHost.value : this.printerHost,
+      printerPort:
+          data.printerPort.present ? data.printerPort.value : this.printerPort,
+      printerDeviceId: data.printerDeviceId.present
+          ? data.printerDeviceId.value
+          : this.printerDeviceId,
+      printerDeviceName: data.printerDeviceName.present
+          ? data.printerDeviceName.value
+          : this.printerDeviceName,
+      printerWidthMm: data.printerWidthMm.present
+          ? data.printerWidthMm.value
+          : this.printerWidthMm,
+      drawerEnabled: data.drawerEnabled.present
+          ? data.drawerEnabled.value
+          : this.drawerEnabled,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Setting(')
+          ..write('id: $id, ')
+          ..write('storeName: $storeName, ')
+          ..write('printerEnabled: $printerEnabled, ')
+          ..write('printerTransport: $printerTransport, ')
+          ..write('printerHost: $printerHost, ')
+          ..write('printerPort: $printerPort, ')
+          ..write('printerDeviceId: $printerDeviceId, ')
+          ..write('printerDeviceName: $printerDeviceName, ')
+          ..write('printerWidthMm: $printerWidthMm, ')
+          ..write('drawerEnabled: $drawerEnabled')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      id,
+      storeName,
+      printerEnabled,
+      printerTransport,
+      printerHost,
+      printerPort,
+      printerDeviceId,
+      printerDeviceName,
+      printerWidthMm,
+      drawerEnabled);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Setting &&
+          other.id == this.id &&
+          other.storeName == this.storeName &&
+          other.printerEnabled == this.printerEnabled &&
+          other.printerTransport == this.printerTransport &&
+          other.printerHost == this.printerHost &&
+          other.printerPort == this.printerPort &&
+          other.printerDeviceId == this.printerDeviceId &&
+          other.printerDeviceName == this.printerDeviceName &&
+          other.printerWidthMm == this.printerWidthMm &&
+          other.drawerEnabled == this.drawerEnabled);
+}
+
+class SettingsCompanion extends UpdateCompanion<Setting> {
+  final Value<int> id;
+  final Value<String> storeName;
+  final Value<bool> printerEnabled;
+  final Value<String> printerTransport;
+  final Value<String> printerHost;
+  final Value<int> printerPort;
+  final Value<String> printerDeviceId;
+  final Value<String> printerDeviceName;
+  final Value<int> printerWidthMm;
+  final Value<bool> drawerEnabled;
+  const SettingsCompanion({
+    this.id = const Value.absent(),
+    this.storeName = const Value.absent(),
+    this.printerEnabled = const Value.absent(),
+    this.printerTransport = const Value.absent(),
+    this.printerHost = const Value.absent(),
+    this.printerPort = const Value.absent(),
+    this.printerDeviceId = const Value.absent(),
+    this.printerDeviceName = const Value.absent(),
+    this.printerWidthMm = const Value.absent(),
+    this.drawerEnabled = const Value.absent(),
+  });
+  SettingsCompanion.insert({
+    this.id = const Value.absent(),
+    this.storeName = const Value.absent(),
+    this.printerEnabled = const Value.absent(),
+    this.printerTransport = const Value.absent(),
+    this.printerHost = const Value.absent(),
+    this.printerPort = const Value.absent(),
+    this.printerDeviceId = const Value.absent(),
+    this.printerDeviceName = const Value.absent(),
+    this.printerWidthMm = const Value.absent(),
+    this.drawerEnabled = const Value.absent(),
+  });
+  static Insertable<Setting> custom({
+    Expression<int>? id,
+    Expression<String>? storeName,
+    Expression<bool>? printerEnabled,
+    Expression<String>? printerTransport,
+    Expression<String>? printerHost,
+    Expression<int>? printerPort,
+    Expression<String>? printerDeviceId,
+    Expression<String>? printerDeviceName,
+    Expression<int>? printerWidthMm,
+    Expression<bool>? drawerEnabled,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (storeName != null) 'store_name': storeName,
+      if (printerEnabled != null) 'printer_enabled': printerEnabled,
+      if (printerTransport != null) 'printer_transport': printerTransport,
+      if (printerHost != null) 'printer_host': printerHost,
+      if (printerPort != null) 'printer_port': printerPort,
+      if (printerDeviceId != null) 'printer_device_id': printerDeviceId,
+      if (printerDeviceName != null) 'printer_device_name': printerDeviceName,
+      if (printerWidthMm != null) 'printer_width_mm': printerWidthMm,
+      if (drawerEnabled != null) 'drawer_enabled': drawerEnabled,
+    });
+  }
+
+  SettingsCompanion copyWith(
+      {Value<int>? id,
+      Value<String>? storeName,
+      Value<bool>? printerEnabled,
+      Value<String>? printerTransport,
+      Value<String>? printerHost,
+      Value<int>? printerPort,
+      Value<String>? printerDeviceId,
+      Value<String>? printerDeviceName,
+      Value<int>? printerWidthMm,
+      Value<bool>? drawerEnabled}) {
+    return SettingsCompanion(
+      id: id ?? this.id,
+      storeName: storeName ?? this.storeName,
+      printerEnabled: printerEnabled ?? this.printerEnabled,
+      printerTransport: printerTransport ?? this.printerTransport,
+      printerHost: printerHost ?? this.printerHost,
+      printerPort: printerPort ?? this.printerPort,
+      printerDeviceId: printerDeviceId ?? this.printerDeviceId,
+      printerDeviceName: printerDeviceName ?? this.printerDeviceName,
+      printerWidthMm: printerWidthMm ?? this.printerWidthMm,
+      drawerEnabled: drawerEnabled ?? this.drawerEnabled,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (storeName.present) {
+      map['store_name'] = Variable<String>(storeName.value);
+    }
+    if (printerEnabled.present) {
+      map['printer_enabled'] = Variable<bool>(printerEnabled.value);
+    }
+    if (printerTransport.present) {
+      map['printer_transport'] = Variable<String>(printerTransport.value);
+    }
+    if (printerHost.present) {
+      map['printer_host'] = Variable<String>(printerHost.value);
+    }
+    if (printerPort.present) {
+      map['printer_port'] = Variable<int>(printerPort.value);
+    }
+    if (printerDeviceId.present) {
+      map['printer_device_id'] = Variable<String>(printerDeviceId.value);
+    }
+    if (printerDeviceName.present) {
+      map['printer_device_name'] = Variable<String>(printerDeviceName.value);
+    }
+    if (printerWidthMm.present) {
+      map['printer_width_mm'] = Variable<int>(printerWidthMm.value);
+    }
+    if (drawerEnabled.present) {
+      map['drawer_enabled'] = Variable<bool>(drawerEnabled.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SettingsCompanion(')
+          ..write('id: $id, ')
+          ..write('storeName: $storeName, ')
+          ..write('printerEnabled: $printerEnabled, ')
+          ..write('printerTransport: $printerTransport, ')
+          ..write('printerHost: $printerHost, ')
+          ..write('printerPort: $printerPort, ')
+          ..write('printerDeviceId: $printerDeviceId, ')
+          ..write('printerDeviceName: $printerDeviceName, ')
+          ..write('printerWidthMm: $printerWidthMm, ')
+          ..write('drawerEnabled: $drawerEnabled')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -3916,6 +4487,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $PaymentsTable payments = $PaymentsTable(this);
   late final $CashSessionsTable cashSessions = $CashSessionsTable(this);
   late final $AuditLogsTable auditLogs = $AuditLogsTable(this);
+  late final $SettingsTable settings = $SettingsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -3931,7 +4503,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         saleItems,
         payments,
         cashSessions,
-        auditLogs
+        auditLogs,
+        settings
       ];
 }
 
@@ -6702,6 +7275,7 @@ typedef $$SaleItemsTableCreateCompanionBuilder = SaleItemsCompanion Function({
   Value<String> id,
   required String saleId,
   required String productId,
+  Value<String> productName,
   required int quantity,
   required int unitPriceCents,
   Value<int> lineTotalCents,
@@ -6711,6 +7285,7 @@ typedef $$SaleItemsTableUpdateCompanionBuilder = SaleItemsCompanion Function({
   Value<String> id,
   Value<String> saleId,
   Value<String> productId,
+  Value<String> productName,
   Value<int> quantity,
   Value<int> unitPriceCents,
   Value<int> lineTotalCents,
@@ -6762,6 +7337,9 @@ class $$SaleItemsTableFilterComposer
   });
   ColumnFilters<String> get id => $composableBuilder(
       column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get productName => $composableBuilder(
+      column: $table.productName, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<int> get quantity => $composableBuilder(
       column: $table.quantity, builder: (column) => ColumnFilters(column));
@@ -6827,6 +7405,9 @@ class $$SaleItemsTableOrderingComposer
   ColumnOrderings<String> get id => $composableBuilder(
       column: $table.id, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get productName => $composableBuilder(
+      column: $table.productName, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<int> get quantity => $composableBuilder(
       column: $table.quantity, builder: (column) => ColumnOrderings(column));
 
@@ -6890,6 +7471,9 @@ class $$SaleItemsTableAnnotationComposer
   });
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get productName => $composableBuilder(
+      column: $table.productName, builder: (column) => column);
 
   GeneratedColumn<int> get quantity =>
       $composableBuilder(column: $table.quantity, builder: (column) => column);
@@ -6967,6 +7551,7 @@ class $$SaleItemsTableTableManager extends RootTableManager<
             Value<String> id = const Value.absent(),
             Value<String> saleId = const Value.absent(),
             Value<String> productId = const Value.absent(),
+            Value<String> productName = const Value.absent(),
             Value<int> quantity = const Value.absent(),
             Value<int> unitPriceCents = const Value.absent(),
             Value<int> lineTotalCents = const Value.absent(),
@@ -6976,6 +7561,7 @@ class $$SaleItemsTableTableManager extends RootTableManager<
             id: id,
             saleId: saleId,
             productId: productId,
+            productName: productName,
             quantity: quantity,
             unitPriceCents: unitPriceCents,
             lineTotalCents: lineTotalCents,
@@ -6985,6 +7571,7 @@ class $$SaleItemsTableTableManager extends RootTableManager<
             Value<String> id = const Value.absent(),
             required String saleId,
             required String productId,
+            Value<String> productName = const Value.absent(),
             required int quantity,
             required int unitPriceCents,
             Value<int> lineTotalCents = const Value.absent(),
@@ -6994,6 +7581,7 @@ class $$SaleItemsTableTableManager extends RootTableManager<
             id: id,
             saleId: saleId,
             productId: productId,
+            productName: productName,
             quantity: quantity,
             unitPriceCents: unitPriceCents,
             lineTotalCents: lineTotalCents,
@@ -7796,6 +8384,251 @@ typedef $$AuditLogsTableProcessedTableManager = ProcessedTableManager<
     (AuditLog, BaseReferences<_$AppDatabase, $AuditLogsTable, AuditLog>),
     AuditLog,
     PrefetchHooks Function()>;
+typedef $$SettingsTableCreateCompanionBuilder = SettingsCompanion Function({
+  Value<int> id,
+  Value<String> storeName,
+  Value<bool> printerEnabled,
+  Value<String> printerTransport,
+  Value<String> printerHost,
+  Value<int> printerPort,
+  Value<String> printerDeviceId,
+  Value<String> printerDeviceName,
+  Value<int> printerWidthMm,
+  Value<bool> drawerEnabled,
+});
+typedef $$SettingsTableUpdateCompanionBuilder = SettingsCompanion Function({
+  Value<int> id,
+  Value<String> storeName,
+  Value<bool> printerEnabled,
+  Value<String> printerTransport,
+  Value<String> printerHost,
+  Value<int> printerPort,
+  Value<String> printerDeviceId,
+  Value<String> printerDeviceName,
+  Value<int> printerWidthMm,
+  Value<bool> drawerEnabled,
+});
+
+class $$SettingsTableFilterComposer
+    extends Composer<_$AppDatabase, $SettingsTable> {
+  $$SettingsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get storeName => $composableBuilder(
+      column: $table.storeName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get printerEnabled => $composableBuilder(
+      column: $table.printerEnabled,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get printerTransport => $composableBuilder(
+      column: $table.printerTransport,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get printerHost => $composableBuilder(
+      column: $table.printerHost, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get printerPort => $composableBuilder(
+      column: $table.printerPort, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get printerDeviceId => $composableBuilder(
+      column: $table.printerDeviceId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get printerDeviceName => $composableBuilder(
+      column: $table.printerDeviceName,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get printerWidthMm => $composableBuilder(
+      column: $table.printerWidthMm,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get drawerEnabled => $composableBuilder(
+      column: $table.drawerEnabled, builder: (column) => ColumnFilters(column));
+}
+
+class $$SettingsTableOrderingComposer
+    extends Composer<_$AppDatabase, $SettingsTable> {
+  $$SettingsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get storeName => $composableBuilder(
+      column: $table.storeName, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get printerEnabled => $composableBuilder(
+      column: $table.printerEnabled,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get printerTransport => $composableBuilder(
+      column: $table.printerTransport,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get printerHost => $composableBuilder(
+      column: $table.printerHost, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get printerPort => $composableBuilder(
+      column: $table.printerPort, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get printerDeviceId => $composableBuilder(
+      column: $table.printerDeviceId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get printerDeviceName => $composableBuilder(
+      column: $table.printerDeviceName,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get printerWidthMm => $composableBuilder(
+      column: $table.printerWidthMm,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get drawerEnabled => $composableBuilder(
+      column: $table.drawerEnabled,
+      builder: (column) => ColumnOrderings(column));
+}
+
+class $$SettingsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SettingsTable> {
+  $$SettingsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get storeName =>
+      $composableBuilder(column: $table.storeName, builder: (column) => column);
+
+  GeneratedColumn<bool> get printerEnabled => $composableBuilder(
+      column: $table.printerEnabled, builder: (column) => column);
+
+  GeneratedColumn<String> get printerTransport => $composableBuilder(
+      column: $table.printerTransport, builder: (column) => column);
+
+  GeneratedColumn<String> get printerHost => $composableBuilder(
+      column: $table.printerHost, builder: (column) => column);
+
+  GeneratedColumn<int> get printerPort => $composableBuilder(
+      column: $table.printerPort, builder: (column) => column);
+
+  GeneratedColumn<String> get printerDeviceId => $composableBuilder(
+      column: $table.printerDeviceId, builder: (column) => column);
+
+  GeneratedColumn<String> get printerDeviceName => $composableBuilder(
+      column: $table.printerDeviceName, builder: (column) => column);
+
+  GeneratedColumn<int> get printerWidthMm => $composableBuilder(
+      column: $table.printerWidthMm, builder: (column) => column);
+
+  GeneratedColumn<bool> get drawerEnabled => $composableBuilder(
+      column: $table.drawerEnabled, builder: (column) => column);
+}
+
+class $$SettingsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $SettingsTable,
+    Setting,
+    $$SettingsTableFilterComposer,
+    $$SettingsTableOrderingComposer,
+    $$SettingsTableAnnotationComposer,
+    $$SettingsTableCreateCompanionBuilder,
+    $$SettingsTableUpdateCompanionBuilder,
+    (Setting, BaseReferences<_$AppDatabase, $SettingsTable, Setting>),
+    Setting,
+    PrefetchHooks Function()> {
+  $$SettingsTableTableManager(_$AppDatabase db, $SettingsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SettingsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SettingsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SettingsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> storeName = const Value.absent(),
+            Value<bool> printerEnabled = const Value.absent(),
+            Value<String> printerTransport = const Value.absent(),
+            Value<String> printerHost = const Value.absent(),
+            Value<int> printerPort = const Value.absent(),
+            Value<String> printerDeviceId = const Value.absent(),
+            Value<String> printerDeviceName = const Value.absent(),
+            Value<int> printerWidthMm = const Value.absent(),
+            Value<bool> drawerEnabled = const Value.absent(),
+          }) =>
+              SettingsCompanion(
+            id: id,
+            storeName: storeName,
+            printerEnabled: printerEnabled,
+            printerTransport: printerTransport,
+            printerHost: printerHost,
+            printerPort: printerPort,
+            printerDeviceId: printerDeviceId,
+            printerDeviceName: printerDeviceName,
+            printerWidthMm: printerWidthMm,
+            drawerEnabled: drawerEnabled,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<String> storeName = const Value.absent(),
+            Value<bool> printerEnabled = const Value.absent(),
+            Value<String> printerTransport = const Value.absent(),
+            Value<String> printerHost = const Value.absent(),
+            Value<int> printerPort = const Value.absent(),
+            Value<String> printerDeviceId = const Value.absent(),
+            Value<String> printerDeviceName = const Value.absent(),
+            Value<int> printerWidthMm = const Value.absent(),
+            Value<bool> drawerEnabled = const Value.absent(),
+          }) =>
+              SettingsCompanion.insert(
+            id: id,
+            storeName: storeName,
+            printerEnabled: printerEnabled,
+            printerTransport: printerTransport,
+            printerHost: printerHost,
+            printerPort: printerPort,
+            printerDeviceId: printerDeviceId,
+            printerDeviceName: printerDeviceName,
+            printerWidthMm: printerWidthMm,
+            drawerEnabled: drawerEnabled,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$SettingsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $SettingsTable,
+    Setting,
+    $$SettingsTableFilterComposer,
+    $$SettingsTableOrderingComposer,
+    $$SettingsTableAnnotationComposer,
+    $$SettingsTableCreateCompanionBuilder,
+    $$SettingsTableUpdateCompanionBuilder,
+    (Setting, BaseReferences<_$AppDatabase, $SettingsTable, Setting>),
+    Setting,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -7822,4 +8655,6 @@ class $AppDatabaseManager {
       $$CashSessionsTableTableManager(_db, _db.cashSessions);
   $$AuditLogsTableTableManager get auditLogs =>
       $$AuditLogsTableTableManager(_db, _db.auditLogs);
+  $$SettingsTableTableManager get settings =>
+      $$SettingsTableTableManager(_db, _db.settings);
 }

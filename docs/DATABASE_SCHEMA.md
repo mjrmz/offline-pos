@@ -23,7 +23,11 @@ showing a number with no history.
 
 **Sales** — Id, Timestamp, CashierId, Status (Completed/Voided/Refunded), Total
 
-**SaleItems** — Id, SaleId, ProductId, Quantity, UnitPrice, LineTotal
+**SaleItems** — Id, SaleId, ProductId, ProductName, Quantity, UnitPrice, LineTotal
+- `ProductName` is captured when the sale commits. Receipts and reprints use
+  this historical name and the stored unit price and line total, so later
+  product edits do not change the receipt. The Phase 4 forward migration fills
+  names on older sale items from the catalog name available at migration time.
 
 **Payments** — Id, SaleId, Method (Cash/GCash/Card/Other), Amount,
 ConfirmedByUserId (nullable — set for GCash/e-wallet payments where the
@@ -54,8 +58,13 @@ that references the original sale and adjusts inventory accordingly.
 change — who, what, when. This is what resolves "who voided this sale"
 disputes later.
 
-**Settings** — local device/store configuration (store name, receipt footer,
-printer settings, etc.)
+**Settings** — one local row (`Id = 1`) for implemented Phase 4 store/device
+configuration: `StoreName`, `PrinterEnabled`, `PrinterTransport` (`lan`, `usb`,
+or `bluetooth`), `PrinterHost` and `PrinterPort` for LAN, `PrinterDeviceId` and
+`PrinterDeviceName` for a selected USB/Bluetooth printer, `PrinterWidthMm`
+(58 or 80), and `DrawerEnabled`. A forward migration adds this table; existing
+Phase 4 printer preferences are imported into the row on first use.
+Other documented Settings capabilities are added in their respective phases.
 
 **DatabaseMigrations** — tracks applied schema versions
 

@@ -4,13 +4,19 @@ import '../../core/services/sales_service.dart';
 import '../../data/daos/sales_repository.dart';
 import '../../shared/utils/safe_message.dart';
 import '../pos_checkout/checkout_screen.dart';
+import '../../hardware/printer/receipt_service.dart';
 
 class SalesHistoryScreen extends StatefulWidget {
   final SalesService sales;
   final ActiveUser user;
   final bool active;
+  final ReceiptService? receipts;
   const SalesHistoryScreen(
-      {super.key, required this.sales, required this.user, this.active = true});
+      {super.key,
+      required this.sales,
+      required this.user,
+      this.active = true,
+      this.receipts});
   @override
   State<SalesHistoryScreen> createState() => _SalesHistoryScreenState();
 }
@@ -72,6 +78,18 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                               : 'Stock not returned to sellable inventory'),
                       ])),
                   actions: [
+                    TextButton(
+                        onPressed: () async {
+                          final ok =
+                              await widget.receipts?.reprint(saleId) ?? false;
+                          if (context.mounted) Navigator.pop(context);
+                          if (mounted) {
+                            setState(() => error = ok
+                                ? null
+                                : 'Receipt could not be printed. Check printer settings and connection.');
+                          }
+                        },
+                        child: const Text('Reprint')),
                     if (widget.user.can(PosPermission.reverseSale) &&
                         detail.summary.sale.status == 'completed') ...[
                       TextButton(

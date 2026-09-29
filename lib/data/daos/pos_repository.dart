@@ -206,6 +206,17 @@ class PosRepository {
         }
         await db.into(db.payments).insert(PaymentsCompanion.insert(
             saleId: sale.id, method: 'cash', amountCents: total));
+        final session = await (db.select(db.cashSessions)
+              ..where((s) => s.closedAt.isNull()))
+            .getSingleOrNull();
+        if (session != null) {
+          await db.into(db.cashMovements).insert(CashMovementsCompanion.insert(
+              sessionId: session.id,
+              saleId: Value(sale.id),
+              amountCents: total,
+              kind: 'cash_sale'));
+        }
+        await AuthRepository(db).audit(cashierId, 'sale.completed', sale.id);
         return CommittedSale(sale.id, total);
       });
 }

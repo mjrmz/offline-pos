@@ -48,9 +48,17 @@ that references the original sale and adjusts inventory accordingly.
 
 ## Cash management
 
-**CashSessions** — Id, OpenedBy, OpenedAt, StartingCash, ClosedAt, ExpectedCash, ActualCash, Variance
+**CashSessions** — Id, OpenedByUserId, OpenedAt, StartingCashCents,
+ClosedAt (nullable), ExpectedCashCents (nullable), ActualCashCents (nullable).
+Variance is calculated as actual minus expected; it is not stored. Only one
+session can be active on this device. Closed sessions remain historical.
 
-**CashMovements** — cash in/out during a session (sales, refunds, manual adjustments)
+**CashMovements** — Id, SessionId, SaleId (nullable, unique), AmountCents,
+Kind, CreatedAt. Phase 5 writes `cash_sale` in the same transaction as the sale,
+when a session is open. Expected cash is starting cash plus the session's
+persisted movement amounts. Existing refund reversals do not record an actual
+cash payout, so they do not reduce expected cash. Future cash payout tracking
+must persist an actual payout before it affects this calculation.
 
 ## Operational
 

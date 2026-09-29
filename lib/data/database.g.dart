@@ -3641,6 +3641,358 @@ class CashSessionsCompanion extends UpdateCompanion<CashSession> {
   }
 }
 
+class $CashMovementsTable extends CashMovements
+    with TableInfo<$CashMovementsTable, CashMovement> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $CashMovementsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      clientDefault: () => _uuid());
+  static const VerificationMeta _sessionIdMeta =
+      const VerificationMeta('sessionId');
+  @override
+  late final GeneratedColumn<String> sessionId = GeneratedColumn<String>(
+      'session_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('REFERENCES cash_sessions (id)'));
+  static const VerificationMeta _saleIdMeta = const VerificationMeta('saleId');
+  @override
+  late final GeneratedColumn<String> saleId = GeneratedColumn<String>(
+      'sale_id', aliasedName, true,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('UNIQUE REFERENCES sales (id)'));
+  static const VerificationMeta _amountCentsMeta =
+      const VerificationMeta('amountCents');
+  @override
+  late final GeneratedColumn<int> amountCents = GeneratedColumn<int>(
+      'amount_cents', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _kindMeta = const VerificationMeta('kind');
+  @override
+  late final GeneratedColumn<String> kind = GeneratedColumn<String>(
+      'kind', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      clientDefault: () => DateTime.now());
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, sessionId, saleId, amountCents, kind, createdAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'cash_movements';
+  @override
+  VerificationContext validateIntegrity(Insertable<CashMovement> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('session_id')) {
+      context.handle(_sessionIdMeta,
+          sessionId.isAcceptableOrUnknown(data['session_id']!, _sessionIdMeta));
+    } else if (isInserting) {
+      context.missing(_sessionIdMeta);
+    }
+    if (data.containsKey('sale_id')) {
+      context.handle(_saleIdMeta,
+          saleId.isAcceptableOrUnknown(data['sale_id']!, _saleIdMeta));
+    }
+    if (data.containsKey('amount_cents')) {
+      context.handle(
+          _amountCentsMeta,
+          amountCents.isAcceptableOrUnknown(
+              data['amount_cents']!, _amountCentsMeta));
+    } else if (isInserting) {
+      context.missing(_amountCentsMeta);
+    }
+    if (data.containsKey('kind')) {
+      context.handle(
+          _kindMeta, kind.isAcceptableOrUnknown(data['kind']!, _kindMeta));
+    } else if (isInserting) {
+      context.missing(_kindMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  CashMovement map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return CashMovement(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      sessionId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}session_id'])!,
+      saleId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sale_id']),
+      amountCents: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}amount_cents'])!,
+      kind: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}kind'])!,
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+    );
+  }
+
+  @override
+  $CashMovementsTable createAlias(String alias) {
+    return $CashMovementsTable(attachedDatabase, alias);
+  }
+}
+
+class CashMovement extends DataClass implements Insertable<CashMovement> {
+  final String id;
+  final String sessionId;
+  final String? saleId;
+  final int amountCents;
+  final String kind;
+  final DateTime createdAt;
+  const CashMovement(
+      {required this.id,
+      required this.sessionId,
+      this.saleId,
+      required this.amountCents,
+      required this.kind,
+      required this.createdAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['session_id'] = Variable<String>(sessionId);
+    if (!nullToAbsent || saleId != null) {
+      map['sale_id'] = Variable<String>(saleId);
+    }
+    map['amount_cents'] = Variable<int>(amountCents);
+    map['kind'] = Variable<String>(kind);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  CashMovementsCompanion toCompanion(bool nullToAbsent) {
+    return CashMovementsCompanion(
+      id: Value(id),
+      sessionId: Value(sessionId),
+      saleId:
+          saleId == null && nullToAbsent ? const Value.absent() : Value(saleId),
+      amountCents: Value(amountCents),
+      kind: Value(kind),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory CashMovement.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return CashMovement(
+      id: serializer.fromJson<String>(json['id']),
+      sessionId: serializer.fromJson<String>(json['sessionId']),
+      saleId: serializer.fromJson<String?>(json['saleId']),
+      amountCents: serializer.fromJson<int>(json['amountCents']),
+      kind: serializer.fromJson<String>(json['kind']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'sessionId': serializer.toJson<String>(sessionId),
+      'saleId': serializer.toJson<String?>(saleId),
+      'amountCents': serializer.toJson<int>(amountCents),
+      'kind': serializer.toJson<String>(kind),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  CashMovement copyWith(
+          {String? id,
+          String? sessionId,
+          Value<String?> saleId = const Value.absent(),
+          int? amountCents,
+          String? kind,
+          DateTime? createdAt}) =>
+      CashMovement(
+        id: id ?? this.id,
+        sessionId: sessionId ?? this.sessionId,
+        saleId: saleId.present ? saleId.value : this.saleId,
+        amountCents: amountCents ?? this.amountCents,
+        kind: kind ?? this.kind,
+        createdAt: createdAt ?? this.createdAt,
+      );
+  CashMovement copyWithCompanion(CashMovementsCompanion data) {
+    return CashMovement(
+      id: data.id.present ? data.id.value : this.id,
+      sessionId: data.sessionId.present ? data.sessionId.value : this.sessionId,
+      saleId: data.saleId.present ? data.saleId.value : this.saleId,
+      amountCents:
+          data.amountCents.present ? data.amountCents.value : this.amountCents,
+      kind: data.kind.present ? data.kind.value : this.kind,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CashMovement(')
+          ..write('id: $id, ')
+          ..write('sessionId: $sessionId, ')
+          ..write('saleId: $saleId, ')
+          ..write('amountCents: $amountCents, ')
+          ..write('kind: $kind, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, sessionId, saleId, amountCents, kind, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is CashMovement &&
+          other.id == this.id &&
+          other.sessionId == this.sessionId &&
+          other.saleId == this.saleId &&
+          other.amountCents == this.amountCents &&
+          other.kind == this.kind &&
+          other.createdAt == this.createdAt);
+}
+
+class CashMovementsCompanion extends UpdateCompanion<CashMovement> {
+  final Value<String> id;
+  final Value<String> sessionId;
+  final Value<String?> saleId;
+  final Value<int> amountCents;
+  final Value<String> kind;
+  final Value<DateTime> createdAt;
+  final Value<int> rowid;
+  const CashMovementsCompanion({
+    this.id = const Value.absent(),
+    this.sessionId = const Value.absent(),
+    this.saleId = const Value.absent(),
+    this.amountCents = const Value.absent(),
+    this.kind = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  CashMovementsCompanion.insert({
+    this.id = const Value.absent(),
+    required String sessionId,
+    this.saleId = const Value.absent(),
+    required int amountCents,
+    required String kind,
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : sessionId = Value(sessionId),
+        amountCents = Value(amountCents),
+        kind = Value(kind);
+  static Insertable<CashMovement> custom({
+    Expression<String>? id,
+    Expression<String>? sessionId,
+    Expression<String>? saleId,
+    Expression<int>? amountCents,
+    Expression<String>? kind,
+    Expression<DateTime>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (sessionId != null) 'session_id': sessionId,
+      if (saleId != null) 'sale_id': saleId,
+      if (amountCents != null) 'amount_cents': amountCents,
+      if (kind != null) 'kind': kind,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  CashMovementsCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? sessionId,
+      Value<String?>? saleId,
+      Value<int>? amountCents,
+      Value<String>? kind,
+      Value<DateTime>? createdAt,
+      Value<int>? rowid}) {
+    return CashMovementsCompanion(
+      id: id ?? this.id,
+      sessionId: sessionId ?? this.sessionId,
+      saleId: saleId ?? this.saleId,
+      amountCents: amountCents ?? this.amountCents,
+      kind: kind ?? this.kind,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (sessionId.present) {
+      map['session_id'] = Variable<String>(sessionId.value);
+    }
+    if (saleId.present) {
+      map['sale_id'] = Variable<String>(saleId.value);
+    }
+    if (amountCents.present) {
+      map['amount_cents'] = Variable<int>(amountCents.value);
+    }
+    if (kind.present) {
+      map['kind'] = Variable<String>(kind.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CashMovementsCompanion(')
+          ..write('id: $id, ')
+          ..write('sessionId: $sessionId, ')
+          ..write('saleId: $saleId, ')
+          ..write('amountCents: $amountCents, ')
+          ..write('kind: $kind, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $AuditLogsTable extends AuditLogs
     with TableInfo<$AuditLogsTable, AuditLog> {
   @override
@@ -4486,6 +4838,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $SaleItemsTable saleItems = $SaleItemsTable(this);
   late final $PaymentsTable payments = $PaymentsTable(this);
   late final $CashSessionsTable cashSessions = $CashSessionsTable(this);
+  late final $CashMovementsTable cashMovements = $CashMovementsTable(this);
   late final $AuditLogsTable auditLogs = $AuditLogsTable(this);
   late final $SettingsTable settings = $SettingsTable(this);
   @override
@@ -4503,6 +4856,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         saleItems,
         payments,
         cashSessions,
+        cashMovements,
         auditLogs,
         settings
       ];
@@ -6479,6 +6833,21 @@ final class $$SalesTableReferences
     return ProcessedTableManager(
         manager.$state.copyWith(prefetchedData: cache));
   }
+
+  static MultiTypedResultKey<$CashMovementsTable, List<CashMovement>>
+      _cashMovementsRefsTable(_$AppDatabase db) =>
+          MultiTypedResultKey.fromTable(db.cashMovements,
+              aliasName:
+                  $_aliasNameGenerator(db.sales.id, db.cashMovements.saleId));
+
+  $$CashMovementsTableProcessedTableManager get cashMovementsRefs {
+    final manager = $$CashMovementsTableTableManager($_db, $_db.cashMovements)
+        .filter((f) => f.saleId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_cashMovementsRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
 }
 
 class $$SalesTableFilterComposer extends Composer<_$AppDatabase, $SalesTable> {
@@ -6576,6 +6945,27 @@ class $$SalesTableFilterComposer extends Composer<_$AppDatabase, $SalesTable> {
             $$PaymentsTableFilterComposer(
               $db: $db,
               $table: $db.payments,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+
+  Expression<bool> cashMovementsRefs(
+      Expression<bool> Function($$CashMovementsTableFilterComposer f) f) {
+    final $$CashMovementsTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.cashMovements,
+        getReferencedColumn: (t) => t.saleId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$CashMovementsTableFilterComposer(
+              $db: $db,
+              $table: $db.cashMovements,
               $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
               joinBuilder: joinBuilder,
               $removeJoinBuilderFromRootComposer:
@@ -6730,6 +7120,27 @@ class $$SalesTableAnnotationComposer
             ));
     return f(composer);
   }
+
+  Expression<T> cashMovementsRefs<T extends Object>(
+      Expression<T> Function($$CashMovementsTableAnnotationComposer a) f) {
+    final $$CashMovementsTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.cashMovements,
+        getReferencedColumn: (t) => t.saleId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$CashMovementsTableAnnotationComposer(
+              $db: $db,
+              $table: $db.cashMovements,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
 }
 
 class $$SalesTableTableManager extends RootTableManager<
@@ -6747,7 +7158,8 @@ class $$SalesTableTableManager extends RootTableManager<
         {bool cashierId,
         bool saleReversalsRefs,
         bool saleItemsRefs,
-        bool paymentsRefs})> {
+        bool paymentsRefs,
+        bool cashMovementsRefs})> {
   $$SalesTableTableManager(_$AppDatabase db, $SalesTable table)
       : super(TableManagerState(
           db: db,
@@ -6798,13 +7210,15 @@ class $$SalesTableTableManager extends RootTableManager<
               {cashierId = false,
               saleReversalsRefs = false,
               saleItemsRefs = false,
-              paymentsRefs = false}) {
+              paymentsRefs = false,
+              cashMovementsRefs = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [
                 if (saleReversalsRefs) db.saleReversals,
                 if (saleItemsRefs) db.saleItems,
-                if (paymentsRefs) db.payments
+                if (paymentsRefs) db.payments,
+                if (cashMovementsRefs) db.cashMovements
               ],
               addJoins: <
                   T extends TableManagerState<
@@ -6866,6 +7280,18 @@ class $$SalesTableTableManager extends RootTableManager<
                         referencedItemsForCurrentItem: (item,
                                 referencedItems) =>
                             referencedItems.where((e) => e.saleId == item.id),
+                        typedResults: items),
+                  if (cashMovementsRefs)
+                    await $_getPrefetchedData<Sale, $SalesTable, CashMovement>(
+                        currentTable: table,
+                        referencedTable:
+                            $$SalesTableReferences._cashMovementsRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$SalesTableReferences(db, table, p0)
+                                .cashMovementsRefs,
+                        referencedItemsForCurrentItem: (item,
+                                referencedItems) =>
+                            referencedItems.where((e) => e.saleId == item.id),
                         typedResults: items)
                 ];
               },
@@ -6889,7 +7315,8 @@ typedef $$SalesTableProcessedTableManager = ProcessedTableManager<
         {bool cashierId,
         bool saleReversalsRefs,
         bool saleItemsRefs,
-        bool paymentsRefs})>;
+        bool paymentsRefs,
+        bool cashMovementsRefs})>;
 typedef $$SaleReversalsTableCreateCompanionBuilder = SaleReversalsCompanion
     Function({
   Value<String> id,
@@ -7948,6 +8375,21 @@ final class $$CashSessionsTableReferences
     return ProcessedTableManager(
         manager.$state.copyWith(prefetchedData: [item]));
   }
+
+  static MultiTypedResultKey<$CashMovementsTable, List<CashMovement>>
+      _cashMovementsRefsTable(_$AppDatabase db) =>
+          MultiTypedResultKey.fromTable(db.cashMovements,
+              aliasName: $_aliasNameGenerator(
+                  db.cashSessions.id, db.cashMovements.sessionId));
+
+  $$CashMovementsTableProcessedTableManager get cashMovementsRefs {
+    final manager = $$CashMovementsTableTableManager($_db, $_db.cashMovements)
+        .filter((f) => f.sessionId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_cashMovementsRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
 }
 
 class $$CashSessionsTableFilterComposer
@@ -7998,6 +8440,27 @@ class $$CashSessionsTableFilterComposer
                   $removeJoinBuilderFromRootComposer,
             ));
     return composer;
+  }
+
+  Expression<bool> cashMovementsRefs(
+      Expression<bool> Function($$CashMovementsTableFilterComposer f) f) {
+    final $$CashMovementsTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.cashMovements,
+        getReferencedColumn: (t) => t.sessionId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$CashMovementsTableFilterComposer(
+              $db: $db,
+              $table: $db.cashMovements,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
   }
 }
 
@@ -8098,6 +8561,27 @@ class $$CashSessionsTableAnnotationComposer
             ));
     return composer;
   }
+
+  Expression<T> cashMovementsRefs<T extends Object>(
+      Expression<T> Function($$CashMovementsTableAnnotationComposer a) f) {
+    final $$CashMovementsTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.cashMovements,
+        getReferencedColumn: (t) => t.sessionId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$CashMovementsTableAnnotationComposer(
+              $db: $db,
+              $table: $db.cashMovements,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
 }
 
 class $$CashSessionsTableTableManager extends RootTableManager<
@@ -8111,7 +8595,7 @@ class $$CashSessionsTableTableManager extends RootTableManager<
     $$CashSessionsTableUpdateCompanionBuilder,
     (CashSession, $$CashSessionsTableReferences),
     CashSession,
-    PrefetchHooks Function({bool openedByUserId})> {
+    PrefetchHooks Function({bool openedByUserId, bool cashMovementsRefs})> {
   $$CashSessionsTableTableManager(_$AppDatabase db, $CashSessionsTable table)
       : super(TableManagerState(
           db: db,
@@ -8168,10 +8652,13 @@ class $$CashSessionsTableTableManager extends RootTableManager<
                     $$CashSessionsTableReferences(db, table, e)
                   ))
               .toList(),
-          prefetchHooksCallback: ({openedByUserId = false}) {
+          prefetchHooksCallback: (
+              {openedByUserId = false, cashMovementsRefs = false}) {
             return PrefetchHooks(
               db: db,
-              explicitlyWatchedTables: [],
+              explicitlyWatchedTables: [
+                if (cashMovementsRefs) db.cashMovements
+              ],
               addJoins: <
                   T extends TableManagerState<
                       dynamic,
@@ -8200,7 +8687,21 @@ class $$CashSessionsTableTableManager extends RootTableManager<
                 return state;
               },
               getPrefetchedDataCallback: (items) async {
-                return [];
+                return [
+                  if (cashMovementsRefs)
+                    await $_getPrefetchedData<CashSession, $CashSessionsTable,
+                            CashMovement>(
+                        currentTable: table,
+                        referencedTable: $$CashSessionsTableReferences
+                            ._cashMovementsRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$CashSessionsTableReferences(db, table, p0)
+                                .cashMovementsRefs,
+                        referencedItemsForCurrentItem:
+                            (item, referencedItems) => referencedItems
+                                .where((e) => e.sessionId == item.id),
+                        typedResults: items)
+                ];
               },
             );
           },
@@ -8218,7 +8719,373 @@ typedef $$CashSessionsTableProcessedTableManager = ProcessedTableManager<
     $$CashSessionsTableUpdateCompanionBuilder,
     (CashSession, $$CashSessionsTableReferences),
     CashSession,
-    PrefetchHooks Function({bool openedByUserId})>;
+    PrefetchHooks Function({bool openedByUserId, bool cashMovementsRefs})>;
+typedef $$CashMovementsTableCreateCompanionBuilder = CashMovementsCompanion
+    Function({
+  Value<String> id,
+  required String sessionId,
+  Value<String?> saleId,
+  required int amountCents,
+  required String kind,
+  Value<DateTime> createdAt,
+  Value<int> rowid,
+});
+typedef $$CashMovementsTableUpdateCompanionBuilder = CashMovementsCompanion
+    Function({
+  Value<String> id,
+  Value<String> sessionId,
+  Value<String?> saleId,
+  Value<int> amountCents,
+  Value<String> kind,
+  Value<DateTime> createdAt,
+  Value<int> rowid,
+});
+
+final class $$CashMovementsTableReferences
+    extends BaseReferences<_$AppDatabase, $CashMovementsTable, CashMovement> {
+  $$CashMovementsTableReferences(
+      super.$_db, super.$_table, super.$_typedResult);
+
+  static $CashSessionsTable _sessionIdTable(_$AppDatabase db) =>
+      db.cashSessions.createAlias(
+          $_aliasNameGenerator(db.cashMovements.sessionId, db.cashSessions.id));
+
+  $$CashSessionsTableProcessedTableManager get sessionId {
+    final $_column = $_itemColumn<String>('session_id')!;
+
+    final manager = $$CashSessionsTableTableManager($_db, $_db.cashSessions)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_sessionIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+
+  static $SalesTable _saleIdTable(_$AppDatabase db) => db.sales
+      .createAlias($_aliasNameGenerator(db.cashMovements.saleId, db.sales.id));
+
+  $$SalesTableProcessedTableManager? get saleId {
+    final $_column = $_itemColumn<String>('sale_id');
+    if ($_column == null) return null;
+    final manager = $$SalesTableTableManager($_db, $_db.sales)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_saleIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
+
+class $$CashMovementsTableFilterComposer
+    extends Composer<_$AppDatabase, $CashMovementsTable> {
+  $$CashMovementsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get amountCents => $composableBuilder(
+      column: $table.amountCents, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get kind => $composableBuilder(
+      column: $table.kind, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  $$CashSessionsTableFilterComposer get sessionId {
+    final $$CashSessionsTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.sessionId,
+        referencedTable: $db.cashSessions,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$CashSessionsTableFilterComposer(
+              $db: $db,
+              $table: $db.cashSessions,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$SalesTableFilterComposer get saleId {
+    final $$SalesTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.saleId,
+        referencedTable: $db.sales,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SalesTableFilterComposer(
+              $db: $db,
+              $table: $db.sales,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$CashMovementsTableOrderingComposer
+    extends Composer<_$AppDatabase, $CashMovementsTable> {
+  $$CashMovementsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get amountCents => $composableBuilder(
+      column: $table.amountCents, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get kind => $composableBuilder(
+      column: $table.kind, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  $$CashSessionsTableOrderingComposer get sessionId {
+    final $$CashSessionsTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.sessionId,
+        referencedTable: $db.cashSessions,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$CashSessionsTableOrderingComposer(
+              $db: $db,
+              $table: $db.cashSessions,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$SalesTableOrderingComposer get saleId {
+    final $$SalesTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.saleId,
+        referencedTable: $db.sales,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SalesTableOrderingComposer(
+              $db: $db,
+              $table: $db.sales,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$CashMovementsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $CashMovementsTable> {
+  $$CashMovementsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get amountCents => $composableBuilder(
+      column: $table.amountCents, builder: (column) => column);
+
+  GeneratedColumn<String> get kind =>
+      $composableBuilder(column: $table.kind, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  $$CashSessionsTableAnnotationComposer get sessionId {
+    final $$CashSessionsTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.sessionId,
+        referencedTable: $db.cashSessions,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$CashSessionsTableAnnotationComposer(
+              $db: $db,
+              $table: $db.cashSessions,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$SalesTableAnnotationComposer get saleId {
+    final $$SalesTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.saleId,
+        referencedTable: $db.sales,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SalesTableAnnotationComposer(
+              $db: $db,
+              $table: $db.sales,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$CashMovementsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $CashMovementsTable,
+    CashMovement,
+    $$CashMovementsTableFilterComposer,
+    $$CashMovementsTableOrderingComposer,
+    $$CashMovementsTableAnnotationComposer,
+    $$CashMovementsTableCreateCompanionBuilder,
+    $$CashMovementsTableUpdateCompanionBuilder,
+    (CashMovement, $$CashMovementsTableReferences),
+    CashMovement,
+    PrefetchHooks Function({bool sessionId, bool saleId})> {
+  $$CashMovementsTableTableManager(_$AppDatabase db, $CashMovementsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$CashMovementsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$CashMovementsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$CashMovementsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> sessionId = const Value.absent(),
+            Value<String?> saleId = const Value.absent(),
+            Value<int> amountCents = const Value.absent(),
+            Value<String> kind = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              CashMovementsCompanion(
+            id: id,
+            sessionId: sessionId,
+            saleId: saleId,
+            amountCents: amountCents,
+            kind: kind,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            required String sessionId,
+            Value<String?> saleId = const Value.absent(),
+            required int amountCents,
+            required String kind,
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              CashMovementsCompanion.insert(
+            id: id,
+            sessionId: sessionId,
+            saleId: saleId,
+            amountCents: amountCents,
+            kind: kind,
+            createdAt: createdAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$CashMovementsTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: ({sessionId = false, saleId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (sessionId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.sessionId,
+                    referencedTable:
+                        $$CashMovementsTableReferences._sessionIdTable(db),
+                    referencedColumn:
+                        $$CashMovementsTableReferences._sessionIdTable(db).id,
+                  ) as T;
+                }
+                if (saleId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.saleId,
+                    referencedTable:
+                        $$CashMovementsTableReferences._saleIdTable(db),
+                    referencedColumn:
+                        $$CashMovementsTableReferences._saleIdTable(db).id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$CashMovementsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $CashMovementsTable,
+    CashMovement,
+    $$CashMovementsTableFilterComposer,
+    $$CashMovementsTableOrderingComposer,
+    $$CashMovementsTableAnnotationComposer,
+    $$CashMovementsTableCreateCompanionBuilder,
+    $$CashMovementsTableUpdateCompanionBuilder,
+    (CashMovement, $$CashMovementsTableReferences),
+    CashMovement,
+    PrefetchHooks Function({bool sessionId, bool saleId})>;
 typedef $$AuditLogsTableCreateCompanionBuilder = AuditLogsCompanion Function({
   Value<String> id,
   Value<String?> userId,
@@ -8653,6 +9520,8 @@ class $AppDatabaseManager {
       $$PaymentsTableTableManager(_db, _db.payments);
   $$CashSessionsTableTableManager get cashSessions =>
       $$CashSessionsTableTableManager(_db, _db.cashSessions);
+  $$CashMovementsTableTableManager get cashMovements =>
+      $$CashMovementsTableTableManager(_db, _db.cashMovements);
   $$AuditLogsTableTableManager get auditLogs =>
       $$AuditLogsTableTableManager(_db, _db.auditLogs);
   $$SettingsTableTableManager get settings =>

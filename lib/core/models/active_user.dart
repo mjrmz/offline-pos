@@ -7,7 +7,9 @@ enum PosPermission {
   reverseSale,
   reports,
   manageUsers,
-  manageCatalog
+  manageCatalog,
+  manageRecovery,
+  manageCashSession
 }
 
 class ActiveUser {
@@ -18,13 +20,18 @@ class ActiveUser {
   const ActiveUser(this.id, this.name, this.role, [this.isActive = true]);
 
   bool can(PosPermission permission) => switch (permission) {
-        PosPermission.sell || PosPermission.viewOwnSales => true,
+        PosPermission.sell ||
+        PosPermission.viewOwnSales ||
+        PosPermission.manageCashSession =>
+          true,
         PosPermission.viewAllSales ||
         PosPermission.reverseSale ||
         PosPermission.reports ||
         PosPermission.manageCatalog =>
           role != UserRole.cashier,
-        PosPermission.manageUsers => role == UserRole.owner,
+        PosPermission.manageUsers ||
+        PosPermission.manageRecovery =>
+          role == UserRole.owner,
       };
   void require(PosPermission permission) {
     if (!can(permission)) throw StateError('Not authorized for this action');

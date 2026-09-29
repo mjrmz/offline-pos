@@ -5,6 +5,30 @@ import 'package:modern_offline_pos/data/database.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
 void main() {
+  test('v6 to v7 adds cash movements and preserves Phase 4 data', () async {
+    final dir = await Directory.systemTemp.createTemp('pos-migration-');
+    final file = File('${dir.path}/phase4.sqlite');
+    var db = AppDatabase.forTesting(NativeDatabase(file));
+    await db.customStatement(
+        "INSERT INTO users (id, name, role) VALUES ('owner', 'Owner', 'owner')");
+    await db.customStatement(
+        "INSERT INTO settings (id, store_name, printer_enabled) VALUES (1, 'Store', 1)");
+    await db.close();
+    final raw = sqlite.sqlite3.open(file.path);
+    raw.execute('DROP TABLE cash_movements');
+    raw.execute('DROP INDEX cash_sessions_one_open');
+    raw.execute('PRAGMA user_version = 6');
+    raw.dispose();
+    db = AppDatabase.forTesting(NativeDatabase(file));
+    try {
+      expect((await db.select(db.settings).get()).single.storeName, 'Store');
+      expect((await db.select(db.users).get()).single.name, 'Owner');
+      expect(await db.select(db.cashMovements).get(), isEmpty);
+    } finally {
+      await db.close();
+      await dir.delete(recursive: true);
+    }
+  });
   test('v5 to v6 adds Settings without changing existing sales', () async {
     final dir = await Directory.systemTemp.createTemp('pos-migration-');
     final file = File('${dir.path}/phase4.sqlite');

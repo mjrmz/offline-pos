@@ -143,6 +143,19 @@ class CashSessions extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class CashMovements extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get sessionId => text().references(CashSessions, #id)();
+  TextColumn get saleId => text().nullable().unique().references(Sales, #id)();
+  IntColumn get amountCents => integer()();
+  TextColumn get kind =>
+      text()(); // cash_sale; later kinds require actual cash evidence
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 class AuditLogs extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get userId => text().nullable()();
@@ -188,21 +201,28 @@ class Settings extends Table {
   Payments,
   Users,
   CashSessions,
+  CashMovements,
   AuditLogs,
   Settings,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
   AppDatabase.forTesting(super.executor);
+  static Future<File> databaseFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File(p.join(dir.path, 'modern_offline_pos.sqlite'));
+  }
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
+          await customStatement('CREATE UNIQUE INDEX cash_sessions_one_open '
+              'ON cash_sessions ((1)) WHERE closed_at IS NULL');
         },
         onUpgrade: (m, from, to) async {
           if (from < 2) {
@@ -237,6 +257,17 @@ class AppDatabase extends _$AppDatabase {
           if (from < 6) {
             await m.createTable(settings);
           }
+          if (from < 7) {
+            await m.createTable(cashMovements);
+            final sessionsTable = await customSelect(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cash_sessions'")
+                .get();
+            if (sessionsTable.isNotEmpty) {
+              await customStatement(
+                  'CREATE UNIQUE INDEX cash_sessions_one_open '
+                  'ON cash_sessions ((1)) WHERE closed_at IS NULL');
+            }
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -248,8 +279,7 @@ class AppDatabase extends _$AppDatabase {
 
 LazyDatabase _openConnection() {
   return LazyDatabase(() async {
-    final dir = await getApplicationDocumentsDirectory();
-    final file = File(p.join(dir.path, 'modern_offline_pos.sqlite'));
+    final file = await AppDatabase.databaseFile();
     return NativeDatabase.createInBackground(file);
   });
 }

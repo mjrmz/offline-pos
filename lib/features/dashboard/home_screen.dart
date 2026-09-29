@@ -14,18 +14,22 @@ import '../../hardware/printer/receipt_printer.dart';
 import '../../hardware/printer/device_transports.dart';
 import '../../hardware/cash_drawer/cash_drawer.dart';
 import '../settings/printer_settings_screen.dart';
+import '../cash_session/cash_session_screen.dart';
+import '../../data/daos/cash_session_repository.dart';
 
 class HomeScreen extends StatefulWidget {
   final AuthService auth;
   final PosRepository pos;
   final SalesRepository salesRepository;
   final VoidCallback onChanged;
+  final Widget? recoveryScreen;
   const HomeScreen(
       {super.key,
       required this.auth,
       required this.pos,
       required this.salesRepository,
-      required this.onChanged});
+      required this.onChanged,
+      this.recoveryScreen});
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -57,13 +61,22 @@ class _HomeScreenState extends State<HomeScreen> {
       if (user.can(PosPermission.manageUsers))
         PrinterSettingsScreen(
             store: settings, printer: printer, devices: deviceClient),
+      CashSessionScreen(
+          user: user, repository: CashSessionRepository(widget.pos.db)),
+      if (user.can(PosPermission.manageRecovery) &&
+          widget.recoveryScreen != null)
+        widget.recoveryScreen!,
     ];
     final labels = <String>[
       'Checkout',
       'Sales history',
       if (user.can(PosPermission.reports)) 'Reports',
       if (user.can(PosPermission.manageUsers)) 'Users',
-      if (user.can(PosPermission.manageUsers)) 'Printer'
+      if (user.can(PosPermission.manageUsers)) 'Printer',
+      'Cash session',
+      if (user.can(PosPermission.manageRecovery) &&
+          widget.recoveryScreen != null)
+        'Recovery',
     ];
     return Scaffold(
         appBar:
@@ -99,7 +112,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ? Icons.bar_chart
                                 : label == 'Printer'
                                     ? Icons.print
-                                    : Icons.people),
+                                    : label == 'Cash session'
+                                        ? Icons.payments
+                                        : label == 'Recovery'
+                                            ? Icons.health_and_safety
+                                            : Icons.people),
                     label: label)
             ]));
   }

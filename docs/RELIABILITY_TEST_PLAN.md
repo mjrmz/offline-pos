@@ -39,8 +39,8 @@ the device before each test. Never corrupt a production database.
 1. **Power interruption during sale.** Create a product with stock 10. Open a
    cash session. Repeatedly start checkout, then force-stop the test app or
    power off the disposable VM while the sale is being submitted. Restart and
-   inspect Sales, SaleItems, Payments, InventoryMovements, CashMovements, and
-   stock. Each attempt must leave either no sale-related writes or a complete
+   inspect Sales, SaleItems, Payments, Inventory, InventoryMovements, and
+   CashMovements. Each attempt must leave either no sale-related writes or a complete
    sale with one payment, all items and movements, and matching stock. Repeat
    before and after the confirmation appears.
 2. **Database corruption.** Make a valid manual backup. Exit the app fully.
@@ -52,17 +52,28 @@ the device before each test. Never corrupt a production database.
    the owner credentials from that backup, restore it, and verify sales and
    stock. Check that invalid backup files are marked invalid and cannot be
    restored.
-3. **Restore point.** Create manual backup A. Add a recognizable product and
-   complete a test sale. Restore A using the Owner recovery tab. Log in again.
-   The later product and sale must be absent; earlier data must match A. Check
-   that `.before-restore` preserves the previous live database for manual
-   rollback if needed.
-4. **Hardware disconnect.** Configure a supported printer, make a test sale,
+3. **Restore point.** Record state A: product list, sales count, inventory
+   quantities, active users, and open/closed cash-session state. Create manual
+   backup A. Add a recognizable product, complete a test sale, and change a
+   cash session to establish state B. Restore A using the Owner recovery tab
+   and log in again. Products, sales, stock, users, and cash-session state must
+   match A; B-only records must be absent. Check that `.before-restore`
+   preserves the previous live database for manual rollback if needed.
+4. **Failed restore.** Keep live state B. On the disposable installation,
+   copy a valid backup and its `.json` sidecar to `invalid.sqlite` and
+   `invalid.sqlite.json`. Change the sidecar's `file` value to
+   `invalid.sqlite`, then alter one byte in the copied SQLite header with a
+   hex editor without changing its length. Refresh recovery: this entry must
+   be marked invalid and have no Restore action. Restart and confirm B's
+   products, sales, inventory, users, and cash sessions remain unchanged;
+   no restore-success message may appear. Automated tests separately force
+   incompatible-schema and post-open restore failures and verify rollback.
+5. **Hardware disconnect — Pending physical hardware.** Configure a supported printer, make a test sale,
    and disconnect the printer just after checkout commits and before printing.
    The UI should warn about printing, while the sale, payment, and stock
    changes remain. Reconnect and reprint the stored receipt. Repeat with the
    cash drawer disconnected through the printer connection.
-5. **Backup write failure.** On a disposable Windows profile, remove write
+6. **Backup write failure.** On a disposable Windows profile, remove write
    access from that profile's app documents `backups` directory using file
    permissions. Try a manual backup. The UI should report failure and the live
    database should still accept a test sale. Restore the directory permission

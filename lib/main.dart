@@ -117,13 +117,18 @@ class _PosAppState extends State<PosApp> {
       String? recoveryPassword) async {
     if (restoring) throw StateError('Restore already in progress');
     final activeAuth = auth;
+    String? restoreActorId;
     if (activeAuth?.current != null) {
       final actor = activeAuth!.requireSession(PosPermission.manageRecovery);
       (await AuthRepository(database!).requireActive(actor.id))
           .require(PosPermission.manageRecovery);
-    } else if (!BackupService.ownerCredentialsMatch(
-        record.file, recoveryName ?? '', recoveryPassword ?? '')) {
-      throw StateError('Owner credentials from this backup are required');
+      restoreActorId = actor.id;
+    } else {
+      restoreActorId = BackupService.ownerIdForCredentials(
+          record.file, recoveryName ?? '', recoveryPassword ?? '');
+      if (restoreActorId == null) {
+        throw StateError('Owner credentials from this backup are required');
+      }
     }
     restoring = true;
     await backupTask;
@@ -136,8 +141,8 @@ class _PosAppState extends State<PosApp> {
           auth = null;
         },
         openDatabase: () async => AppDatabase(),
-        afterVerify: (opened) => AuthRepository(opened)
-            .audit(null, 'backup.restore', record.file.uri.pathSegments.last));
+        afterVerify: (opened) => AuthRepository(opened).audit(restoreActorId,
+            'backup.restore', record.file.uri.pathSegments.last));
     try {
       final opened = await restorer.restore(record);
       database = opened;

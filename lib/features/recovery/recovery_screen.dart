@@ -13,6 +13,7 @@ class RecoveryScreen extends StatefulWidget {
   final Future<void> Function()? onCreate;
   final Future<void> Function(File)? onDelete;
   final Future<void> Function()? onRecheck;
+  final List<FileSystemEntity> Function(Directory)? listBackupEntries;
   const RecoveryScreen(
       {super.key,
       required this.backupDirectory,
@@ -21,7 +22,8 @@ class RecoveryScreen extends StatefulWidget {
       this.auth,
       this.onRecheck,
       this.onCreate,
-      this.onDelete});
+      this.onDelete,
+      this.listBackupEntries});
   @override
   State<RecoveryScreen> createState() => _RecoveryScreenState();
 }
@@ -47,15 +49,27 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
 
   void refresh() {
     final rows = <(File, BackupRecord?, String?)>[];
-    if (widget.backupDirectory.existsSync()) {
-      for (final item in widget.backupDirectory.listSync()) {
-        if (item is! File || !item.path.endsWith('.sqlite')) continue;
-        try {
-          rows.add((item, BackupService.inspect(item), null));
-        } catch (e) {
-          rows.add((item, null, safeMessage(e)));
+    try {
+      if (widget.backupDirectory.existsSync()) {
+        for (final item
+            in widget.listBackupEntries?.call(widget.backupDirectory) ??
+                widget.backupDirectory.listSync()) {
+          if (item is! File || !item.path.endsWith('.sqlite')) continue;
+          try {
+            rows.add((item, BackupService.inspect(item), null));
+          } catch (e) {
+            rows.add((item, null, safeMessage(e)));
+          }
         }
       }
+    } on FileSystemException {
+      if (mounted) {
+        setState(() {
+          entries = [];
+          message = 'Backup directory cannot be read';
+        });
+      }
+      return;
     }
     rows.sort((a, b) => b.$1.path.compareTo(a.$1.path));
     if (mounted) setState(() => entries = rows);

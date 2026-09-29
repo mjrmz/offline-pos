@@ -24,4 +24,22 @@ void main() {
       directory.deleteSync(recursive: true);
     }
   });
+
+  testWidgets('unreadable backup directory shows an error without crashing',
+      (tester) async {
+    final directory = Directory.systemTemp.createTempSync('pos-recovery-ui-');
+    try {
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: RecoveryScreen(
+                  backupDirectory: directory,
+                  databaseStatus: 'healthy',
+                  onRestore: (_, __, ___) async {},
+                  listBackupEntries: (_) =>
+                      throw FileSystemException('denied')))));
+      expect(find.text('Backup directory cannot be read'), findsOneWidget);
+    } finally {
+      directory.deleteSync(recursive: true);
+    }
+  });
 }

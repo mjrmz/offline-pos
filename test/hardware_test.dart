@@ -7,6 +7,7 @@ import 'package:modern_offline_pos/core/services/sale_service.dart';
 import 'package:modern_offline_pos/core/services/sales_service.dart';
 import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
+import 'package:modern_offline_pos/data/daos/cash_session_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/daos/sales_repository.dart';
 import 'package:modern_offline_pos/hardware/cash_drawer/cash_drawer.dart';
@@ -50,6 +51,7 @@ void main() {
       final owner =
           await auth.bootstrap('Owner', 'ownerPassword123', 'Place?', 'Baguio');
       await auth.login(owner, 'ownerPassword123');
+      await CashSessionRepository(db).open(auth.current!, 1000);
       final pos = PosRepository(db);
       final productId = await pos.saveProduct(
           name: 'Original',
@@ -70,13 +72,18 @@ void main() {
       final hardware = ReceiptService(
           SalesService(SalesRepository(db), auth), settings, printer, drawer);
       final result = await SaleService(pos, auth).checkout(cart, 2000);
+      final cashBefore = (await db.select(db.cashMovements).get()).single;
+      expect(cashBefore.amountCents, 1250);
       final outcome = await hardware.afterCommittedCashSale(result.saleId);
       expect(outcome.printed, false);
       expect(outcome.drawerOpened, false);
       expect(drawer.attempts, 1);
       expect((await db.select(db.sales).get()).length, 1);
       expect((await db.select(db.payments).get()).length, 1);
+      expect((await db.select(db.saleItems).get()).length, 1);
       expect((await db.select(db.inventoryMovements).get()).length, 2);
+      expect(
+          (await db.select(db.cashMovements).get()).single.id, cashBefore.id);
       expect(await pos.stock(productId), 3);
       expect(printer.printed.single.lines.single.unitCents, 1250);
       await pos.saveProduct(
@@ -91,6 +98,10 @@ void main() {
       expect(printer.printed.last.lines.single.unitCents, 1250);
       expect((await db.select(db.sales).get()).length, 1);
       expect((await db.select(db.payments).get()).length, 1);
+      expect((await db.select(db.saleItems).get()).length, 1);
+      expect((await db.select(db.inventoryMovements).get()).length, 2);
+      expect(
+          (await db.select(db.cashMovements).get()).single.id, cashBefore.id);
       expect(await pos.stock(productId), 3);
       expect(drawer.attempts, 1);
       expect(EscPosEncoder().encode(printer.printed.last, 58),

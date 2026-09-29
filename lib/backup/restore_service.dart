@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import '../data/database.dart';
+import '../data/daos/database_health_repository.dart';
 import 'backup_service.dart';
 
 class RestoreService {
@@ -49,10 +50,7 @@ class RestoreService {
       await staged.rename(liveFile.path);
       replaced = true;
       reopened = await openDatabase();
-      final rows = await reopened.customSelect('PRAGMA quick_check(1)').get();
-      if (rows.single.read<String>('quick_check') != 'ok') {
-        throw StateError('Restored database failed verification');
-      }
+      await DatabaseHealthRepository(reopened).checkStartup();
       await afterVerify?.call(reopened);
       return reopened;
     } catch (error) {

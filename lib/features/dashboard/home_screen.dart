@@ -63,10 +63,15 @@ class _HomeScreenState extends State<HomeScreen> {
             store: settings, printer: printer, devices: deviceClient),
       CashSessionScreen(
           user: user, repository: CashSessionRepository(widget.pos.db)),
-      if (user.can(PosPermission.manageRecovery) &&
-          widget.recoveryScreen != null)
-        widget.recoveryScreen!,
     ];
+    final showRecovery =
+        user.can(PosPermission.manageRecovery) && widget.recoveryScreen != null;
+    if (showRecovery) {
+      final recoveryIndex = pages.length;
+      pages.add(page == recoveryIndex
+          ? widget.recoveryScreen!
+          : const SizedBox.shrink());
+    }
     final labels = <String>[
       'Checkout',
       'Sales history',
@@ -74,9 +79,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (user.can(PosPermission.manageUsers)) 'Users',
       if (user.can(PosPermission.manageUsers)) 'Printer',
       'Cash session',
-      if (user.can(PosPermission.manageRecovery) &&
-          widget.recoveryScreen != null)
-        'Recovery',
+      if (showRecovery) 'Recovery',
     ];
     return Scaffold(
         appBar:

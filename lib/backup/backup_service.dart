@@ -87,19 +87,126 @@ class BackupService {
       if (version < 1 || version > maxSchemaVersion) {
         throw StateError('Incompatible backup schema');
       }
-      for (final name in [
+      final requiredTables = <String>{
+        'products',
+        'inventory_movements',
         'sales',
         'sale_items',
         'payments',
-        'inventory',
         'users',
-        'audit_logs'
-      ]) {
+        'cash_sessions',
+        'audit_logs',
+        if (version >= 2) ...['categories', 'inventory'],
+        if (version >= 3) 'sale_reversals',
+        if (version >= 6) 'settings',
+        if (version >= 7) 'cash_movements',
+      };
+      for (final name in requiredTables) {
         final rows = connection.select(
             'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
             ['table', name]);
         if (rows.isEmpty) {
           throw StateError('Backup lacks required table: $name');
+        }
+      }
+      final columns = <String, List<String>>{
+        'products': [
+          'id',
+          'sku',
+          'barcode',
+          'name',
+          'price_cents',
+          'cost_cents',
+          'is_active',
+          'created_at',
+          if (version >= 2) 'category_id',
+          if (version >= 3) 'low_stock_threshold',
+        ],
+        'inventory_movements': [
+          'id',
+          'product_id',
+          'quantity_delta',
+          'reason',
+          'reference_id',
+          'created_at',
+        ],
+        'sales': ['id', 'cashier_id', 'total_cents', 'status', 'created_at'],
+        'sale_items': [
+          'id',
+          'sale_id',
+          'product_id',
+          'quantity',
+          'unit_price_cents',
+          if (version >= 2) 'line_total_cents',
+          if (version >= 5) 'product_name',
+        ],
+        'payments': ['id', 'sale_id', 'method', 'amount_cents'],
+        'users': [
+          'id',
+          'name',
+          'pin_hash',
+          'password_hash',
+          'role',
+          'is_active',
+          if (version >= 3) ...[
+            'failed_attempts',
+            'locked_until',
+            'recovery_question',
+            'recovery_answer_hash',
+          ],
+        ],
+        'cash_sessions': [
+          'id',
+          'opened_by_user_id',
+          'starting_cash_cents',
+          'expected_cash_cents',
+          'actual_cash_cents',
+          'opened_at',
+          'closed_at',
+        ],
+        'audit_logs': ['id', 'user_id', 'action', 'details', 'created_at'],
+        if (version >= 2) 'categories': ['id', 'name', 'parent_category_id'],
+        if (version >= 2) 'inventory': ['product_id', 'quantity'],
+        if (version >= 3)
+          'sale_reversals': [
+            'id',
+            'sale_id',
+            'actor_id',
+            'kind',
+            'amount_cents',
+            'created_at',
+            if (version >= 4) 'stock_restored',
+          ],
+        if (version >= 6)
+          'settings': [
+            'id',
+            'store_name',
+            'printer_enabled',
+            'printer_transport',
+            'printer_host',
+            'printer_port',
+            'printer_device_id',
+            'printer_device_name',
+            'printer_width_mm',
+            'drawer_enabled',
+          ],
+        if (version >= 7)
+          'cash_movements': [
+            'id',
+            'session_id',
+            'sale_id',
+            'amount_cents',
+            'kind',
+            'created_at',
+          ],
+      };
+      for (final entry in columns.entries) {
+        final actual = connection
+            .select('PRAGMA table_info(${entry.key})')
+            .map((row) => row['name'] as String)
+            .toSet();
+        if (!actual.containsAll(entry.value)) {
+          throw StateError('Backup has incompatible table: ${entry.key}');
         }
       }
       return version;
@@ -110,18 +217,22 @@ class BackupService {
     }
   }
 
-  static bool ownerCredentialsMatch(File file, String name, String password) {
+  static String? ownerIdForCredentials(
+      File file, String name, String password) {
     verify(file);
     final connection =
         sqlite.sqlite3.open(file.path, mode: sqlite.OpenMode.readOnly);
     try {
       final rows = connection.select(
-          'SELECT password_hash FROM users WHERE role = ? AND is_active = 1 AND name = ?',
+          'SELECT id, password_hash FROM users WHERE role = ? AND is_active = 1 AND name = ?',
           ['owner', name.trim()]);
-      return rows.any((row) {
+      for (final row in rows) {
         final hash = row['password_hash'];
-        return hash is String && BCrypt.checkpw(password, hash);
-      });
+        if (hash is String && BCrypt.checkpw(password, hash)) {
+          return row['id'] as String;
+        }
+      }
+      return null;
     } finally {
       connection.dispose();
     }

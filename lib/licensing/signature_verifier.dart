@@ -1,117 +1,103 @@
-// lib/licensing/signature_verifier.dart
-//
-// Verifies a signed license locally against the app's embedded public key.
-// The private key never ships with the app — see docs/LICENSING.md.
-// No network access required — this is what makes offline operation possible
-// after activation.
-
+// ignore_for_file: curly_braces_in_flow_control_structures
 import 'dart:convert';
 import 'package:cryptography/cryptography.dart';
 
-class LicensePayload {
-  final String licenseId;
-  final String customerId;
-  final String edition; // 'non_bir' | 'bir_ready'
-  final String deviceId;
-  final List<String> features;
-  final DateTime issuedAt;
-  final DateTime? expiresAt;
-
-  LicensePayload({
-    required this.licenseId,
-    required this.customerId,
-    required this.edition,
-    required this.deviceId,
-    required this.features,
-    required this.issuedAt,
-    this.expiresAt,
-  });
-
-  factory LicensePayload.fromJson(Map<String, dynamic> json) {
-    return LicensePayload(
-      licenseId: json['licenseId'] as String,
-      customerId: json['customerId'] as String,
-      edition: json['edition'] as String,
-      deviceId: json['deviceId'] as String,
-      features: List<String>.from(json['features'] as List),
-      issuedAt: DateTime.parse(json['issuedAt'] as String),
-      expiresAt: json['expiresAt'] != null
-          ? DateTime.parse(json['expiresAt'] as String)
-          : null,
-    );
-  }
-
-  bool get isBirReady => edition == 'bir_ready';
-
-  bool isExpired() =>
-      expiresAt != null && DateTime.now().isAfter(expiresAt!);
+enum LicenseStatus {
+  valid,
+  missing,
+  malformed,
+  invalidSignature,
+  deviceMismatch,
+  expired
 }
 
 class LicenseVerificationResult {
-  final bool isValid;
-  final LicensePayload? payload;
-  final String? error;
+  final LicenseStatus status;
+  final Map<String, dynamic>? payload;
+  const LicenseVerificationResult(this.status, [this.payload]);
+  bool get isValid => status == LicenseStatus.valid;
+}
 
-  LicenseVerificationResult.valid(this.payload)
-      : isValid = true,
-        error = null;
-
-  LicenseVerificationResult.invalid(this.error)
-      : isValid = false,
-        payload = null;
+/// UTF-8 JSON with these eight fields in this exact order and no whitespace.
+String canonicalLicensePayload(Map<String, dynamic> p) {
+  const keys = [
+    'licenseId',
+    'customerId',
+    'edition',
+    'deviceId',
+    'features',
+    'issuedAt',
+    'expiresAt',
+    'nonce'
+  ];
+  if (p.length != keys.length || !p.keys.toSet().containsAll(keys))
+    throw const FormatException('Unexpected license fields');
+  for (final key in [
+    'licenseId',
+    'customerId',
+    'edition',
+    'deviceId',
+    'issuedAt',
+    'nonce'
+  ]) {
+    if (p[key] is! String || (p[key] as String).isEmpty)
+      throw const FormatException('Invalid license field');
+  }
+  if (p['expiresAt'] != null && p['expiresAt'] is! String)
+    throw const FormatException('Invalid expiration');
+  if (p['features'] is! List ||
+      (p['features'] as List).any((e) => e is! String))
+    throw const FormatException('Invalid features');
+  return jsonEncode(<String, dynamic>{for (final key in keys) key: p[key]});
 }
 
 class SignatureVerifier {
-  // Embedded at build time — the app's public key, matching the private
-  // key held only by the License API server. Replace with the real key.
-  static const String _embeddedPublicKeyBase64 =
-      'REPLACE_WITH_REAL_ED25519_PUBLIC_KEY_BASE64';
+  static const embeddedPublicKeyBase64 =
+      String.fromEnvironment('LICENSE_PUBLIC_KEY_BASE64');
+  final List<int> publicKey;
+  SignatureVerifier({List<int>? publicKey})
+      : publicKey = publicKey ??
+            (embeddedPublicKeyBase64.isEmpty
+                ? const []
+                : base64Decode(embeddedPublicKeyBase64));
 
-  final Ed25519 _algorithm = Ed25519();
-
-  /// Verifies a stored license blob of the form:
-  /// { "payload": {...}, "signatureBase64": "..." }
-  /// against the embedded public key, and checks device binding + expiry.
-  Future<LicenseVerificationResult> verify(
-    String licenseJson,
-    String currentDeviceId,
-  ) async {
+  Future<LicenseVerificationResult> verify(String blob, String deviceId,
+      {DateTime? now}) async {
     try {
-      final decoded = jsonDecode(licenseJson) as Map<String, dynamic>;
-      final payloadJson = decoded['payload'] as Map<String, dynamic>;
-      final signatureBase64 = decoded['signatureBase64'] as String;
-
-      final payloadBytes = utf8.encode(jsonEncode(payloadJson));
-      final signatureBytes = base64Decode(signatureBase64);
-      final publicKeyBytes = base64Decode(_embeddedPublicKeyBase64);
-
-      final publicKey =
-          SimplePublicKey(publicKeyBytes, type: KeyPairType.ed25519);
-
-      final isSignatureValid = await _algorithm.verify(
-        payloadBytes,
-        signature: Signature(signatureBytes, publicKey: publicKey),
-      );
-
-      if (!isSignatureValid) {
-        return LicenseVerificationResult.invalid('Invalid signature');
+      final envelope = jsonDecode(blob);
+      if (envelope is! Map<String, dynamic> ||
+          envelope.length != 2 ||
+          envelope['payload'] is! Map<String, dynamic> ||
+          envelope['signatureBase64'] is! String) {
+        return const LicenseVerificationResult(LicenseStatus.malformed);
       }
-
-      final payload = LicensePayload.fromJson(payloadJson);
-
-      if (payload.deviceId != currentDeviceId) {
-        return LicenseVerificationResult.invalid(
-          'Device mismatch — this license is bound to a different device',
-        );
+      final payload = envelope['payload'] as Map<String, dynamic>;
+      final canonical = canonicalLicensePayload(payload);
+      final signature = base64Decode(envelope['signatureBase64'] as String);
+      if (signature.length != 64 || publicKey.length != 32)
+        return const LicenseVerificationResult(LicenseStatus.invalidSignature);
+      final valid = await Ed25519().verify(utf8.encode(canonical),
+          signature: Signature(signature,
+              publicKey:
+                  SimplePublicKey(publicKey, type: KeyPairType.ed25519)));
+      if (!valid)
+        return const LicenseVerificationResult(LicenseStatus.invalidSignature);
+      final issued = DateTime.parse(payload['issuedAt'] as String).toUtc();
+      final expiry = payload['expiresAt'] == null
+          ? null
+          : DateTime.parse(payload['expiresAt'] as String).toUtc();
+      final current = (now ?? DateTime.now()).toUtc();
+      if (issued.isAfter(current.add(const Duration(minutes: 5))) ||
+          (expiry != null && !expiry.isAfter(issued))) {
+        return const LicenseVerificationResult(LicenseStatus.malformed);
       }
-
-      if (payload.isExpired()) {
-        return LicenseVerificationResult.invalid('License expired');
-      }
-
-      return LicenseVerificationResult.valid(payload);
-    } catch (e) {
-      return LicenseVerificationResult.invalid('Malformed license: $e');
+      if (payload['deviceId'] != deviceId)
+        return const LicenseVerificationResult(LicenseStatus.deviceMismatch);
+      if (expiry != null && !current.isBefore(expiry))
+        return const LicenseVerificationResult(LicenseStatus.expired);
+      return LicenseVerificationResult(LicenseStatus.valid, payload);
+    } catch (_) {
+      return const LicenseVerificationResult(LicenseStatus.malformed);
     }
   }
 }

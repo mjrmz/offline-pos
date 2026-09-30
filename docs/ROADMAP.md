@@ -64,15 +64,16 @@ set. The next real step is Phase 1 — not further feature planning.
   repair/restore options
 - Audit logs — every login, void, refund, adjustment
 - Cash session open/close with expected-vs-actual variance
-- **Software status**: local SQLite snapshots, retention and verification,
-  guarded restore, recovery entry, cash sessions, and automated failure tests
-  are implemented for the current Windows/Android scope. Physical destructive
-  testing remains open; Phase 5 is not complete until the exit criterion passes.
+- **Status**: Complete following software verification and disposable-device
+  destructive reliability verification. Phase 4 peripheral testing remains
+  pending separately.
 - **Exit criteria**: deliberately kill power mid-sale, corrupt the DB,
   disconnect hardware — app recovers or fails gracefully every time.
   This phase gates everything after it — don't proceed until it's solid.
 
 ## Phase 6 — Licensing system
+- **Status**: implementation in progress; manual offline activation exit
+  criterion remains open.
 - License API (thin REST service) + PostgreSQL (Customers, Licenses,
   Devices, Activations, Revocations)
 - Ed25519 signed licenses, device ID binding, local signature verification

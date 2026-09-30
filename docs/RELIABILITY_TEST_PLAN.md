@@ -24,7 +24,7 @@ also remains pending.
   provide credentials found in the selected backup when the database cannot
   open. A successful restore logs out the prior session.
 - Known-corrupt databases route to recovery and cannot be used for checkout.
-  Recovery reports backup integrity and the honest pre-license state. SQLite
+  Recovery reports backup integrity and the local Phase 6 license state. SQLite
   repair is not offered; restore from a verified backup is the recovery path.
 - Expected cash is starting cash plus persisted `cash_sale` movements for the
   session. Variance is actual minus expected. Refund reversals currently have

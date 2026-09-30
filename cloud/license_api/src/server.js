@@ -1,45 +1,37 @@
-// cloud/license_api/src/server.js
-//
-// Stateless entrypoint — safe to run behind a load balancer with multiple
-// instances. All state lives in PostgreSQL. See docs/SCALE_ARCHITECTURE.md.
-
 import express from 'express';
 import helmet from 'helmet';
 import pg from 'pg';
-import dotenv from 'dotenv';
+import 'dotenv/config';
 import { activationRouter } from './routes/activation.js';
+import { adminRouter } from './routes/admin.js';
+import { signingKeyFromEnvironment } from './services/licenseSigningService.js';
 
-dotenv.config();
+export function createApp(pool) {
+  const app = express();
+  app.disable('x-powered-by');
+  app.use(helmet());
+  app.use((req,res,next) => {
+    if (req.headers.origin && req.headers.origin === process.env.ADMIN_ORIGIN) {
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+      res.setHeader('Access-Control-Allow-Credentials','true');
+      res.setHeader('Access-Control-Allow-Headers','Content-Type');
+      res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');
+      res.setHeader('Vary','Origin');
+    }
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+  app.use(express.json({limit:'16kb'}));
+  app.get('/healthz', (_req,res) => res.json({status:'ok'}));
+  app.use(activationRouter(pool));
+  app.use(adminRouter(pool));
+  app.use((_err,_req,res,_next) => res.status(500).json({error:'Internal server error'}));
+  return app;
+}
 
-const { Pool } = pg;
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  // Reasonable defaults for a low-traffic-per-request, high-concurrency
-  // service. Tune based on observed load once you have real traffic.
-  max: Number(process.env.DB_POOL_MAX ?? 20),
-  idleTimeoutMillis: 30000,
-});
-
-const app = express();
-app.use(helmet());
-app.use(express.json({ limit: '16kb' })); // activation payloads are tiny
-
-app.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
-
-app.use(activationRouter(pool));
-
-app.use((err, _req, res, _next) => {
-  console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal server error' });
-});
-
-const port = process.env.PORT ?? 3000;
-app.listen(port, () => {
-  console.log(`License API listening on port ${port}`);
-});
-
-process.on('SIGTERM', async () => {
-  await pool.end();
-  process.exit(0);
-});
+if (process.argv[1]?.endsWith('server.js')) {
+  signingKeyFromEnvironment();
+  const pool = new pg.Pool({connectionString:process.env.DATABASE_URL,max:Number(process.env.DB_POOL_MAX ?? 20)});
+  const server = createApp(pool).listen(Number(process.env.PORT ?? 3000), () => console.log('License API ready'));
+  process.on('SIGTERM', async () => { server.close(); await pool.end(); });
+}

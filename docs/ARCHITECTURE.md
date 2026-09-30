@@ -85,6 +85,10 @@ app never needs to know which platform it's running on.
 
 See `docs/LICENSING.md` for full detail. Summary:
 
+The Phase 6 licensed client targets Windows and Android. The signed-license
+file is outside local SQLite and its backups. Database health takes priority
+over activation during startup. Valid local verification makes no HTTP call.
+
 1. App generates a device ID on first launch.
 2. Customer enters an activation key (issued after purchase).
 3. App sends device ID + activation key to the License API over HTTPS.

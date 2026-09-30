@@ -34,6 +34,13 @@ migrate_working_dir/
 /build/
 /linux/flutter/ephemeral/
 /android/.kotlin/
+**/.env
+**/.env.*.local
+**/node_modules/
+**/dist/
+**/*private*.key
+**/*secret*.key
+/cloud/license_api/license-public.key
 
 # Symbolication related
 app.*.symbols

@@ -68,6 +68,10 @@ masd_pos/
 
 ## Placement rules
 
+Phase 6 adds `lib/licensing/license_store.dart`, `lib/features/activation/`,
+PostgreSQL migrations and admin routes under `cloud/license_api/`, and a
+separate React/Vite deployable under `cloud/admin_dashboard/`.
+
 | If the code... | It goes in... |
 |---|---|
 | Computes a sale total, deducts stock, validates a license signature | `core/services/` |

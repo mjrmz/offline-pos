@@ -18,6 +18,11 @@ import 'features/dashboard/home_screen.dart';
 import 'features/recovery/recovery_screen.dart';
 import 'backup/backup_service.dart';
 import 'backup/restore_service.dart';
+import 'licensing/activation_client.dart';
+import 'licensing/device_id.dart';
+import 'licensing/license_store.dart';
+import 'licensing/signature_verifier.dart';
+import 'features/activation/activation_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -39,6 +44,10 @@ class _PosAppState extends State<PosApp> {
   Timer? backupTimer;
   Future<void> backupTask = Future.value();
   bool restoring = false;
+  LicenseVerificationResult? licenseResult;
+  String? deviceId;
+  String? licensingError;
+  static const licenseApiUrl = String.fromEnvironment('LICENSE_API_URL');
   @override
   void initState() {
     super.initState();
@@ -56,6 +65,7 @@ class _PosAppState extends State<PosApp> {
       opening = null;
       auth = AuthService(AuthRepository(opened));
       health = const StartupHealth.ready();
+      await checkLicense();
       unawaited(runAutomaticBackup());
       backupTimer = Timer.periodic(
           const Duration(hours: 1), (_) => unawaited(runAutomaticBackup()));
@@ -65,8 +75,23 @@ class _PosAppState extends State<PosApp> {
       await database?.close();
       database = null;
       auth = null;
+      await checkLicense();
     }
     if (mounted) setState(() {});
+  }
+
+  Future<void> checkLicense() async {
+    try {
+      deviceId = await DeviceId.current();
+      final blob = await const LicenseStore().load();
+      licenseResult = blob == null
+          ? const LicenseVerificationResult(LicenseStatus.missing)
+          : await SignatureVerifier().verify(blob, deviceId!);
+      licensingError = null;
+    } catch (_) {
+      licenseResult = const LicenseVerificationResult(LicenseStatus.malformed);
+      licensingError = 'Local license or device identity cannot be read.';
+    }
   }
 
   Future<void> runAutomaticBackup() async {
@@ -148,6 +173,7 @@ class _PosAppState extends State<PosApp> {
       database = opened;
       auth = AuthService(AuthRepository(opened));
       health = const StartupHealth.ready();
+      await checkLicense();
     } catch (error) {
       // A failed replacement is rolled back on disk. Reopen the preserved DB if possible.
       if (database == null) {
@@ -157,6 +183,7 @@ class _PosAppState extends State<PosApp> {
           database = opened;
           auth = AuthService(AuthRepository(opened));
           health = const StartupHealth.ready();
+          await checkLicense();
         } catch (_) {
           health = StartupHealth.unavailable('unavailable: $error');
         }
@@ -206,27 +233,49 @@ class _PosAppState extends State<PosApp> {
                       databaseFile?.parent.path ?? Directory.systemTemp.path,
                       'backups')),
                   databaseStatus: health!.databaseStatus,
+                  licenseStatus: licenseResult?.status.name ?? 'unavailable',
                   onRestore: restoreBackup,
                   onRecheck: () async {
                     await initialize();
                   })
-              : currentAuth.current == null
-                  ? AuthScreen(
-                      auth: currentAuth, onChanged: () => setState(() {}))
-                  : HomeScreen(
-                      auth: currentAuth,
-                      pos: PosRepository(db),
-                      salesRepository: SalesRepository(db),
-                      recoveryScreen: RecoveryScreen(
-                          backupDirectory: Directory(
-                              p.join(databaseFile!.parent.path, 'backups')),
-                          databaseStatus: health!.databaseStatus,
+              : licenseResult?.isValid != true
+                  ? deviceId == null ||
+                          licenseApiUrl.isEmpty ||
+                          SignatureVerifier.embeddedPublicKeyBase64.isEmpty
+                      ? Scaffold(
+                          body: Center(
+                              child: Text(licensingError ??
+                                  'License configuration or device ID is unavailable. Contact support.')))
+                      : ActivationScreen(
+                          deviceId: deviceId!,
+                          client: ActivationClient(Uri.parse(licenseApiUrl),
+                              SignatureVerifier(), const LicenseStore()),
+                          reason: licenseResult?.status == LicenseStatus.missing
+                              ? null
+                              : 'License: ${licenseResult?.status.name}',
+                          onActivated: () async {
+                            await checkLicense();
+                            if (mounted) setState(() {});
+                          })
+                  : currentAuth.current == null
+                      ? AuthScreen(
+                          auth: currentAuth, onChanged: () => setState(() {}))
+                      : HomeScreen(
                           auth: currentAuth,
-                          onRestore: restoreBackup,
-                          onCreate: createManualBackup,
-                          onDelete: deleteBackup),
-                      onChanged: () => setState(() {}),
-                    ),
+                          pos: PosRepository(db),
+                          salesRepository: SalesRepository(db),
+                          recoveryScreen: RecoveryScreen(
+                              backupDirectory: Directory(
+                                  p.join(databaseFile!.parent.path, 'backups')),
+                              databaseStatus: health!.databaseStatus,
+                              licenseStatus:
+                                  licenseResult?.status.name ?? 'unavailable',
+                              auth: currentAuth,
+                              onRestore: restoreBackup,
+                              onCreate: createManualBackup,
+                              onDelete: deleteBackup),
+                          onChanged: () => setState(() {}),
+                        ),
     );
   }
 }

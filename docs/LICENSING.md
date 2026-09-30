@@ -83,3 +83,64 @@ default.
 - Rate-limit the activation endpoint.
 - Log every activation, deactivation, and revocation to Audit Logs.
 - Serve the License API over HTTPS only.
+
+## Phase 6 implementation
+
+Windows binds to the OS MachineGuid; Android binds to ANDROID_ID. The client
+hashes the platform and identifier with SHA-256 before sending a fingerprint.
+OS reinstall, factory reset, or hardware replacement can change it. Binding
+is practical, not spoof-proof. Admin release supports legitimate replacement.
+
+The signed license is `signed-license.json` in app support storage, separate
+from SQLite and its backups. A same-device database restore leaves licensing
+intact. Copying a backup and license to another device fails binding.
+
+The signed bytes are UTF-8 compact JSON with exactly these fields in order:
+`licenseId,customerId,edition,deviceId,features,issuedAt,expiresAt,nonce`.
+The server-only private Ed25519 key signs them; Flutter embeds the matching
+public key through `LICENSE_PUBLIC_KEY_BASE64` at build time.
+
+Startup checks database health first. Unsafe databases open recovery. Healthy
+ones verify the local license without HTTP. Missing, malformed, invalid,
+mismatched, or expired licenses show activation before Owner setup/login.
+Null `expiresAt` means perpetual. Otherwise local time enforces expiration.
+No commercial grace-period length has been decided, and none is silently
+applied. There is no recurring phone-home call.
+
+Admin deactivation releases a device slot; an already-issued offline license
+still works until expiry. Cloud revocation prevents new activation but cannot
+disable a permanently offline device. Same-device active retries consume no
+additional slot; reactivation allowance is configurable per license.
+
+## Local setup and manual verification
+
+1. Create a disposable PostgreSQL database. In `cloud/license_api`, run
+   `npm install`, set `DATABASE_URL` in an untracked `.env` based on
+   `.env.example`, then run `npm run migrate`.
+2. Run `npm run setup:keys` and keep the generated private key server-side.
+   Set `LICENSE_SIGNING_PRIVATE_KEY` from that file, `ADMIN_USERNAME`, a
+   scrypt `ADMIN_PASSWORD_HASH` from `npm run setup:admin`, a random
+   `ADMIN_AUTH_SECRET` of at least 32 characters, and
+   `ADMIN_ORIGIN=http://localhost:5173`. Start with `npm start`.
+3. In `cloud/admin_dashboard`, run `npm install`, set
+   `VITE_LICENSE_API_URL=http://localhost:3000`, then run `npm run dev`.
+   Deploy both over HTTPS. Build/run Flutter with
+   `--dart-define=LICENSE_PUBLIC_KEY_BASE64=<generated public key>` and
+   `--dart-define=LICENSE_API_URL=<API origin>`.
+4. In the dashboard, create a customer and issue a one-device Non-BIR
+   license. Copy the activation key shown once. On a fresh Windows test
+   install, activate, then complete Owner setup/login.
+5. Close POS, stop API and dashboard, disconnect internet, and restart POS.
+   Log in, sell an item, open inventory, history, reports, cash sessions,
+   and create a local backup. Every action must work offline.
+6. Restore API; try the key on device B (rejected), deactivate device A in
+   dashboard, then retry B (accepted). A's issued local license continues
+   offline under the documented revocation tradeoff.
+7. On a disposable install, copy and edit one byte of the local signed
+   payload; restart and confirm rejection. Restore the original file. Try
+   initial activation while API is stopped: show an unavailable message,
+   stay unactivated, and preserve SQLite business data.
+
+Existing development databases without a license retain their data and
+enter activation before local login. No production bypass or universal key
+is present; tests inject only test keypairs and verifiers.

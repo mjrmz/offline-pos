@@ -14,7 +14,7 @@ reactivate (e.g. after being deactivated for a transfer).
 **Request**
 ```json
 {
-  "activationKey": "AAAA-BBBB-CCCC-DDDD",
+  "activationKey": "AAAAA-BBBBB-CCCCC-DDDDD",
   "deviceFingerprint": "8A92F72C91XX..."
 }
 ```
@@ -52,6 +52,17 @@ Rate limited at 20 requests / 15 minutes per IP by default — see
 Load balancer / uptime monitoring only. Returns `{ "status": "ok" }`.
 
 ## Admin-only (not called by the client app)
+
+Phase 6 implements these with an HttpOnly signed admin cookie. Mutating
+requests also require the configured dashboard Origin. The key is generated
+with 80 random bits, shown once on issue, and stored server-side as SHA-256.
+The `403` activation response includes `code` values `revoked`, `expired`,
+`device_limit`, or `reactivation_limit`; 400, 404, 429, and 500 retain the
+documented meanings. Activation uses a PostgreSQL row lock on the license.
+
+Admin routes also include `POST /admin/login`, `POST /admin/logout`,
+`GET /admin/me`, `POST /admin/customers`, `GET /admin/plans`,
+`GET /admin/licenses`, and `GET /admin/licenses/:id/devices`.
 
 These live behind authenticated admin dashboard routes — deliberately not
 detailed here since they require an auth/session layer not yet built. At

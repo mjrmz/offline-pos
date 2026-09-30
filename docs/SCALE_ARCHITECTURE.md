@@ -77,6 +77,11 @@ reactivation, and (optionally) periodic license refresh hits it.
 
 ## 3. Update strategy at volume
 
+Phase 6 admin sessions use signed cookies, not process memory. Activation
+device limits use PostgreSQL row locks. The current 20-per-15-minute IP rate
+limiter is process-local; a multi-instance deployment needs a shared store
+before that limit is globally enforced.
+
 - Staged rollout: new version flagged as available to a percentage of
   devices first (via a simple version-check response from a lightweight
   endpoint), full rollout only after a soak period

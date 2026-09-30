@@ -1,166 +1,68 @@
-// cloud/license_api/src/routes/activation.js
-//
-// The only endpoints a customer's device ever calls. Everything else
-// (customer/license management) lives behind the admin dashboard's
-// authenticated routes, not here.
-
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { signLicense } from '../services/licenseSigningService.js';
 
+const requestSchema = z.object({
+  activationKey: z.string().regex(/^[A-F0-9]{5}(?:-[A-F0-9]{5}){3}$/),
+  deviceFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
 export function activationRouter(pool) {
   const router = express.Router();
-
-  // Generous enough for legitimate retries, tight enough to blunt abuse.
-  // Keyed by IP; consider also keying by activationKey for stricter control.
-  const activationLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 20,
-    standardHeaders: true,
-    legacyHeaders: false,
-  });
-
-  const activateSchema = z.object({
-    activationKey: z.string().min(10),
-    deviceFingerprint: z.string().min(8),
-  });
-
-  // POST /v1/activate
-  // Body: { activationKey, deviceFingerprint }
-  // Returns: { payload, signatureBase64 } — the signed license the client
-  // stores locally and verifies offline from then on.
-  router.post('/v1/activate', activationLimiter, async (req, res) => {
-    const parseResult = activateSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({ error: 'Invalid request body' });
-    }
-    const { activationKey, deviceFingerprint } = parseResult.data;
-
-    const client = await pool.connect();
+  router.post('/v1/activate', rateLimit({ windowMs: 15 * 60 * 1000, limit: 20,
+    standardHeaders: 'draft-7', legacyHeaders: false }), async (req, res) => {
+    const parsed = requestSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid request', code: 'malformed' });
+    const keyHash = (await import('node:crypto')).createHash('sha256').update(parsed.data.activationKey).digest('hex');
+    let client;
     try {
+      client = await pool.connect();
       await client.query('BEGIN');
-
-      const licenseResult = await client.query(
-        `SELECT l.id, l.customer_id, l.plan_id, l.status, l.max_devices,
-                l.expires_at, p.id AS edition
-         FROM licenses l
-         JOIN plans p ON p.id = l.plan_id
-         WHERE l.activation_key = $1
-         FOR UPDATE`,
-        [activationKey]
-      );
-
-      if (licenseResult.rowCount === 0) {
-        await logEvent(client, {
-          eventType: 'reject',
-          reason: 'unknown_activation_key',
-          ip: req.ip,
-        });
+      const result = await client.query(`SELECT l.*, p.edition FROM licenses l JOIN plans p ON p.id=l.plan_id
+        WHERE l.activation_key_hash=$1 FOR UPDATE OF l`, [keyHash]);
+      if (!result.rowCount) {
+        await client.query(`INSERT INTO activation_events(event_type,reason) VALUES('reject','unknown_key')`);
         await client.query('COMMIT');
-        return res.status(404).json({ error: 'Invalid activation key' });
+        return res.status(404).json({ error: 'Activation key not found', code: 'not_found' });
       }
-
-      const license = licenseResult.rows[0];
-
-      if (license.status === 'revoked') {
-        await logEvent(client, {
-          licenseId: license.id,
-          eventType: 'reject',
-          reason: 'license_revoked',
-          ip: req.ip,
-        });
+      const license = result.rows[0];
+      let rejection;
+      if (license.status === 'revoked') rejection = ['revoked', 'License revoked'];
+      else if (license.expires_at && new Date(license.expires_at) <= new Date()) rejection = ['expired', 'License expired'];
+      const fingerprint = parsed.data.deviceFingerprint;
+      const existing = await client.query('SELECT * FROM devices WHERE license_id=$1 AND device_fingerprint=$2', [license.id, fingerprint]);
+      const activeCount = await client.query(`SELECT count(*)::int AS count FROM devices WHERE license_id=$1 AND status='active'`, [license.id]);
+      const alreadyActive = existing.rowCount && existing.rows[0].status === 'active';
+      if (!rejection && !alreadyActive && activeCount.rows[0].count >= license.max_devices) rejection = ['device_limit', 'Device limit reached'];
+      if (!rejection && existing.rowCount && !alreadyActive && license.reactivations_used >= license.max_reactivations) rejection = ['reactivation_limit', 'Reactivation allowance reached'];
+      if (rejection) {
+        await client.query(`INSERT INTO activation_events(license_id,device_id,event_type,reason)
+          VALUES($1,$2,'reject',$3)`, [license.id, existing.rows[0]?.id ?? null, rejection[0]]);
         await client.query('COMMIT');
-        return res.status(403).json({ error: 'License has been revoked' });
+        return res.status(403).json({ error: rejection[1], code: rejection[0] });
       }
-
-      // Is this device already bound to this license? (idempotent re-activation)
-      const existingDevice = await client.query(
-        `SELECT id, status FROM devices
-         WHERE license_id = $1 AND device_fingerprint = $2`,
-        [license.id, deviceFingerprint]
-      );
-
       let deviceId;
-
-      if (existingDevice.rowCount > 0) {
-        deviceId = existingDevice.rows[0].id;
-        if (existingDevice.rows[0].status === 'deactivated') {
-          await client.query(
-            `UPDATE devices SET status = 'active', deactivated_at = NULL
-             WHERE id = $1`,
-            [deviceId]
-          );
-        }
+      let eventType;
+      if (alreadyActive) { deviceId = existing.rows[0].id; eventType = 'retry'; }
+      else if (existing.rowCount) {
+        deviceId = existing.rows[0].id; eventType = 'reactivate';
+        await client.query(`UPDATE devices SET status='active', activated_at=now(), deactivated_at=NULL WHERE id=$1`, [deviceId]);
+        await client.query(`UPDATE licenses SET reactivations_used=reactivations_used+1 WHERE id=$1`, [license.id]);
       } else {
-        // Enforce device allowance for this license's plan.
-        const activeDeviceCount = await client.query(
-          `SELECT COUNT(*) FROM devices
-           WHERE license_id = $1 AND status = 'active'`,
-          [license.id]
-        );
-
-        if (Number(activeDeviceCount.rows[0].count) >= license.max_devices) {
-          await logEvent(client, {
-            licenseId: license.id,
-            eventType: 'reject',
-            reason: 'device_limit_reached',
-            ip: req.ip,
-          });
-          await client.query('COMMIT');
-          return res.status(403).json({
-            error:
-              'Device limit reached for this license. Deactivate another device first.',
-          });
-        }
-
-        const insertDevice = await client.query(
-          `INSERT INTO devices (license_id, device_fingerprint)
-           VALUES ($1, $2) RETURNING id`,
-          [license.id, deviceFingerprint]
-        );
-        deviceId = insertDevice.rows[0].id;
+        const inserted = await client.query('INSERT INTO devices(license_id,device_fingerprint) VALUES($1,$2) RETURNING id', [license.id, fingerprint]);
+        deviceId = inserted.rows[0].id; eventType = 'activate';
       }
-
-      await client.query(
-        `UPDATE licenses SET status = 'active' WHERE id = $1`,
-        [license.id]
-      );
-
-      const { payload, signatureBase64 } = signLicense({
-        licenseId: license.id,
-        customerId: license.customer_id,
-        edition: license.edition,
-        deviceId: deviceFingerprint,
-        features: license.edition === 'bir_ready' ? ['bir_compliance'] : [],
-        expiresAt: license.expires_at,
-      });
-
-      await logEvent(client, {
-        licenseId: license.id,
-        deviceId,
-        eventType: 'activate',
-        ip: req.ip,
-      });
-
+      const signed = signLicense({ licenseId: license.id, customerId: license.customer_id,
+        edition: license.edition, deviceId: fingerprint, expiresAt: license.expires_at });
+      await client.query(`UPDATE licenses SET status='active' WHERE id=$1`, [license.id]);
+      await client.query(`INSERT INTO activation_events(license_id,device_id,event_type) VALUES($1,$2,$3)`, [license.id, deviceId, eventType]);
       await client.query('COMMIT');
-      return res.json({ payload, signatureBase64 });
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('Activation error:', err);
-      return res.status(500).json({ error: 'Internal server error' });
-    } finally {
-      client.release();
-    }
+      return res.json(signed);
+    } catch (_) {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      return res.status(500).json({ error: 'Activation service unavailable', code: 'server_error' });
+    } finally { client?.release(); }
   });
-
   return router;
-}
-
-async function logEvent(client, { licenseId, deviceId, eventType, reason, ip }) {
-  await client.query(
-    `INSERT INTO activation_events (license_id, device_id, event_type, reason, ip_address)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [licenseId ?? null, deviceId ?? null, eventType, reason ?? null, ip ?? null]
-  );
 }

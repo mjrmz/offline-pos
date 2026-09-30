@@ -8,6 +8,7 @@ import '../../shared/utils/safe_message.dart';
 class RecoveryScreen extends StatefulWidget {
   final Directory backupDirectory;
   final String databaseStatus;
+  final String licenseStatus;
   final AuthService? auth;
   final Future<void> Function(BackupRecord, String?, String?) onRestore;
   final Future<void> Function()? onCreate;
@@ -18,6 +19,7 @@ class RecoveryScreen extends StatefulWidget {
       {super.key,
       required this.backupDirectory,
       required this.databaseStatus,
+      this.licenseStatus = 'unavailable',
       required this.onRestore,
       this.auth,
       this.onRecheck,
@@ -143,8 +145,7 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
       ListView(padding: const EdgeInsets.all(16), children: [
         const Text('Recovery and health', style: TextStyle(fontSize: 22)),
         Text('Database: ${widget.databaseStatus}'),
-        const Text(
-            'License: pre-license local build; activation is not configured'),
+        Text('License: ${widget.licenseStatus}'),
         Text(
             'Backups: ${entries.where((e) => e.$2 != null).length} valid, ${entries.where((e) => e.$2 == null).length} invalid'),
         if (message != null) Text(message!),

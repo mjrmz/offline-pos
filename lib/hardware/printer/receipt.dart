@@ -9,6 +9,7 @@ class ReceiptDocument {
   final int totalCents;
   final String paymentMethod;
   final int appliedCents;
+  final int? birInvoiceNumber;
 
   const ReceiptDocument(
       this.reference,
@@ -18,7 +19,8 @@ class ReceiptDocument {
       this.lines,
       this.totalCents,
       this.paymentMethod,
-      this.appliedCents);
+      this.appliedCents,
+      [this.birInvoiceNumber]);
 
   factory ReceiptDocument.fromDetail(SaleDetail detail, String storeName) =>
       ReceiptDocument(
@@ -34,6 +36,7 @@ class ReceiptDocument {
         detail.summary.sale.totalCents,
         detail.summary.paymentMethod,
         detail.paymentAmountCents,
+        detail.summary.sale.birInvoiceNumber,
       );
 }
 
@@ -68,6 +71,9 @@ class EscPosEncoder {
 
     line(receipt.storeName.isEmpty ? 'MASD POS' : receipt.storeName);
     line('Sale: ${receipt.reference}');
+    if (receipt.birInvoiceNumber != null) {
+      line('BIR invoice: ${receipt.birInvoiceNumber}');
+    }
     line('Date: ${receipt.timestamp.toLocal()}');
     line('Cashier: ${receipt.cashier}');
     line('-' * columns);

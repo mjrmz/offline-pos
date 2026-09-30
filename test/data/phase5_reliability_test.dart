@@ -129,7 +129,7 @@ void main() {
     final auditsBefore = await db.select(db.auditLogs).get();
     final service = BackupService(db, directory);
     final record = await service.create(BackupKind.manual);
-    expect(record.schemaVersion, 7);
+    expect(record.schemaVersion, 8);
     expect(record.integrity, 'ok');
     expect(record.bytes, greaterThan(0));
     expect(record.appVersion, '0.1.0');
@@ -271,7 +271,7 @@ void main() {
     final incompatible = File('${backup.file.parent.path}/future.sqlite');
     await backup.file.copy(incompatible.path);
     final future = sqlite.sqlite3.open(incompatible.path);
-    future.execute('PRAGMA user_version = 8');
+    future.execute('PRAGMA user_version = 9');
     future.dispose();
     final futureRecord = BackupRecord(incompatible, BackupKind.manual,
         DateTime.now(), 8, '0.1.0', await incompatible.length(), 'ok');

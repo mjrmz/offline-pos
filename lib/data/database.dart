@@ -68,6 +68,7 @@ class Sales extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get cashierId => text().references(Users, #id)();
   IntColumn get totalCents => integer()();
+  IntColumn get birInvoiceNumber => integer().nullable().unique()();
   TextColumn get status => text().withDefault(
       const Constant('completed'))(); // completed | voided | refunded
   DateTimeColumn get createdAt =>
@@ -186,6 +187,35 @@ class Settings extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class BirComplianceState extends Table {
+  IntColumn get id => integer()();
+  DateTimeColumn get activatedAt => dateTime()();
+  IntColumn get highestInvoiceNumber =>
+      integer().withDefault(const Constant(0))();
+  IntColumn get grandTotalCents => integer().withDefault(const Constant(0))();
+  IntColumn get highestZNumber => integer().withDefault(const Constant(0))();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class ZReadings extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  IntColumn get number => integer().unique()();
+  TextColumn get cashSessionId => text().unique()();
+  DateTimeColumn get generatedAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  TextColumn get generatedByUserId => text()();
+  IntColumn get beginningInvoiceNumber => integer().nullable()();
+  IntColumn get endingInvoiceNumber => integer().nullable()();
+  IntColumn get periodSalesCents => integer()();
+  IntColumn get reversalCents => integer()();
+  IntColumn get grandTotalCents => integer()();
+  IntColumn get expectedCashCents => integer()();
+  IntColumn get actualCashCents => integer()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
@@ -204,6 +234,8 @@ class Settings extends Table {
   CashMovements,
   AuditLogs,
   Settings,
+  BirComplianceState,
+  ZReadings,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
@@ -215,7 +247,7 @@ class AppDatabase extends _$AppDatabase {
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -223,6 +255,7 @@ class AppDatabase extends _$AppDatabase {
           await m.createAll();
           await customStatement('CREATE UNIQUE INDEX cash_sessions_one_open '
               'ON cash_sessions ((1)) WHERE closed_at IS NULL');
+          await _createBirGuards(this);
         },
         onUpgrade: (m, from, to) async {
           if (from < 2) {
@@ -268,6 +301,33 @@ class AppDatabase extends _$AppDatabase {
                   'ON cash_sessions ((1)) WHERE closed_at IS NULL');
             }
           }
+          if (from < 8) {
+            // SQLite cannot add a UNIQUE column with ALTER TABLE.
+            final oldTables = (await customSelect(
+                        "SELECT name FROM sqlite_master WHERE type='table'")
+                    .get())
+                .map((row) => row.read<String>('name'))
+                .toSet();
+            if (oldTables.contains('sales')) {
+              final saleColumns =
+                  await customSelect('PRAGMA table_info(sales)').get();
+              if (!saleColumns.any(
+                  (row) => row.read<String>('name') == 'bir_invoice_number')) {
+                await customStatement(
+                    'ALTER TABLE sales ADD COLUMN bir_invoice_number INTEGER');
+              }
+              await customStatement(
+                  'CREATE UNIQUE INDEX IF NOT EXISTS sales_bir_invoice_number_unique '
+                  'ON sales (bir_invoice_number) WHERE bir_invoice_number IS NOT NULL');
+            }
+            if (!oldTables.contains('bir_compliance_state')) {
+              await m.createTable(birComplianceState);
+            }
+            if (!oldTables.contains('z_readings')) {
+              await m.createTable(zReadings);
+            }
+            if (oldTables.contains('sales')) await _createBirGuards(this);
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -286,4 +346,28 @@ LazyDatabase _openConnection() {
 
 String _uuid() {
   return const Uuid().v4();
+}
+
+Future<void> _createBirGuards(AppDatabase db) async {
+  await db.customStatement('CREATE TRIGGER IF NOT EXISTS bir_state_no_decrease '
+      'BEFORE UPDATE ON bir_compliance_state WHEN '
+      'NEW.highest_invoice_number < OLD.highest_invoice_number OR '
+      'NEW.grand_total_cents < OLD.grand_total_cents OR '
+      'NEW.highest_z_number < OLD.highest_z_number '
+      "BEGIN SELECT RAISE(ABORT, 'BIR state cannot decrease'); END");
+  await db.customStatement('CREATE TRIGGER IF NOT EXISTS bir_state_no_delete '
+      'BEFORE DELETE ON bir_compliance_state '
+      "BEGIN SELECT RAISE(ABORT, 'BIR state cannot be deleted'); END");
+  await db.customStatement('CREATE TRIGGER IF NOT EXISTS z_readings_no_update '
+      'BEFORE UPDATE ON z_readings '
+      "BEGIN SELECT RAISE(ABORT, 'Z-reading cannot be changed'); END");
+  await db.customStatement('CREATE TRIGGER IF NOT EXISTS z_readings_no_delete '
+      'BEFORE DELETE ON z_readings '
+      "BEGIN SELECT RAISE(ABORT, 'Z-reading cannot be deleted'); END");
+  await db.customStatement(
+      'CREATE TRIGGER IF NOT EXISTS bir_sale_invoice_no_change '
+      'BEFORE UPDATE OF bir_invoice_number ON sales '
+      'WHEN OLD.bir_invoice_number IS NOT NULL AND '
+      'NEW.bir_invoice_number IS NOT OLD.bir_invoice_number '
+      "BEGIN SELECT RAISE(ABORT, 'BIR invoice cannot be changed'); END");
 }

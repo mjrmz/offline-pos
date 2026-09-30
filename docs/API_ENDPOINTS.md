@@ -82,3 +82,10 @@ minimum, expect:
   to keep functioning — the whole point of local signature verification
   is that the client never needs to ask the server "am I still licensed?"
   after activation.
+# Phase 7 admin edition change
+
+`POST /admin/licenses/:id/edition` accepts `{"edition":"bir_ready"}` or
+`{"edition":"non_bir"}` under the existing admin session and Origin guard.
+The POS owner then calls the existing `POST /v1/activate` route through the
+manual **Refresh license** action using the same activation key and device.
+No recurring refresh or business-data sync is added.

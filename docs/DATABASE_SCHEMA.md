@@ -243,3 +243,38 @@ ReceiptFooterText fields alongside the existing store configuration
   the entire transaction.
 - Use WAL mode, foreign key constraints, and parameterized queries throughout.
 - Run periodic integrity checks, especially before and after backup/restore.
+# Phase 7 local compliance additions (schema version 8)
+
+`Sales.BirInvoiceNumber` is nullable and unique. Existing rows remain null.
+The first sale after a locally verified BIR-ready entitlement creates the
+single `BirComplianceState` row with `ActivatedAt`, then allocates the next
+integer invoice number and increases `GrandTotalCents` in the same checkout
+transaction. `HighestInvoiceNumber`, `GrandTotalCents`, and `HighestZNumber`
+cannot decrease through normal database updates. Invoice display currently
+uses the plain integer; no zero-padding policy is specified.
+
+`ZReadings` stores an immutable snapshot on BIR-ready cash-session close:
+unique sequence number and session ID, generation time and user, first and
+last session invoice, gross BIR sales, recorded reversal amount, and the
+accumulated grand total. It also stores expected and actual closing cash so
+an older restored backup can reconstruct the session close consistently.
+An empty BIR session has null invoice endpoints.
+Database triggers reject update and delete. The session and user identifiers
+are retained as text so a Z snapshot can be restored even if its related
+cash session or user is absent from an older backup.
+
+The grand total is the sum of committed BIR-ready sale amounts in integer
+cents. A later void or refund has its own append-only reversal record and
+does not reduce this issued-sales total. Z snapshots report reversal amounts
+separately. Failed checkouts do not advance invoice or grand-total state.
+BIR-ready checkout requires an open cash session so every numbered sale can
+be included in a retained Z snapshot when that session closes.
+Before committing the SQLite transaction, BIR checkout durably reserves the
+invoice number, sale ID, sale amount, and resulting integer-cent grand total
+in the installation-local compliance journal. Z close similarly reserves its
+number and full snapshot. A clean rollback records an abort and permits reuse;
+a crash with an unmatched pending reservation blocks new BIR issuance until
+the outcome can be established. This favors no reuse over gap-free numbering.
+Restoring an older backup may leave missing sale rows for invoices issued
+after that backup; finalized journal state raises the counters and grand total
+and restores retained Z snapshots rather than reusing those numbers.

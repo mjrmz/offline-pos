@@ -92,6 +92,19 @@ export function adminRouter(pool) {
   router.get('/admin/licenses/:id/devices', async (req,res,next) => {
     try { res.json((await pool.query('SELECT id,license_id,device_fingerprint,status,activated_at,deactivated_at FROM devices WHERE license_id=$1 ORDER BY activated_at DESC',[req.params.id])).rows); } catch(e) { next(e); }
   });
+  router.post('/admin/licenses/:id/edition', async (req,res,next) => {
+    const parsed = z.object({ edition: z.enum(['non_bir','bir_ready']) }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid edition' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(`UPDATE licenses SET plan_id=$2 WHERE id=$1 AND status<>'revoked' RETURNING id,plan_id`, [req.params.id, parsed.data.edition]);
+      if (!result.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({error:'Active license not found'}); }
+      await client.query('INSERT INTO admin_events(actor,action,target_id) VALUES($1,$2,$3)', [req.adminUser,'license.edition_change',req.params.id]);
+      await client.query('COMMIT');
+      res.json(result.rows[0]);
+    } catch(e) { await client.query('ROLLBACK'); next(e); } finally { client.release(); }
+  });
   async function change(req,res,next,kind) {
     const client=await pool.connect();
     try {

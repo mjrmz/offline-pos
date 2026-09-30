@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/models/active_user.dart';
 import '../../data/daos/cash_session_repository.dart';
+import '../../data/database.dart';
 import '../../shared/utils/safe_message.dart';
 
 class CashSessionScreen extends StatefulWidget {
@@ -15,6 +16,7 @@ class CashSessionScreen extends StatefulWidget {
 class _CashSessionScreenState extends State<CashSessionScreen> {
   final amount = TextEditingController();
   List<CashSessionSummary> sessions = [];
+  List<ZReading> zReadings = [];
   String? error;
   bool busy = false;
   @override
@@ -32,9 +34,11 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
   Future<void> refresh() async {
     try {
       final rows = await widget.repository.history();
+      final zRows = await widget.repository.zHistory();
       if (mounted) {
         setState(() {
           sessions = rows;
+          zReadings = zRows;
           error = null;
         });
       }
@@ -52,12 +56,18 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
     setState(() => busy = true);
     try {
       if (close) {
-        await widget.repository.close(widget.user, cents);
+        final result = await widget.repository.close(widget.user, cents);
+        amount.clear();
+        await refresh();
+        if (result.protectionWarning && mounted) {
+          setState(() => error =
+              'Session closed, but Z-reading finalization is pending. Stop BIR checkout and restart for recovery.');
+        }
       } else {
         await widget.repository.open(widget.user, cents);
+        amount.clear();
+        await refresh();
       }
-      amount.clear();
-      await refresh();
     } catch (e) {
       if (mounted) setState(() => error = safeMessage(e));
     } finally {
@@ -98,6 +108,15 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
             title: Text('${row.session.openedAt}'),
             subtitle: Text(
                 'Expected ${row.expectedCents}, actual ${row.session.actualCashCents}, variance ${row.varianceCents} cents')),
+      if (zReadings.isNotEmpty) ...[
+        const Divider(),
+        const Text('Z-reading history'),
+        for (final z in zReadings)
+          ListTile(
+              title: Text('Z ${z.number} · ${z.generatedAt}'),
+              subtitle: Text(
+                  'Invoices ${z.beginningInvoiceNumber ?? "none"}–${z.endingInvoiceNumber ?? "none"}; sales ${z.periodSalesCents} cents; reversals ${z.reversalCents} cents; grand total ${z.grandTotalCents} cents')),
+      ],
     ]);
   }
 }

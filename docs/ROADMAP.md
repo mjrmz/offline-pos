@@ -72,8 +72,7 @@ set. The next real step is Phase 1 — not further feature planning.
   This phase gates everything after it — don't proceed until it's solid.
 
 ## Phase 6 — Licensing system
-- **Status**: implementation in progress; manual offline activation exit
-  criterion remains open.
+- **Status**: complete; manually verified offline before Phase 7 work began.
 - License API (thin REST service) + PostgreSQL (Customers, Licenses,
   Devices, Activations, Revocations)
 - Ed25519 signed licenses, device ID binding, local signature verification
@@ -87,6 +86,9 @@ set. The next real step is Phase 1 — not further feature planning.
   fully; license server can go down without affecting active customers
 
 ## Phase 7 — BIR-ready tier
+- **Software status**: Phase 7 software implementation complete with automated crash/recovery validation; live Non-BIR to BIR-ready
+  upgrade verification on an activated device is still pending. Do not mark
+  the exit criterion complete until that manual run succeeds.
 - Sequential, non-resettable invoice numbering
 - Non-resettable accumulating grand total
 - Retained Z-reading

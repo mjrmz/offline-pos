@@ -198,3 +198,42 @@ The License API and admin dashboard are intentionally kept minimal in scope:
 - They are not required for the POS app to function day-to-day.
 - They should be treated as a separate deployable with its own release cycle,
   not bundled into the Flutter app's build process.
+# Phase 7 compliance restore boundary
+
+The local signed license decides BIR entitlement. SQLite schema version 8
+adds invoice, compliance-state, and Z-reading records to the same database.
+Checkout and cash-session close update these records inside their existing
+SQLite transactions. SQLite is the live source for sale and Z rows. An
+installation-local append-only compliance journal protects their monotonic
+invoice, grand-total, and Z state against replacement of that database.
+Before the SQLite commit, the app writes a numbered reservation containing
+the intended sale or Z identity and complete compliance state to both journal
+copies. Both copies and the journal head must acknowledge the reservation
+before the transaction can commit. After commit, a finalize record is written.
+Clean transaction rollback writes an abort record and can safely reuse the
+number. The application serializes BIR checkout and Z close through this
+protocol.
+
+The files `compliance-protection.json.journal-a` and `.journal-b` contain
+hash-chained JSON records. `.journal-head` and `.journal-head.previous` retain
+checksummed durable sequence heads; `.journal-active` marks a BIR installation.
+Writes use Dart `File.writeAsString(flush: true)`; head replacement uses a
+flushed temporary file and rename, retaining the previous generation. A
+shorter or damaged single journal copy can be repaired from the other. If
+both copies or the head cannot prove the protected sequence, BIR issuance
+stops and recovery mode reports the error. This protocol depends on the
+platform honoring Dart's file flush and rename behavior; it cannot guarantee
+survival of simultaneous loss or deliberate deletion of all local protection
+files, or a storage device that falsely acknowledges a flush.
+
+On startup and after restore, a pending reservation is finalized automatically
+only when the matching SQLite row exists. If the row is absent, the app cannot
+distinguish an uncommitted transaction from a committed row lost with the
+database, so BIR issuance stays blocked for supervised recovery. A finalized
+journal reconciles an older restored database upward, including grand total
+and retained Z snapshots. Backup snapshots contain SQLite only; the protected
+journal remains installation-local. A backup transferred to another device
+does not carry a continuous BIR sequence. The former single-file
+`compliance-protection.json` mirror is migrated only when the live database
+can validate its state; a historical commit lost before that old mirror was
+written cannot be reconstructed.

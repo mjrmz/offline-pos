@@ -66,3 +66,10 @@ of the app never needs to know which platform or peripheral it's talking to.
 - ✓ Scale disconnected — manual weight entry fallback works
 - ✓ Cash drawer trigger fires correctly on cash sales
 - ✓ Reprint produces an identical receipt to the original
+# Phase 7 receipt data
+
+For a numbered BIR-ready sale, the existing receipt renderer includes the
+persisted integer invoice number. Reprints read that number from the stored
+Sale row. The printer and cash drawer still run only after sale commit, so
+hardware failure cannot advance invoice or grand-total state. Non-BIR sale
+receipts continue to use the existing sale reference.

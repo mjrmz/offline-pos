@@ -9,6 +9,7 @@ CREATE TABLE plans (
   default_max_devices INT NOT NULL CHECK(default_max_devices > 0)
 );
 INSERT INTO plans VALUES ('non_bir','non_bir','Non-BIR',1);
+INSERT INTO plans VALUES ('bir_ready','bir_ready','BIR-ready',1);
 CREATE TABLE licenses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   customer_id UUID NOT NULL REFERENCES customers(id),

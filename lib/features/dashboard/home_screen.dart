@@ -16,12 +16,14 @@ import '../../hardware/cash_drawer/cash_drawer.dart';
 import '../settings/printer_settings_screen.dart';
 import '../cash_session/cash_session_screen.dart';
 import '../../data/daos/cash_session_repository.dart';
+import '../../shared/utils/safe_message.dart';
 
 class HomeScreen extends StatefulWidget {
   final AuthService auth;
   final PosRepository pos;
   final SalesRepository salesRepository;
   final VoidCallback onChanged;
+  final Future<void> Function(String)? refreshLicense;
   final Widget? recoveryScreen;
   const HomeScreen(
       {super.key,
@@ -29,6 +31,7 @@ class HomeScreen extends StatefulWidget {
       required this.pos,
       required this.salesRepository,
       required this.onChanged,
+      this.refreshLicense,
       this.recoveryScreen});
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -62,7 +65,10 @@ class _HomeScreenState extends State<HomeScreen> {
         PrinterSettingsScreen(
             store: settings, printer: printer, devices: deviceClient),
       CashSessionScreen(
-          user: user, repository: CashSessionRepository(widget.pos.db)),
+          user: user,
+          repository: CashSessionRepository(widget.pos.db,
+              birEntitled: () => widget.pos.birReady,
+              protection: widget.pos.protection)),
     ];
     final showRecovery =
         user.can(PosPermission.manageRecovery) && widget.recoveryScreen != null;
@@ -86,7 +92,45 @@ class _HomeScreenState extends State<HomeScreen> {
             AppBar(title: Text('${user.name} · ${user.role.name}'), actions: [
           PopupMenuButton<String>(
               onSelected: (value) async {
-                if (value == 'lock') {
+                if (value == 'license') {
+                  final controller = TextEditingController();
+                  try {
+                    final key = await showDialog<String>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                                title: const Text('Refresh license'),
+                                content: TextField(
+                                    controller: controller,
+                                    decoration: const InputDecoration(
+                                        labelText: 'Activation key')),
+                                actions: [
+                                  TextButton(
+                                      onPressed: () => Navigator.pop(context),
+                                      child: const Text('Cancel')),
+                                  FilledButton(
+                                      onPressed: () => Navigator.pop(
+                                          context, controller.text),
+                                      child: const Text('Refresh'))
+                                ]));
+                    if (key != null && key.trim().isNotEmpty) {
+                      try {
+                        await widget.refreshLicense?.call(key);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                  content: Text('License refreshed')));
+                        }
+                      } catch (error) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text(safeMessage(error))));
+                        }
+                      }
+                    }
+                  } finally {
+                    controller.dispose();
+                  }
+                } else if (value == 'lock') {
                   await widget.auth.lock();
                 } else {
                   await widget.auth.logout();
@@ -94,6 +138,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 widget.onChanged();
               },
               itemBuilder: (_) => [
+                    if (user.can(PosPermission.manageUsers) &&
+                        widget.refreshLicense != null)
+                      const PopupMenuItem(
+                          value: 'license', child: Text('Refresh license')),
                     const PopupMenuItem(
                         value: 'lock', child: Text('Lock / Switch user')),
                     const PopupMenuItem(value: 'logout', child: Text('Logout'))

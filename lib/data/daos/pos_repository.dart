@@ -3,6 +3,8 @@ import '../../core/models/product.dart';
 import '../../core/models/active_user.dart';
 import 'auth_repository.dart';
 import '../database.dart';
+import '../../backup/compliance_protection.dart';
+import 'package:uuid/uuid.dart';
 
 class SaleLineRequest {
   final String productId;
@@ -13,12 +15,21 @@ class SaleLineRequest {
 class CommittedSale {
   final String saleId;
   final int totalCents;
-  const CommittedSale(this.saleId, this.totalCents);
+  final int? birInvoiceNumber;
+  final bool protectionWarning;
+  const CommittedSale(this.saleId, this.totalCents,
+      [this.birInvoiceNumber, this.protectionWarning = false]);
 }
 
 class PosRepository {
   final AppDatabase db;
-  PosRepository(this.db);
+  final bool _birReady;
+  final bool Function()? birEntitled;
+  bool get birReady => birEntitled?.call() ?? _birReady;
+  final ComplianceProtection? protection;
+  PosRepository(this.db,
+      {bool birReady = false, this.birEntitled, this.protection})
+      : _birReady = birReady;
   PosProduct _product(Product row) => PosProduct(
       row.id,
       row.name,
@@ -148,8 +159,29 @@ class PosRepository {
           .get();
 
   Future<CommittedSale> completeCashSale(List<SaleLineRequest> items,
-          int cashReceivedCents, String cashierId) =>
-      db.transaction(() async {
+      int cashReceivedCents, String cashierId) async {
+    if (birReady) {
+      if (protection == null) {
+        throw StateError('Compliance protection is unavailable');
+      }
+      return protection!.exclusive(
+          () => _completeCashSale(items, cashReceivedCents, cashierId));
+    }
+    return _completeCashSale(items, cashReceivedCents, cashierId);
+  }
+
+  Future<CommittedSale> _completeCashSale(List<SaleLineRequest> items,
+      int cashReceivedCents, String cashierId) async {
+    if (birReady) {
+      if (protection == null) {
+        throw StateError('Compliance protection is unavailable');
+      }
+      await protection!.prepare(db);
+    }
+    String? reservedSaleId;
+    late final CommittedSale committed;
+    try {
+      committed = await db.transaction(() async {
         final actor = await AuthRepository(db).requireActive(cashierId);
         if (!actor.can(PosPermission.sell)) {
           throw StateError('Not authorized to sell');
@@ -178,8 +210,44 @@ class PosRepository {
           total += product.priceCents * entry.value;
         }
         if (cashReceivedCents < total) throw StateError('Insufficient cash');
+        final session = await (db.select(db.cashSessions)
+              ..where((s) => s.closedAt.isNull()))
+            .getSingleOrNull();
+        if (birReady && session == null) {
+          throw StateError('Open a cash session before a BIR-ready sale');
+        }
+        int? invoiceNumber;
+        if (birReady) {
+          var state = await (db.select(db.birComplianceState)
+                ..where((s) => s.id.equals(1)))
+              .getSingleOrNull();
+          if (state == null) {
+            await db.into(db.birComplianceState).insert(
+                BirComplianceStateCompanion.insert(
+                    id: const Value(1), activatedAt: DateTime.now()));
+            await AuthRepository(db)
+                .audit(cashierId, 'bir.cutover', 'activated');
+            state = await (db.select(db.birComplianceState)
+                  ..where((s) => s.id.equals(1)))
+                .getSingle();
+          }
+          invoiceNumber = state.highestInvoiceNumber + 1;
+          reservedSaleId = const Uuid().v4();
+          await protection!.reserveSale(
+              db, reservedSaleId!, invoiceNumber, total, state.activatedAt);
+          await (db.update(db.birComplianceState)..where((s) => s.id.equals(1)))
+              .write(BirComplianceStateCompanion(
+                  highestInvoiceNumber: Value(invoiceNumber),
+                  grandTotalCents: Value(state.grandTotalCents + total)));
+        }
         final sale = await db.into(db.sales).insertReturning(
-            SalesCompanion.insert(cashierId: cashierId, totalCents: total));
+            SalesCompanion.insert(
+                id: reservedSaleId == null
+                    ? const Value.absent()
+                    : Value(reservedSaleId!),
+                cashierId: cashierId,
+                totalCents: total,
+                birInvoiceNumber: Value(invoiceNumber)));
         for (final (product, quantity) in details) {
           await db.into(db.saleItems).insert(SaleItemsCompanion.insert(
               saleId: sale.id,
@@ -206,9 +274,6 @@ class PosRepository {
         }
         await db.into(db.payments).insert(PaymentsCompanion.insert(
             saleId: sale.id, method: 'cash', amountCents: total));
-        final session = await (db.select(db.cashSessions)
-              ..where((s) => s.closedAt.isNull()))
-            .getSingleOrNull();
         if (session != null) {
           await db.into(db.cashMovements).insert(CashMovementsCompanion.insert(
               sessionId: session.id,
@@ -217,6 +282,22 @@ class PosRepository {
               kind: 'cash_sale'));
         }
         await AuthRepository(db).audit(cashierId, 'sale.completed', sale.id);
-        return CommittedSale(sale.id, total);
+        return CommittedSale(sale.id, total, invoiceNumber);
       });
+    } catch (error) {
+      if (reservedSaleId != null && error is! SimulatedComplianceCrash) {
+        await protection!.abortSaleAfterRollback(db, reservedSaleId!);
+      }
+      rethrow;
+    }
+    if (committed.birInvoiceNumber != null) {
+      try {
+        await protection!.finalizeSale(committed.saleId);
+      } catch (_) {
+        return CommittedSale(committed.saleId, committed.totalCents,
+            committed.birInvoiceNumber, true);
+      }
+    }
+    return committed;
+  }
 }

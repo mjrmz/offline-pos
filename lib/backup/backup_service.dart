@@ -67,7 +67,7 @@ class BackupService {
         'ok');
   }
 
-  static int verify(File file, {int maxSchemaVersion = 7}) {
+  static int verify(File file, {int maxSchemaVersion = 8}) {
     if (!file.existsSync() || file.lengthSync() == 0) {
       throw StateError('Backup is missing or empty');
     }
@@ -100,6 +100,7 @@ class BackupService {
         if (version >= 3) 'sale_reversals',
         if (version >= 6) 'settings',
         if (version >= 7) 'cash_movements',
+        if (version >= 8) ...['bir_compliance_state', 'z_readings'],
       };
       for (final name in requiredTables) {
         final rows = connection.select(
@@ -130,7 +131,14 @@ class BackupService {
           'reference_id',
           'created_at',
         ],
-        'sales': ['id', 'cashier_id', 'total_cents', 'status', 'created_at'],
+        'sales': [
+          'id',
+          'cashier_id',
+          'total_cents',
+          'status',
+          'created_at',
+          if (version >= 8) 'bir_invoice_number'
+        ],
         'sale_items': [
           'id',
           'sale_id',
@@ -198,6 +206,29 @@ class BackupService {
             'amount_cents',
             'kind',
             'created_at',
+          ],
+        if (version >= 8)
+          'bir_compliance_state': [
+            'id',
+            'activated_at',
+            'highest_invoice_number',
+            'grand_total_cents',
+            'highest_z_number'
+          ],
+        if (version >= 8)
+          'z_readings': [
+            'id',
+            'number',
+            'cash_session_id',
+            'generated_at',
+            'generated_by_user_id',
+            'beginning_invoice_number',
+            'ending_invoice_number',
+            'period_sales_cents',
+            'reversal_cents',
+            'grand_total_cents',
+            'expected_cash_cents',
+            'actual_cash_cents'
           ],
       };
       for (final entry in columns.entries) {

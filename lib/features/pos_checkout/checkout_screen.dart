@@ -153,10 +153,12 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     try {
       final result = await sales.checkout(cart, cashCents);
       lastSaleId = result.saleId;
+      final completionMessage = result.protectionWarning
+          ? 'Sale ${result.saleId} committed, but compliance finalization is pending. Stop BIR checkout and restart for recovery.'
+          : 'Sale ${result.saleId} complete. Change: ${money(result.changeCents)}';
       if (mounted) {
         setState(() {
-          message =
-              'Sale ${result.saleId} complete. Change: ${money(result.changeCents)}';
+          message = completionMessage;
           cashController.clear();
         });
         barcodeFocus.requestFocus();
@@ -165,10 +167,9 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
       final hardware =
           await widget.receipts?.afterCommittedCashSale(result.saleId);
       if (mounted && hardware != null) {
-        setState(() => message =
-            'Sale ${result.saleId} complete. Change: ${money(result.changeCents)}'
-                '${hardware.printerAttempted && !hardware.printed ? ' Receipt could not be printed.' : ''}'
-                '${hardware.drawerAttempted && !hardware.drawerOpened ? ' Cash drawer could not be opened.' : ''}');
+        setState(() => message = '$completionMessage'
+            '${hardware.printerAttempted && !hardware.printed ? ' Receipt could not be printed.' : ''}'
+            '${hardware.drawerAttempted && !hardware.drawerOpened ? ' Cash drawer could not be opened.' : ''}');
       }
       await refresh();
     } catch (e) {

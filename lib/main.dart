@@ -18,6 +18,7 @@ import 'features/dashboard/home_screen.dart';
 import 'features/recovery/recovery_screen.dart';
 import 'backup/backup_service.dart';
 import 'backup/restore_service.dart';
+import 'backup/compliance_protection.dart';
 import 'licensing/activation_client.dart';
 import 'licensing/device_id.dart';
 import 'licensing/license_store.dart';
@@ -40,6 +41,7 @@ class _PosAppState extends State<PosApp> {
   AppDatabase? database;
   AuthService? auth;
   File? databaseFile;
+  ComplianceProtection? complianceProtection;
   StartupHealth? health;
   Timer? backupTimer;
   Future<void> backupTask = Future.value();
@@ -58,9 +60,12 @@ class _PosAppState extends State<PosApp> {
     AppDatabase? opening;
     try {
       databaseFile = await AppDatabase.databaseFile();
+      complianceProtection = ComplianceProtection(File(
+          p.join(databaseFile!.parent.path, 'compliance-protection.json')));
       final opened = AppDatabase();
       opening = opened;
       await DatabaseHealthRepository(opened).checkStartup();
+      await complianceProtection!.reconcile(opened);
       database = opened;
       opening = null;
       auth = AuthService(AuthRepository(opened));
@@ -155,19 +160,24 @@ class _PosAppState extends State<PosApp> {
         throw StateError('Owner credentials from this backup are required');
       }
     }
-    restoring = true;
     await backupTask;
+    if (database != null) await complianceProtection?.reconcile(database!);
+    restoring = true;
     final file = databaseFile!;
-    final restorer = RestoreService(
-        file, Directory(p.join(file.parent.path, 'backups')),
-        closeDatabase: () async {
-          await database?.close();
-          database = null;
-          auth = null;
-        },
-        openDatabase: () async => AppDatabase(),
-        afterVerify: (opened) => AuthRepository(opened).audit(restoreActorId,
-            'backup.restore', record.file.uri.pathSegments.last));
+    final restorer =
+        RestoreService(file, Directory(p.join(file.parent.path, 'backups')),
+            closeDatabase: () async {
+              await database?.close();
+              database = null;
+              auth = null;
+            },
+            openDatabase: () async => AppDatabase(),
+            afterVerify: (opened) async {
+              await complianceProtection?.reconcile(opened,
+                  actorId: restoreActorId);
+              await AuthRepository(opened).audit(restoreActorId,
+                  'backup.restore', record.file.uri.pathSegments.last);
+            });
     try {
       final opened = await restorer.restore(record);
       database = opened;
@@ -180,6 +190,7 @@ class _PosAppState extends State<PosApp> {
         try {
           final opened = AppDatabase();
           await DatabaseHealthRepository(opened).checkStartup();
+          await complianceProtection?.reconcile(opened);
           database = opened;
           auth = AuthService(AuthRepository(opened));
           health = const StartupHealth.ready();
@@ -262,8 +273,23 @@ class _PosAppState extends State<PosApp> {
                           auth: currentAuth, onChanged: () => setState(() {}))
                       : HomeScreen(
                           auth: currentAuth,
-                          pos: PosRepository(db),
+                          pos: PosRepository(db,
+                              birEntitled: () =>
+                                  licenseResult?.isBirReady == true,
+                              protection: complianceProtection),
                           salesRepository: SalesRepository(db),
+                          refreshLicense:
+                              licenseApiUrl.isEmpty || deviceId == null
+                                  ? null
+                                  : (key) async {
+                                      await ActivationClient(
+                                              Uri.parse(licenseApiUrl),
+                                              SignatureVerifier(),
+                                              const LicenseStore())
+                                          .activate(key, deviceId!);
+                                      await checkLicense();
+                                      if (mounted) setState(() {});
+                                    },
                           recoveryScreen: RecoveryScreen(
                               backupDirectory: Directory(
                                   p.join(databaseFile!.parent.path, 'backups')),

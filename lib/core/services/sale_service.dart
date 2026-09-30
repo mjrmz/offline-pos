@@ -7,7 +7,9 @@ class SaleResult {
   final String saleId;
   final int totalCents;
   final int changeCents;
-  const SaleResult(this.saleId, this.totalCents, this.changeCents);
+  final bool protectionWarning;
+  const SaleResult(this.saleId, this.totalCents, this.changeCents,
+      [this.protectionWarning = false]);
 }
 
 class SaleService {
@@ -34,8 +36,11 @@ class SaleService {
       final committed =
           await repository.completeCashSale(items, cashReceivedCents, user.id);
       cart.clear();
-      return SaleResult(committed.saleId, committed.totalCents,
-          cashReceivedCents - committed.totalCents);
+      return SaleResult(
+          committed.saleId,
+          committed.totalCents,
+          cashReceivedCents - committed.totalCents,
+          committed.protectionWarning);
     } finally {
       _inFlight = false;
     }

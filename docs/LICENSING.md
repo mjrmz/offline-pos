@@ -144,3 +144,14 @@ additional slot; reactivation allowance is configurable per license.
 Existing development databases without a license retain their data and
 enter activation before local login. No production bypass or universal key
 is present; tests inject only test keypairs and verifiers.
+# Phase 7 edition refresh
+
+The License API now has a `bir_ready` plan. An authenticated admin can change
+an existing non-revoked license to that plan. The owner then uses **Refresh
+license** in the POS menu and enters the existing activation key while online.
+The API signs a new payload for the same device; subsequent operation uses
+only that locally verified payload. BIR entitlement is true when the valid
+payload's `edition` is `bir_ready` or its `features` includes `bir_ready`.
+Replacing it with a Non-BIR or expired license does not delete historical
+invoice, grand-total, or Z records. New sales require current BIR entitlement
+to receive BIR invoice numbers.

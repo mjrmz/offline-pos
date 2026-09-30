@@ -64,6 +64,9 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                         Text('Cashier: ${detail.summary.cashierName}'),
                         Text('Date: ${detail.summary.sale.createdAt}'),
                         Text('Status: ${detail.summary.sale.status}'),
+                        Text(detail.summary.sale.birInvoiceNumber == null
+                            ? 'Pre-BIR / Non-BIR sale'
+                            : 'BIR invoice ${detail.summary.sale.birInvoiceNumber}'),
                         Text('Payment: ${detail.summary.paymentMethod}'),
                         Text('Total: ${money(detail.summary.sale.totalCents)}'),
                         for (var i = 0; i < detail.items.length; i++)
@@ -158,7 +161,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
         ...rows.map((row) => ListTile(
             title: Text('${row.sale.id} · ${money(row.sale.totalCents)}'),
             subtitle: Text(
-                '${row.sale.createdAt} · ${row.cashierName} · ${row.sale.status} · ${row.paymentMethod}'),
+                '${row.sale.createdAt} · ${row.cashierName} · ${row.sale.status} · ${row.paymentMethod} · ${row.sale.birInvoiceNumber == null ? 'Pre-BIR / Non-BIR sale' : 'BIR invoice ${row.sale.birInvoiceNumber}'}'),
             onTap: () => open(row.sale.id)))
       ]));
 }

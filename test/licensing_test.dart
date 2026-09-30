@@ -6,6 +6,33 @@ import 'package:modern_offline_pos/licensing/license_store.dart';
 import 'package:modern_offline_pos/licensing/signature_verifier.dart';
 
 void main() {
+  test('BIR entitlement requires a valid unexpired local license', () {
+    final payload = <String, dynamic>{
+      'edition': 'bir_ready',
+      'features': <String>[],
+      'expiresAt': DateTime.now()
+          .toUtc()
+          .add(const Duration(minutes: 1))
+          .toIso8601String(),
+    };
+    expect(LicenseVerificationResult(LicenseStatus.valid, payload).isBirReady,
+        true);
+    payload['expiresAt'] = DateTime.now()
+        .toUtc()
+        .subtract(const Duration(minutes: 1))
+        .toIso8601String();
+    expect(LicenseVerificationResult(LicenseStatus.valid, payload).isBirReady,
+        false);
+    payload['expiresAt'] = null;
+    payload['edition'] = 'non_bir';
+    expect(LicenseVerificationResult(LicenseStatus.valid, payload).isBirReady,
+        false);
+    payload['features'] = <String>['bir_ready'];
+    expect(LicenseVerificationResult(LicenseStatus.valid, payload).isBirReady,
+        true);
+    expect(LicenseVerificationResult(LicenseStatus.expired, payload).isBirReady,
+        false);
+  });
   test('accepts canonical payload signed by Node License API fixture',
       () async {
     // Test-only Ed25519 seed: 32 bytes of 0x01; never a production key.

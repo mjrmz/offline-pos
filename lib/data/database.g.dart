@@ -1875,6 +1875,14 @@ class $SalesTable extends Sales with TableInfo<$SalesTable, Sale> {
   late final GeneratedColumn<int> totalCents = GeneratedColumn<int>(
       'total_cents', aliasedName, false,
       type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _birInvoiceNumberMeta =
+      const VerificationMeta('birInvoiceNumber');
+  @override
+  late final GeneratedColumn<int> birInvoiceNumber = GeneratedColumn<int>(
+      'bir_invoice_number', aliasedName, true,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways('UNIQUE'));
   static const VerificationMeta _statusMeta = const VerificationMeta('status');
   @override
   late final GeneratedColumn<String> status = GeneratedColumn<String>(
@@ -1892,7 +1900,7 @@ class $SalesTable extends Sales with TableInfo<$SalesTable, Sale> {
       clientDefault: () => DateTime.now());
   @override
   List<GeneratedColumn> get $columns =>
-      [id, cashierId, totalCents, status, createdAt];
+      [id, cashierId, totalCents, birInvoiceNumber, status, createdAt];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1920,6 +1928,12 @@ class $SalesTable extends Sales with TableInfo<$SalesTable, Sale> {
     } else if (isInserting) {
       context.missing(_totalCentsMeta);
     }
+    if (data.containsKey('bir_invoice_number')) {
+      context.handle(
+          _birInvoiceNumberMeta,
+          birInvoiceNumber.isAcceptableOrUnknown(
+              data['bir_invoice_number']!, _birInvoiceNumberMeta));
+    }
     if (data.containsKey('status')) {
       context.handle(_statusMeta,
           status.isAcceptableOrUnknown(data['status']!, _statusMeta));
@@ -1943,6 +1957,8 @@ class $SalesTable extends Sales with TableInfo<$SalesTable, Sale> {
           .read(DriftSqlType.string, data['${effectivePrefix}cashier_id'])!,
       totalCents: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}total_cents'])!,
+      birInvoiceNumber: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}bir_invoice_number']),
       status: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}status'])!,
       createdAt: attachedDatabase.typeMapping
@@ -1960,12 +1976,14 @@ class Sale extends DataClass implements Insertable<Sale> {
   final String id;
   final String cashierId;
   final int totalCents;
+  final int? birInvoiceNumber;
   final String status;
   final DateTime createdAt;
   const Sale(
       {required this.id,
       required this.cashierId,
       required this.totalCents,
+      this.birInvoiceNumber,
       required this.status,
       required this.createdAt});
   @override
@@ -1974,6 +1992,9 @@ class Sale extends DataClass implements Insertable<Sale> {
     map['id'] = Variable<String>(id);
     map['cashier_id'] = Variable<String>(cashierId);
     map['total_cents'] = Variable<int>(totalCents);
+    if (!nullToAbsent || birInvoiceNumber != null) {
+      map['bir_invoice_number'] = Variable<int>(birInvoiceNumber);
+    }
     map['status'] = Variable<String>(status);
     map['created_at'] = Variable<DateTime>(createdAt);
     return map;
@@ -1984,6 +2005,9 @@ class Sale extends DataClass implements Insertable<Sale> {
       id: Value(id),
       cashierId: Value(cashierId),
       totalCents: Value(totalCents),
+      birInvoiceNumber: birInvoiceNumber == null && nullToAbsent
+          ? const Value.absent()
+          : Value(birInvoiceNumber),
       status: Value(status),
       createdAt: Value(createdAt),
     );
@@ -1996,6 +2020,7 @@ class Sale extends DataClass implements Insertable<Sale> {
       id: serializer.fromJson<String>(json['id']),
       cashierId: serializer.fromJson<String>(json['cashierId']),
       totalCents: serializer.fromJson<int>(json['totalCents']),
+      birInvoiceNumber: serializer.fromJson<int?>(json['birInvoiceNumber']),
       status: serializer.fromJson<String>(json['status']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
     );
@@ -2007,6 +2032,7 @@ class Sale extends DataClass implements Insertable<Sale> {
       'id': serializer.toJson<String>(id),
       'cashierId': serializer.toJson<String>(cashierId),
       'totalCents': serializer.toJson<int>(totalCents),
+      'birInvoiceNumber': serializer.toJson<int?>(birInvoiceNumber),
       'status': serializer.toJson<String>(status),
       'createdAt': serializer.toJson<DateTime>(createdAt),
     };
@@ -2016,12 +2042,16 @@ class Sale extends DataClass implements Insertable<Sale> {
           {String? id,
           String? cashierId,
           int? totalCents,
+          Value<int?> birInvoiceNumber = const Value.absent(),
           String? status,
           DateTime? createdAt}) =>
       Sale(
         id: id ?? this.id,
         cashierId: cashierId ?? this.cashierId,
         totalCents: totalCents ?? this.totalCents,
+        birInvoiceNumber: birInvoiceNumber.present
+            ? birInvoiceNumber.value
+            : this.birInvoiceNumber,
         status: status ?? this.status,
         createdAt: createdAt ?? this.createdAt,
       );
@@ -2031,6 +2061,9 @@ class Sale extends DataClass implements Insertable<Sale> {
       cashierId: data.cashierId.present ? data.cashierId.value : this.cashierId,
       totalCents:
           data.totalCents.present ? data.totalCents.value : this.totalCents,
+      birInvoiceNumber: data.birInvoiceNumber.present
+          ? data.birInvoiceNumber.value
+          : this.birInvoiceNumber,
       status: data.status.present ? data.status.value : this.status,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
     );
@@ -2042,6 +2075,7 @@ class Sale extends DataClass implements Insertable<Sale> {
           ..write('id: $id, ')
           ..write('cashierId: $cashierId, ')
           ..write('totalCents: $totalCents, ')
+          ..write('birInvoiceNumber: $birInvoiceNumber, ')
           ..write('status: $status, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
@@ -2049,7 +2083,8 @@ class Sale extends DataClass implements Insertable<Sale> {
   }
 
   @override
-  int get hashCode => Object.hash(id, cashierId, totalCents, status, createdAt);
+  int get hashCode => Object.hash(
+      id, cashierId, totalCents, birInvoiceNumber, status, createdAt);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -2057,6 +2092,7 @@ class Sale extends DataClass implements Insertable<Sale> {
           other.id == this.id &&
           other.cashierId == this.cashierId &&
           other.totalCents == this.totalCents &&
+          other.birInvoiceNumber == this.birInvoiceNumber &&
           other.status == this.status &&
           other.createdAt == this.createdAt);
 }
@@ -2065,6 +2101,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
   final Value<String> id;
   final Value<String> cashierId;
   final Value<int> totalCents;
+  final Value<int?> birInvoiceNumber;
   final Value<String> status;
   final Value<DateTime> createdAt;
   final Value<int> rowid;
@@ -2072,6 +2109,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
     this.id = const Value.absent(),
     this.cashierId = const Value.absent(),
     this.totalCents = const Value.absent(),
+    this.birInvoiceNumber = const Value.absent(),
     this.status = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -2080,6 +2118,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
     this.id = const Value.absent(),
     required String cashierId,
     required int totalCents,
+    this.birInvoiceNumber = const Value.absent(),
     this.status = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -2089,6 +2128,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
     Expression<String>? id,
     Expression<String>? cashierId,
     Expression<int>? totalCents,
+    Expression<int>? birInvoiceNumber,
     Expression<String>? status,
     Expression<DateTime>? createdAt,
     Expression<int>? rowid,
@@ -2097,6 +2137,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
       if (id != null) 'id': id,
       if (cashierId != null) 'cashier_id': cashierId,
       if (totalCents != null) 'total_cents': totalCents,
+      if (birInvoiceNumber != null) 'bir_invoice_number': birInvoiceNumber,
       if (status != null) 'status': status,
       if (createdAt != null) 'created_at': createdAt,
       if (rowid != null) 'rowid': rowid,
@@ -2107,6 +2148,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
       {Value<String>? id,
       Value<String>? cashierId,
       Value<int>? totalCents,
+      Value<int?>? birInvoiceNumber,
       Value<String>? status,
       Value<DateTime>? createdAt,
       Value<int>? rowid}) {
@@ -2114,6 +2156,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
       id: id ?? this.id,
       cashierId: cashierId ?? this.cashierId,
       totalCents: totalCents ?? this.totalCents,
+      birInvoiceNumber: birInvoiceNumber ?? this.birInvoiceNumber,
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
       rowid: rowid ?? this.rowid,
@@ -2131,6 +2174,9 @@ class SalesCompanion extends UpdateCompanion<Sale> {
     }
     if (totalCents.present) {
       map['total_cents'] = Variable<int>(totalCents.value);
+    }
+    if (birInvoiceNumber.present) {
+      map['bir_invoice_number'] = Variable<int>(birInvoiceNumber.value);
     }
     if (status.present) {
       map['status'] = Variable<String>(status.value);
@@ -2150,6 +2196,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
           ..write('id: $id, ')
           ..write('cashierId: $cashierId, ')
           ..write('totalCents: $totalCents, ')
+          ..write('birInvoiceNumber: $birInvoiceNumber, ')
           ..write('status: $status, ')
           ..write('createdAt: $createdAt, ')
           ..write('rowid: $rowid')
@@ -4824,6 +4871,963 @@ class SettingsCompanion extends UpdateCompanion<Setting> {
   }
 }
 
+class $BirComplianceStateTable extends BirComplianceState
+    with TableInfo<$BirComplianceStateTable, BirComplianceStateData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $BirComplianceStateTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+      'id', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _activatedAtMeta =
+      const VerificationMeta('activatedAt');
+  @override
+  late final GeneratedColumn<DateTime> activatedAt = GeneratedColumn<DateTime>(
+      'activated_at', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _highestInvoiceNumberMeta =
+      const VerificationMeta('highestInvoiceNumber');
+  @override
+  late final GeneratedColumn<int> highestInvoiceNumber = GeneratedColumn<int>(
+      'highest_invoice_number', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _grandTotalCentsMeta =
+      const VerificationMeta('grandTotalCents');
+  @override
+  late final GeneratedColumn<int> grandTotalCents = GeneratedColumn<int>(
+      'grand_total_cents', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _highestZNumberMeta =
+      const VerificationMeta('highestZNumber');
+  @override
+  late final GeneratedColumn<int> highestZNumber = GeneratedColumn<int>(
+      'highest_z_number', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, activatedAt, highestInvoiceNumber, grandTotalCents, highestZNumber];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'bir_compliance_state';
+  @override
+  VerificationContext validateIntegrity(
+      Insertable<BirComplianceStateData> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('activated_at')) {
+      context.handle(
+          _activatedAtMeta,
+          activatedAt.isAcceptableOrUnknown(
+              data['activated_at']!, _activatedAtMeta));
+    } else if (isInserting) {
+      context.missing(_activatedAtMeta);
+    }
+    if (data.containsKey('highest_invoice_number')) {
+      context.handle(
+          _highestInvoiceNumberMeta,
+          highestInvoiceNumber.isAcceptableOrUnknown(
+              data['highest_invoice_number']!, _highestInvoiceNumberMeta));
+    }
+    if (data.containsKey('grand_total_cents')) {
+      context.handle(
+          _grandTotalCentsMeta,
+          grandTotalCents.isAcceptableOrUnknown(
+              data['grand_total_cents']!, _grandTotalCentsMeta));
+    }
+    if (data.containsKey('highest_z_number')) {
+      context.handle(
+          _highestZNumberMeta,
+          highestZNumber.isAcceptableOrUnknown(
+              data['highest_z_number']!, _highestZNumberMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  BirComplianceStateData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return BirComplianceStateData(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}id'])!,
+      activatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}activated_at'])!,
+      highestInvoiceNumber: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}highest_invoice_number'])!,
+      grandTotalCents: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}grand_total_cents'])!,
+      highestZNumber: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}highest_z_number'])!,
+    );
+  }
+
+  @override
+  $BirComplianceStateTable createAlias(String alias) {
+    return $BirComplianceStateTable(attachedDatabase, alias);
+  }
+}
+
+class BirComplianceStateData extends DataClass
+    implements Insertable<BirComplianceStateData> {
+  final int id;
+  final DateTime activatedAt;
+  final int highestInvoiceNumber;
+  final int grandTotalCents;
+  final int highestZNumber;
+  const BirComplianceStateData(
+      {required this.id,
+      required this.activatedAt,
+      required this.highestInvoiceNumber,
+      required this.grandTotalCents,
+      required this.highestZNumber});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['activated_at'] = Variable<DateTime>(activatedAt);
+    map['highest_invoice_number'] = Variable<int>(highestInvoiceNumber);
+    map['grand_total_cents'] = Variable<int>(grandTotalCents);
+    map['highest_z_number'] = Variable<int>(highestZNumber);
+    return map;
+  }
+
+  BirComplianceStateCompanion toCompanion(bool nullToAbsent) {
+    return BirComplianceStateCompanion(
+      id: Value(id),
+      activatedAt: Value(activatedAt),
+      highestInvoiceNumber: Value(highestInvoiceNumber),
+      grandTotalCents: Value(grandTotalCents),
+      highestZNumber: Value(highestZNumber),
+    );
+  }
+
+  factory BirComplianceStateData.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return BirComplianceStateData(
+      id: serializer.fromJson<int>(json['id']),
+      activatedAt: serializer.fromJson<DateTime>(json['activatedAt']),
+      highestInvoiceNumber:
+          serializer.fromJson<int>(json['highestInvoiceNumber']),
+      grandTotalCents: serializer.fromJson<int>(json['grandTotalCents']),
+      highestZNumber: serializer.fromJson<int>(json['highestZNumber']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'activatedAt': serializer.toJson<DateTime>(activatedAt),
+      'highestInvoiceNumber': serializer.toJson<int>(highestInvoiceNumber),
+      'grandTotalCents': serializer.toJson<int>(grandTotalCents),
+      'highestZNumber': serializer.toJson<int>(highestZNumber),
+    };
+  }
+
+  BirComplianceStateData copyWith(
+          {int? id,
+          DateTime? activatedAt,
+          int? highestInvoiceNumber,
+          int? grandTotalCents,
+          int? highestZNumber}) =>
+      BirComplianceStateData(
+        id: id ?? this.id,
+        activatedAt: activatedAt ?? this.activatedAt,
+        highestInvoiceNumber: highestInvoiceNumber ?? this.highestInvoiceNumber,
+        grandTotalCents: grandTotalCents ?? this.grandTotalCents,
+        highestZNumber: highestZNumber ?? this.highestZNumber,
+      );
+  BirComplianceStateData copyWithCompanion(BirComplianceStateCompanion data) {
+    return BirComplianceStateData(
+      id: data.id.present ? data.id.value : this.id,
+      activatedAt:
+          data.activatedAt.present ? data.activatedAt.value : this.activatedAt,
+      highestInvoiceNumber: data.highestInvoiceNumber.present
+          ? data.highestInvoiceNumber.value
+          : this.highestInvoiceNumber,
+      grandTotalCents: data.grandTotalCents.present
+          ? data.grandTotalCents.value
+          : this.grandTotalCents,
+      highestZNumber: data.highestZNumber.present
+          ? data.highestZNumber.value
+          : this.highestZNumber,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('BirComplianceStateData(')
+          ..write('id: $id, ')
+          ..write('activatedAt: $activatedAt, ')
+          ..write('highestInvoiceNumber: $highestInvoiceNumber, ')
+          ..write('grandTotalCents: $grandTotalCents, ')
+          ..write('highestZNumber: $highestZNumber')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      id, activatedAt, highestInvoiceNumber, grandTotalCents, highestZNumber);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is BirComplianceStateData &&
+          other.id == this.id &&
+          other.activatedAt == this.activatedAt &&
+          other.highestInvoiceNumber == this.highestInvoiceNumber &&
+          other.grandTotalCents == this.grandTotalCents &&
+          other.highestZNumber == this.highestZNumber);
+}
+
+class BirComplianceStateCompanion
+    extends UpdateCompanion<BirComplianceStateData> {
+  final Value<int> id;
+  final Value<DateTime> activatedAt;
+  final Value<int> highestInvoiceNumber;
+  final Value<int> grandTotalCents;
+  final Value<int> highestZNumber;
+  const BirComplianceStateCompanion({
+    this.id = const Value.absent(),
+    this.activatedAt = const Value.absent(),
+    this.highestInvoiceNumber = const Value.absent(),
+    this.grandTotalCents = const Value.absent(),
+    this.highestZNumber = const Value.absent(),
+  });
+  BirComplianceStateCompanion.insert({
+    this.id = const Value.absent(),
+    required DateTime activatedAt,
+    this.highestInvoiceNumber = const Value.absent(),
+    this.grandTotalCents = const Value.absent(),
+    this.highestZNumber = const Value.absent(),
+  }) : activatedAt = Value(activatedAt);
+  static Insertable<BirComplianceStateData> custom({
+    Expression<int>? id,
+    Expression<DateTime>? activatedAt,
+    Expression<int>? highestInvoiceNumber,
+    Expression<int>? grandTotalCents,
+    Expression<int>? highestZNumber,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (activatedAt != null) 'activated_at': activatedAt,
+      if (highestInvoiceNumber != null)
+        'highest_invoice_number': highestInvoiceNumber,
+      if (grandTotalCents != null) 'grand_total_cents': grandTotalCents,
+      if (highestZNumber != null) 'highest_z_number': highestZNumber,
+    });
+  }
+
+  BirComplianceStateCompanion copyWith(
+      {Value<int>? id,
+      Value<DateTime>? activatedAt,
+      Value<int>? highestInvoiceNumber,
+      Value<int>? grandTotalCents,
+      Value<int>? highestZNumber}) {
+    return BirComplianceStateCompanion(
+      id: id ?? this.id,
+      activatedAt: activatedAt ?? this.activatedAt,
+      highestInvoiceNumber: highestInvoiceNumber ?? this.highestInvoiceNumber,
+      grandTotalCents: grandTotalCents ?? this.grandTotalCents,
+      highestZNumber: highestZNumber ?? this.highestZNumber,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (activatedAt.present) {
+      map['activated_at'] = Variable<DateTime>(activatedAt.value);
+    }
+    if (highestInvoiceNumber.present) {
+      map['highest_invoice_number'] = Variable<int>(highestInvoiceNumber.value);
+    }
+    if (grandTotalCents.present) {
+      map['grand_total_cents'] = Variable<int>(grandTotalCents.value);
+    }
+    if (highestZNumber.present) {
+      map['highest_z_number'] = Variable<int>(highestZNumber.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('BirComplianceStateCompanion(')
+          ..write('id: $id, ')
+          ..write('activatedAt: $activatedAt, ')
+          ..write('highestInvoiceNumber: $highestInvoiceNumber, ')
+          ..write('grandTotalCents: $grandTotalCents, ')
+          ..write('highestZNumber: $highestZNumber')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $ZReadingsTable extends ZReadings
+    with TableInfo<$ZReadingsTable, ZReading> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ZReadingsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      clientDefault: () => _uuid());
+  static const VerificationMeta _numberMeta = const VerificationMeta('number');
+  @override
+  late final GeneratedColumn<int> number = GeneratedColumn<int>(
+      'number', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: true,
+      defaultConstraints: GeneratedColumn.constraintIsAlways('UNIQUE'));
+  static const VerificationMeta _cashSessionIdMeta =
+      const VerificationMeta('cashSessionId');
+  @override
+  late final GeneratedColumn<String> cashSessionId = GeneratedColumn<String>(
+      'cash_session_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints: GeneratedColumn.constraintIsAlways('UNIQUE'));
+  static const VerificationMeta _generatedAtMeta =
+      const VerificationMeta('generatedAt');
+  @override
+  late final GeneratedColumn<DateTime> generatedAt = GeneratedColumn<DateTime>(
+      'generated_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      clientDefault: () => DateTime.now());
+  static const VerificationMeta _generatedByUserIdMeta =
+      const VerificationMeta('generatedByUserId');
+  @override
+  late final GeneratedColumn<String> generatedByUserId =
+      GeneratedColumn<String>('generated_by_user_id', aliasedName, false,
+          type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _beginningInvoiceNumberMeta =
+      const VerificationMeta('beginningInvoiceNumber');
+  @override
+  late final GeneratedColumn<int> beginningInvoiceNumber = GeneratedColumn<int>(
+      'beginning_invoice_number', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _endingInvoiceNumberMeta =
+      const VerificationMeta('endingInvoiceNumber');
+  @override
+  late final GeneratedColumn<int> endingInvoiceNumber = GeneratedColumn<int>(
+      'ending_invoice_number', aliasedName, true,
+      type: DriftSqlType.int, requiredDuringInsert: false);
+  static const VerificationMeta _periodSalesCentsMeta =
+      const VerificationMeta('periodSalesCents');
+  @override
+  late final GeneratedColumn<int> periodSalesCents = GeneratedColumn<int>(
+      'period_sales_cents', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _reversalCentsMeta =
+      const VerificationMeta('reversalCents');
+  @override
+  late final GeneratedColumn<int> reversalCents = GeneratedColumn<int>(
+      'reversal_cents', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _grandTotalCentsMeta =
+      const VerificationMeta('grandTotalCents');
+  @override
+  late final GeneratedColumn<int> grandTotalCents = GeneratedColumn<int>(
+      'grand_total_cents', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _expectedCashCentsMeta =
+      const VerificationMeta('expectedCashCents');
+  @override
+  late final GeneratedColumn<int> expectedCashCents = GeneratedColumn<int>(
+      'expected_cash_cents', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _actualCashCentsMeta =
+      const VerificationMeta('actualCashCents');
+  @override
+  late final GeneratedColumn<int> actualCashCents = GeneratedColumn<int>(
+      'actual_cash_cents', aliasedName, false,
+      type: DriftSqlType.int, requiredDuringInsert: true);
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        number,
+        cashSessionId,
+        generatedAt,
+        generatedByUserId,
+        beginningInvoiceNumber,
+        endingInvoiceNumber,
+        periodSalesCents,
+        reversalCents,
+        grandTotalCents,
+        expectedCashCents,
+        actualCashCents
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'z_readings';
+  @override
+  VerificationContext validateIntegrity(Insertable<ZReading> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('number')) {
+      context.handle(_numberMeta,
+          number.isAcceptableOrUnknown(data['number']!, _numberMeta));
+    } else if (isInserting) {
+      context.missing(_numberMeta);
+    }
+    if (data.containsKey('cash_session_id')) {
+      context.handle(
+          _cashSessionIdMeta,
+          cashSessionId.isAcceptableOrUnknown(
+              data['cash_session_id']!, _cashSessionIdMeta));
+    } else if (isInserting) {
+      context.missing(_cashSessionIdMeta);
+    }
+    if (data.containsKey('generated_at')) {
+      context.handle(
+          _generatedAtMeta,
+          generatedAt.isAcceptableOrUnknown(
+              data['generated_at']!, _generatedAtMeta));
+    }
+    if (data.containsKey('generated_by_user_id')) {
+      context.handle(
+          _generatedByUserIdMeta,
+          generatedByUserId.isAcceptableOrUnknown(
+              data['generated_by_user_id']!, _generatedByUserIdMeta));
+    } else if (isInserting) {
+      context.missing(_generatedByUserIdMeta);
+    }
+    if (data.containsKey('beginning_invoice_number')) {
+      context.handle(
+          _beginningInvoiceNumberMeta,
+          beginningInvoiceNumber.isAcceptableOrUnknown(
+              data['beginning_invoice_number']!, _beginningInvoiceNumberMeta));
+    }
+    if (data.containsKey('ending_invoice_number')) {
+      context.handle(
+          _endingInvoiceNumberMeta,
+          endingInvoiceNumber.isAcceptableOrUnknown(
+              data['ending_invoice_number']!, _endingInvoiceNumberMeta));
+    }
+    if (data.containsKey('period_sales_cents')) {
+      context.handle(
+          _periodSalesCentsMeta,
+          periodSalesCents.isAcceptableOrUnknown(
+              data['period_sales_cents']!, _periodSalesCentsMeta));
+    } else if (isInserting) {
+      context.missing(_periodSalesCentsMeta);
+    }
+    if (data.containsKey('reversal_cents')) {
+      context.handle(
+          _reversalCentsMeta,
+          reversalCents.isAcceptableOrUnknown(
+              data['reversal_cents']!, _reversalCentsMeta));
+    } else if (isInserting) {
+      context.missing(_reversalCentsMeta);
+    }
+    if (data.containsKey('grand_total_cents')) {
+      context.handle(
+          _grandTotalCentsMeta,
+          grandTotalCents.isAcceptableOrUnknown(
+              data['grand_total_cents']!, _grandTotalCentsMeta));
+    } else if (isInserting) {
+      context.missing(_grandTotalCentsMeta);
+    }
+    if (data.containsKey('expected_cash_cents')) {
+      context.handle(
+          _expectedCashCentsMeta,
+          expectedCashCents.isAcceptableOrUnknown(
+              data['expected_cash_cents']!, _expectedCashCentsMeta));
+    } else if (isInserting) {
+      context.missing(_expectedCashCentsMeta);
+    }
+    if (data.containsKey('actual_cash_cents')) {
+      context.handle(
+          _actualCashCentsMeta,
+          actualCashCents.isAcceptableOrUnknown(
+              data['actual_cash_cents']!, _actualCashCentsMeta));
+    } else if (isInserting) {
+      context.missing(_actualCashCentsMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  ZReading map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ZReading(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      number: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}number'])!,
+      cashSessionId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}cash_session_id'])!,
+      generatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}generated_at'])!,
+      generatedByUserId: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}generated_by_user_id'])!,
+      beginningInvoiceNumber: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}beginning_invoice_number']),
+      endingInvoiceNumber: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}ending_invoice_number']),
+      periodSalesCents: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}period_sales_cents'])!,
+      reversalCents: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}reversal_cents'])!,
+      grandTotalCents: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}grand_total_cents'])!,
+      expectedCashCents: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}expected_cash_cents'])!,
+      actualCashCents: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}actual_cash_cents'])!,
+    );
+  }
+
+  @override
+  $ZReadingsTable createAlias(String alias) {
+    return $ZReadingsTable(attachedDatabase, alias);
+  }
+}
+
+class ZReading extends DataClass implements Insertable<ZReading> {
+  final String id;
+  final int number;
+  final String cashSessionId;
+  final DateTime generatedAt;
+  final String generatedByUserId;
+  final int? beginningInvoiceNumber;
+  final int? endingInvoiceNumber;
+  final int periodSalesCents;
+  final int reversalCents;
+  final int grandTotalCents;
+  final int expectedCashCents;
+  final int actualCashCents;
+  const ZReading(
+      {required this.id,
+      required this.number,
+      required this.cashSessionId,
+      required this.generatedAt,
+      required this.generatedByUserId,
+      this.beginningInvoiceNumber,
+      this.endingInvoiceNumber,
+      required this.periodSalesCents,
+      required this.reversalCents,
+      required this.grandTotalCents,
+      required this.expectedCashCents,
+      required this.actualCashCents});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['number'] = Variable<int>(number);
+    map['cash_session_id'] = Variable<String>(cashSessionId);
+    map['generated_at'] = Variable<DateTime>(generatedAt);
+    map['generated_by_user_id'] = Variable<String>(generatedByUserId);
+    if (!nullToAbsent || beginningInvoiceNumber != null) {
+      map['beginning_invoice_number'] = Variable<int>(beginningInvoiceNumber);
+    }
+    if (!nullToAbsent || endingInvoiceNumber != null) {
+      map['ending_invoice_number'] = Variable<int>(endingInvoiceNumber);
+    }
+    map['period_sales_cents'] = Variable<int>(periodSalesCents);
+    map['reversal_cents'] = Variable<int>(reversalCents);
+    map['grand_total_cents'] = Variable<int>(grandTotalCents);
+    map['expected_cash_cents'] = Variable<int>(expectedCashCents);
+    map['actual_cash_cents'] = Variable<int>(actualCashCents);
+    return map;
+  }
+
+  ZReadingsCompanion toCompanion(bool nullToAbsent) {
+    return ZReadingsCompanion(
+      id: Value(id),
+      number: Value(number),
+      cashSessionId: Value(cashSessionId),
+      generatedAt: Value(generatedAt),
+      generatedByUserId: Value(generatedByUserId),
+      beginningInvoiceNumber: beginningInvoiceNumber == null && nullToAbsent
+          ? const Value.absent()
+          : Value(beginningInvoiceNumber),
+      endingInvoiceNumber: endingInvoiceNumber == null && nullToAbsent
+          ? const Value.absent()
+          : Value(endingInvoiceNumber),
+      periodSalesCents: Value(periodSalesCents),
+      reversalCents: Value(reversalCents),
+      grandTotalCents: Value(grandTotalCents),
+      expectedCashCents: Value(expectedCashCents),
+      actualCashCents: Value(actualCashCents),
+    );
+  }
+
+  factory ZReading.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ZReading(
+      id: serializer.fromJson<String>(json['id']),
+      number: serializer.fromJson<int>(json['number']),
+      cashSessionId: serializer.fromJson<String>(json['cashSessionId']),
+      generatedAt: serializer.fromJson<DateTime>(json['generatedAt']),
+      generatedByUserId: serializer.fromJson<String>(json['generatedByUserId']),
+      beginningInvoiceNumber:
+          serializer.fromJson<int?>(json['beginningInvoiceNumber']),
+      endingInvoiceNumber:
+          serializer.fromJson<int?>(json['endingInvoiceNumber']),
+      periodSalesCents: serializer.fromJson<int>(json['periodSalesCents']),
+      reversalCents: serializer.fromJson<int>(json['reversalCents']),
+      grandTotalCents: serializer.fromJson<int>(json['grandTotalCents']),
+      expectedCashCents: serializer.fromJson<int>(json['expectedCashCents']),
+      actualCashCents: serializer.fromJson<int>(json['actualCashCents']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'number': serializer.toJson<int>(number),
+      'cashSessionId': serializer.toJson<String>(cashSessionId),
+      'generatedAt': serializer.toJson<DateTime>(generatedAt),
+      'generatedByUserId': serializer.toJson<String>(generatedByUserId),
+      'beginningInvoiceNumber': serializer.toJson<int?>(beginningInvoiceNumber),
+      'endingInvoiceNumber': serializer.toJson<int?>(endingInvoiceNumber),
+      'periodSalesCents': serializer.toJson<int>(periodSalesCents),
+      'reversalCents': serializer.toJson<int>(reversalCents),
+      'grandTotalCents': serializer.toJson<int>(grandTotalCents),
+      'expectedCashCents': serializer.toJson<int>(expectedCashCents),
+      'actualCashCents': serializer.toJson<int>(actualCashCents),
+    };
+  }
+
+  ZReading copyWith(
+          {String? id,
+          int? number,
+          String? cashSessionId,
+          DateTime? generatedAt,
+          String? generatedByUserId,
+          Value<int?> beginningInvoiceNumber = const Value.absent(),
+          Value<int?> endingInvoiceNumber = const Value.absent(),
+          int? periodSalesCents,
+          int? reversalCents,
+          int? grandTotalCents,
+          int? expectedCashCents,
+          int? actualCashCents}) =>
+      ZReading(
+        id: id ?? this.id,
+        number: number ?? this.number,
+        cashSessionId: cashSessionId ?? this.cashSessionId,
+        generatedAt: generatedAt ?? this.generatedAt,
+        generatedByUserId: generatedByUserId ?? this.generatedByUserId,
+        beginningInvoiceNumber: beginningInvoiceNumber.present
+            ? beginningInvoiceNumber.value
+            : this.beginningInvoiceNumber,
+        endingInvoiceNumber: endingInvoiceNumber.present
+            ? endingInvoiceNumber.value
+            : this.endingInvoiceNumber,
+        periodSalesCents: periodSalesCents ?? this.periodSalesCents,
+        reversalCents: reversalCents ?? this.reversalCents,
+        grandTotalCents: grandTotalCents ?? this.grandTotalCents,
+        expectedCashCents: expectedCashCents ?? this.expectedCashCents,
+        actualCashCents: actualCashCents ?? this.actualCashCents,
+      );
+  ZReading copyWithCompanion(ZReadingsCompanion data) {
+    return ZReading(
+      id: data.id.present ? data.id.value : this.id,
+      number: data.number.present ? data.number.value : this.number,
+      cashSessionId: data.cashSessionId.present
+          ? data.cashSessionId.value
+          : this.cashSessionId,
+      generatedAt:
+          data.generatedAt.present ? data.generatedAt.value : this.generatedAt,
+      generatedByUserId: data.generatedByUserId.present
+          ? data.generatedByUserId.value
+          : this.generatedByUserId,
+      beginningInvoiceNumber: data.beginningInvoiceNumber.present
+          ? data.beginningInvoiceNumber.value
+          : this.beginningInvoiceNumber,
+      endingInvoiceNumber: data.endingInvoiceNumber.present
+          ? data.endingInvoiceNumber.value
+          : this.endingInvoiceNumber,
+      periodSalesCents: data.periodSalesCents.present
+          ? data.periodSalesCents.value
+          : this.periodSalesCents,
+      reversalCents: data.reversalCents.present
+          ? data.reversalCents.value
+          : this.reversalCents,
+      grandTotalCents: data.grandTotalCents.present
+          ? data.grandTotalCents.value
+          : this.grandTotalCents,
+      expectedCashCents: data.expectedCashCents.present
+          ? data.expectedCashCents.value
+          : this.expectedCashCents,
+      actualCashCents: data.actualCashCents.present
+          ? data.actualCashCents.value
+          : this.actualCashCents,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ZReading(')
+          ..write('id: $id, ')
+          ..write('number: $number, ')
+          ..write('cashSessionId: $cashSessionId, ')
+          ..write('generatedAt: $generatedAt, ')
+          ..write('generatedByUserId: $generatedByUserId, ')
+          ..write('beginningInvoiceNumber: $beginningInvoiceNumber, ')
+          ..write('endingInvoiceNumber: $endingInvoiceNumber, ')
+          ..write('periodSalesCents: $periodSalesCents, ')
+          ..write('reversalCents: $reversalCents, ')
+          ..write('grandTotalCents: $grandTotalCents, ')
+          ..write('expectedCashCents: $expectedCashCents, ')
+          ..write('actualCashCents: $actualCashCents')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      id,
+      number,
+      cashSessionId,
+      generatedAt,
+      generatedByUserId,
+      beginningInvoiceNumber,
+      endingInvoiceNumber,
+      periodSalesCents,
+      reversalCents,
+      grandTotalCents,
+      expectedCashCents,
+      actualCashCents);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ZReading &&
+          other.id == this.id &&
+          other.number == this.number &&
+          other.cashSessionId == this.cashSessionId &&
+          other.generatedAt == this.generatedAt &&
+          other.generatedByUserId == this.generatedByUserId &&
+          other.beginningInvoiceNumber == this.beginningInvoiceNumber &&
+          other.endingInvoiceNumber == this.endingInvoiceNumber &&
+          other.periodSalesCents == this.periodSalesCents &&
+          other.reversalCents == this.reversalCents &&
+          other.grandTotalCents == this.grandTotalCents &&
+          other.expectedCashCents == this.expectedCashCents &&
+          other.actualCashCents == this.actualCashCents);
+}
+
+class ZReadingsCompanion extends UpdateCompanion<ZReading> {
+  final Value<String> id;
+  final Value<int> number;
+  final Value<String> cashSessionId;
+  final Value<DateTime> generatedAt;
+  final Value<String> generatedByUserId;
+  final Value<int?> beginningInvoiceNumber;
+  final Value<int?> endingInvoiceNumber;
+  final Value<int> periodSalesCents;
+  final Value<int> reversalCents;
+  final Value<int> grandTotalCents;
+  final Value<int> expectedCashCents;
+  final Value<int> actualCashCents;
+  final Value<int> rowid;
+  const ZReadingsCompanion({
+    this.id = const Value.absent(),
+    this.number = const Value.absent(),
+    this.cashSessionId = const Value.absent(),
+    this.generatedAt = const Value.absent(),
+    this.generatedByUserId = const Value.absent(),
+    this.beginningInvoiceNumber = const Value.absent(),
+    this.endingInvoiceNumber = const Value.absent(),
+    this.periodSalesCents = const Value.absent(),
+    this.reversalCents = const Value.absent(),
+    this.grandTotalCents = const Value.absent(),
+    this.expectedCashCents = const Value.absent(),
+    this.actualCashCents = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ZReadingsCompanion.insert({
+    this.id = const Value.absent(),
+    required int number,
+    required String cashSessionId,
+    this.generatedAt = const Value.absent(),
+    required String generatedByUserId,
+    this.beginningInvoiceNumber = const Value.absent(),
+    this.endingInvoiceNumber = const Value.absent(),
+    required int periodSalesCents,
+    required int reversalCents,
+    required int grandTotalCents,
+    required int expectedCashCents,
+    required int actualCashCents,
+    this.rowid = const Value.absent(),
+  })  : number = Value(number),
+        cashSessionId = Value(cashSessionId),
+        generatedByUserId = Value(generatedByUserId),
+        periodSalesCents = Value(periodSalesCents),
+        reversalCents = Value(reversalCents),
+        grandTotalCents = Value(grandTotalCents),
+        expectedCashCents = Value(expectedCashCents),
+        actualCashCents = Value(actualCashCents);
+  static Insertable<ZReading> custom({
+    Expression<String>? id,
+    Expression<int>? number,
+    Expression<String>? cashSessionId,
+    Expression<DateTime>? generatedAt,
+    Expression<String>? generatedByUserId,
+    Expression<int>? beginningInvoiceNumber,
+    Expression<int>? endingInvoiceNumber,
+    Expression<int>? periodSalesCents,
+    Expression<int>? reversalCents,
+    Expression<int>? grandTotalCents,
+    Expression<int>? expectedCashCents,
+    Expression<int>? actualCashCents,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (number != null) 'number': number,
+      if (cashSessionId != null) 'cash_session_id': cashSessionId,
+      if (generatedAt != null) 'generated_at': generatedAt,
+      if (generatedByUserId != null) 'generated_by_user_id': generatedByUserId,
+      if (beginningInvoiceNumber != null)
+        'beginning_invoice_number': beginningInvoiceNumber,
+      if (endingInvoiceNumber != null)
+        'ending_invoice_number': endingInvoiceNumber,
+      if (periodSalesCents != null) 'period_sales_cents': periodSalesCents,
+      if (reversalCents != null) 'reversal_cents': reversalCents,
+      if (grandTotalCents != null) 'grand_total_cents': grandTotalCents,
+      if (expectedCashCents != null) 'expected_cash_cents': expectedCashCents,
+      if (actualCashCents != null) 'actual_cash_cents': actualCashCents,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ZReadingsCompanion copyWith(
+      {Value<String>? id,
+      Value<int>? number,
+      Value<String>? cashSessionId,
+      Value<DateTime>? generatedAt,
+      Value<String>? generatedByUserId,
+      Value<int?>? beginningInvoiceNumber,
+      Value<int?>? endingInvoiceNumber,
+      Value<int>? periodSalesCents,
+      Value<int>? reversalCents,
+      Value<int>? grandTotalCents,
+      Value<int>? expectedCashCents,
+      Value<int>? actualCashCents,
+      Value<int>? rowid}) {
+    return ZReadingsCompanion(
+      id: id ?? this.id,
+      number: number ?? this.number,
+      cashSessionId: cashSessionId ?? this.cashSessionId,
+      generatedAt: generatedAt ?? this.generatedAt,
+      generatedByUserId: generatedByUserId ?? this.generatedByUserId,
+      beginningInvoiceNumber:
+          beginningInvoiceNumber ?? this.beginningInvoiceNumber,
+      endingInvoiceNumber: endingInvoiceNumber ?? this.endingInvoiceNumber,
+      periodSalesCents: periodSalesCents ?? this.periodSalesCents,
+      reversalCents: reversalCents ?? this.reversalCents,
+      grandTotalCents: grandTotalCents ?? this.grandTotalCents,
+      expectedCashCents: expectedCashCents ?? this.expectedCashCents,
+      actualCashCents: actualCashCents ?? this.actualCashCents,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (number.present) {
+      map['number'] = Variable<int>(number.value);
+    }
+    if (cashSessionId.present) {
+      map['cash_session_id'] = Variable<String>(cashSessionId.value);
+    }
+    if (generatedAt.present) {
+      map['generated_at'] = Variable<DateTime>(generatedAt.value);
+    }
+    if (generatedByUserId.present) {
+      map['generated_by_user_id'] = Variable<String>(generatedByUserId.value);
+    }
+    if (beginningInvoiceNumber.present) {
+      map['beginning_invoice_number'] =
+          Variable<int>(beginningInvoiceNumber.value);
+    }
+    if (endingInvoiceNumber.present) {
+      map['ending_invoice_number'] = Variable<int>(endingInvoiceNumber.value);
+    }
+    if (periodSalesCents.present) {
+      map['period_sales_cents'] = Variable<int>(periodSalesCents.value);
+    }
+    if (reversalCents.present) {
+      map['reversal_cents'] = Variable<int>(reversalCents.value);
+    }
+    if (grandTotalCents.present) {
+      map['grand_total_cents'] = Variable<int>(grandTotalCents.value);
+    }
+    if (expectedCashCents.present) {
+      map['expected_cash_cents'] = Variable<int>(expectedCashCents.value);
+    }
+    if (actualCashCents.present) {
+      map['actual_cash_cents'] = Variable<int>(actualCashCents.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ZReadingsCompanion(')
+          ..write('id: $id, ')
+          ..write('number: $number, ')
+          ..write('cashSessionId: $cashSessionId, ')
+          ..write('generatedAt: $generatedAt, ')
+          ..write('generatedByUserId: $generatedByUserId, ')
+          ..write('beginningInvoiceNumber: $beginningInvoiceNumber, ')
+          ..write('endingInvoiceNumber: $endingInvoiceNumber, ')
+          ..write('periodSalesCents: $periodSalesCents, ')
+          ..write('reversalCents: $reversalCents, ')
+          ..write('grandTotalCents: $grandTotalCents, ')
+          ..write('expectedCashCents: $expectedCashCents, ')
+          ..write('actualCashCents: $actualCashCents, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -4841,6 +5845,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $CashMovementsTable cashMovements = $CashMovementsTable(this);
   late final $AuditLogsTable auditLogs = $AuditLogsTable(this);
   late final $SettingsTable settings = $SettingsTable(this);
+  late final $BirComplianceStateTable birComplianceState =
+      $BirComplianceStateTable(this);
+  late final $ZReadingsTable zReadings = $ZReadingsTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -4858,7 +5865,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         cashSessions,
         cashMovements,
         auditLogs,
-        settings
+        settings,
+        birComplianceState,
+        zReadings
       ];
 }
 
@@ -6760,6 +7769,7 @@ typedef $$SalesTableCreateCompanionBuilder = SalesCompanion Function({
   Value<String> id,
   required String cashierId,
   required int totalCents,
+  Value<int?> birInvoiceNumber,
   Value<String> status,
   Value<DateTime> createdAt,
   Value<int> rowid,
@@ -6768,6 +7778,7 @@ typedef $$SalesTableUpdateCompanionBuilder = SalesCompanion Function({
   Value<String> id,
   Value<String> cashierId,
   Value<int> totalCents,
+  Value<int?> birInvoiceNumber,
   Value<String> status,
   Value<DateTime> createdAt,
   Value<int> rowid,
@@ -6863,6 +7874,10 @@ class $$SalesTableFilterComposer extends Composer<_$AppDatabase, $SalesTable> {
 
   ColumnFilters<int> get totalCents => $composableBuilder(
       column: $table.totalCents, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get birInvoiceNumber => $composableBuilder(
+      column: $table.birInvoiceNumber,
+      builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get status => $composableBuilder(
       column: $table.status, builder: (column) => ColumnFilters(column));
@@ -6990,6 +8005,10 @@ class $$SalesTableOrderingComposer
   ColumnOrderings<int> get totalCents => $composableBuilder(
       column: $table.totalCents, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<int> get birInvoiceNumber => $composableBuilder(
+      column: $table.birInvoiceNumber,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get status => $composableBuilder(
       column: $table.status, builder: (column) => ColumnOrderings(column));
 
@@ -7031,6 +8050,9 @@ class $$SalesTableAnnotationComposer
 
   GeneratedColumn<int> get totalCents => $composableBuilder(
       column: $table.totalCents, builder: (column) => column);
+
+  GeneratedColumn<int> get birInvoiceNumber => $composableBuilder(
+      column: $table.birInvoiceNumber, builder: (column) => column);
 
   GeneratedColumn<String> get status =>
       $composableBuilder(column: $table.status, builder: (column) => column);
@@ -7174,6 +8196,7 @@ class $$SalesTableTableManager extends RootTableManager<
             Value<String> id = const Value.absent(),
             Value<String> cashierId = const Value.absent(),
             Value<int> totalCents = const Value.absent(),
+            Value<int?> birInvoiceNumber = const Value.absent(),
             Value<String> status = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
@@ -7182,6 +8205,7 @@ class $$SalesTableTableManager extends RootTableManager<
             id: id,
             cashierId: cashierId,
             totalCents: totalCents,
+            birInvoiceNumber: birInvoiceNumber,
             status: status,
             createdAt: createdAt,
             rowid: rowid,
@@ -7190,6 +8214,7 @@ class $$SalesTableTableManager extends RootTableManager<
             Value<String> id = const Value.absent(),
             required String cashierId,
             required int totalCents,
+            Value<int?> birInvoiceNumber = const Value.absent(),
             Value<String> status = const Value.absent(),
             Value<DateTime> createdAt = const Value.absent(),
             Value<int> rowid = const Value.absent(),
@@ -7198,6 +8223,7 @@ class $$SalesTableTableManager extends RootTableManager<
             id: id,
             cashierId: cashierId,
             totalCents: totalCents,
+            birInvoiceNumber: birInvoiceNumber,
             status: status,
             createdAt: createdAt,
             rowid: rowid,
@@ -9496,6 +10522,469 @@ typedef $$SettingsTableProcessedTableManager = ProcessedTableManager<
     (Setting, BaseReferences<_$AppDatabase, $SettingsTable, Setting>),
     Setting,
     PrefetchHooks Function()>;
+typedef $$BirComplianceStateTableCreateCompanionBuilder
+    = BirComplianceStateCompanion Function({
+  Value<int> id,
+  required DateTime activatedAt,
+  Value<int> highestInvoiceNumber,
+  Value<int> grandTotalCents,
+  Value<int> highestZNumber,
+});
+typedef $$BirComplianceStateTableUpdateCompanionBuilder
+    = BirComplianceStateCompanion Function({
+  Value<int> id,
+  Value<DateTime> activatedAt,
+  Value<int> highestInvoiceNumber,
+  Value<int> grandTotalCents,
+  Value<int> highestZNumber,
+});
+
+class $$BirComplianceStateTableFilterComposer
+    extends Composer<_$AppDatabase, $BirComplianceStateTable> {
+  $$BirComplianceStateTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get activatedAt => $composableBuilder(
+      column: $table.activatedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get highestInvoiceNumber => $composableBuilder(
+      column: $table.highestInvoiceNumber,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get grandTotalCents => $composableBuilder(
+      column: $table.grandTotalCents,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get highestZNumber => $composableBuilder(
+      column: $table.highestZNumber,
+      builder: (column) => ColumnFilters(column));
+}
+
+class $$BirComplianceStateTableOrderingComposer
+    extends Composer<_$AppDatabase, $BirComplianceStateTable> {
+  $$BirComplianceStateTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get activatedAt => $composableBuilder(
+      column: $table.activatedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get highestInvoiceNumber => $composableBuilder(
+      column: $table.highestInvoiceNumber,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get grandTotalCents => $composableBuilder(
+      column: $table.grandTotalCents,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get highestZNumber => $composableBuilder(
+      column: $table.highestZNumber,
+      builder: (column) => ColumnOrderings(column));
+}
+
+class $$BirComplianceStateTableAnnotationComposer
+    extends Composer<_$AppDatabase, $BirComplianceStateTable> {
+  $$BirComplianceStateTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get activatedAt => $composableBuilder(
+      column: $table.activatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get highestInvoiceNumber => $composableBuilder(
+      column: $table.highestInvoiceNumber, builder: (column) => column);
+
+  GeneratedColumn<int> get grandTotalCents => $composableBuilder(
+      column: $table.grandTotalCents, builder: (column) => column);
+
+  GeneratedColumn<int> get highestZNumber => $composableBuilder(
+      column: $table.highestZNumber, builder: (column) => column);
+}
+
+class $$BirComplianceStateTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $BirComplianceStateTable,
+    BirComplianceStateData,
+    $$BirComplianceStateTableFilterComposer,
+    $$BirComplianceStateTableOrderingComposer,
+    $$BirComplianceStateTableAnnotationComposer,
+    $$BirComplianceStateTableCreateCompanionBuilder,
+    $$BirComplianceStateTableUpdateCompanionBuilder,
+    (
+      BirComplianceStateData,
+      BaseReferences<_$AppDatabase, $BirComplianceStateTable,
+          BirComplianceStateData>
+    ),
+    BirComplianceStateData,
+    PrefetchHooks Function()> {
+  $$BirComplianceStateTableTableManager(
+      _$AppDatabase db, $BirComplianceStateTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$BirComplianceStateTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$BirComplianceStateTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$BirComplianceStateTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            Value<DateTime> activatedAt = const Value.absent(),
+            Value<int> highestInvoiceNumber = const Value.absent(),
+            Value<int> grandTotalCents = const Value.absent(),
+            Value<int> highestZNumber = const Value.absent(),
+          }) =>
+              BirComplianceStateCompanion(
+            id: id,
+            activatedAt: activatedAt,
+            highestInvoiceNumber: highestInvoiceNumber,
+            grandTotalCents: grandTotalCents,
+            highestZNumber: highestZNumber,
+          ),
+          createCompanionCallback: ({
+            Value<int> id = const Value.absent(),
+            required DateTime activatedAt,
+            Value<int> highestInvoiceNumber = const Value.absent(),
+            Value<int> grandTotalCents = const Value.absent(),
+            Value<int> highestZNumber = const Value.absent(),
+          }) =>
+              BirComplianceStateCompanion.insert(
+            id: id,
+            activatedAt: activatedAt,
+            highestInvoiceNumber: highestInvoiceNumber,
+            grandTotalCents: grandTotalCents,
+            highestZNumber: highestZNumber,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$BirComplianceStateTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $BirComplianceStateTable,
+    BirComplianceStateData,
+    $$BirComplianceStateTableFilterComposer,
+    $$BirComplianceStateTableOrderingComposer,
+    $$BirComplianceStateTableAnnotationComposer,
+    $$BirComplianceStateTableCreateCompanionBuilder,
+    $$BirComplianceStateTableUpdateCompanionBuilder,
+    (
+      BirComplianceStateData,
+      BaseReferences<_$AppDatabase, $BirComplianceStateTable,
+          BirComplianceStateData>
+    ),
+    BirComplianceStateData,
+    PrefetchHooks Function()>;
+typedef $$ZReadingsTableCreateCompanionBuilder = ZReadingsCompanion Function({
+  Value<String> id,
+  required int number,
+  required String cashSessionId,
+  Value<DateTime> generatedAt,
+  required String generatedByUserId,
+  Value<int?> beginningInvoiceNumber,
+  Value<int?> endingInvoiceNumber,
+  required int periodSalesCents,
+  required int reversalCents,
+  required int grandTotalCents,
+  required int expectedCashCents,
+  required int actualCashCents,
+  Value<int> rowid,
+});
+typedef $$ZReadingsTableUpdateCompanionBuilder = ZReadingsCompanion Function({
+  Value<String> id,
+  Value<int> number,
+  Value<String> cashSessionId,
+  Value<DateTime> generatedAt,
+  Value<String> generatedByUserId,
+  Value<int?> beginningInvoiceNumber,
+  Value<int?> endingInvoiceNumber,
+  Value<int> periodSalesCents,
+  Value<int> reversalCents,
+  Value<int> grandTotalCents,
+  Value<int> expectedCashCents,
+  Value<int> actualCashCents,
+  Value<int> rowid,
+});
+
+class $$ZReadingsTableFilterComposer
+    extends Composer<_$AppDatabase, $ZReadingsTable> {
+  $$ZReadingsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get number => $composableBuilder(
+      column: $table.number, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get cashSessionId => $composableBuilder(
+      column: $table.cashSessionId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get generatedAt => $composableBuilder(
+      column: $table.generatedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get generatedByUserId => $composableBuilder(
+      column: $table.generatedByUserId,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get beginningInvoiceNumber => $composableBuilder(
+      column: $table.beginningInvoiceNumber,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get endingInvoiceNumber => $composableBuilder(
+      column: $table.endingInvoiceNumber,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get periodSalesCents => $composableBuilder(
+      column: $table.periodSalesCents,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get reversalCents => $composableBuilder(
+      column: $table.reversalCents, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get grandTotalCents => $composableBuilder(
+      column: $table.grandTotalCents,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get expectedCashCents => $composableBuilder(
+      column: $table.expectedCashCents,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get actualCashCents => $composableBuilder(
+      column: $table.actualCashCents,
+      builder: (column) => ColumnFilters(column));
+}
+
+class $$ZReadingsTableOrderingComposer
+    extends Composer<_$AppDatabase, $ZReadingsTable> {
+  $$ZReadingsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get number => $composableBuilder(
+      column: $table.number, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get cashSessionId => $composableBuilder(
+      column: $table.cashSessionId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get generatedAt => $composableBuilder(
+      column: $table.generatedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get generatedByUserId => $composableBuilder(
+      column: $table.generatedByUserId,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get beginningInvoiceNumber => $composableBuilder(
+      column: $table.beginningInvoiceNumber,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get endingInvoiceNumber => $composableBuilder(
+      column: $table.endingInvoiceNumber,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get periodSalesCents => $composableBuilder(
+      column: $table.periodSalesCents,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get reversalCents => $composableBuilder(
+      column: $table.reversalCents,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get grandTotalCents => $composableBuilder(
+      column: $table.grandTotalCents,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get expectedCashCents => $composableBuilder(
+      column: $table.expectedCashCents,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get actualCashCents => $composableBuilder(
+      column: $table.actualCashCents,
+      builder: (column) => ColumnOrderings(column));
+}
+
+class $$ZReadingsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ZReadingsTable> {
+  $$ZReadingsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get number =>
+      $composableBuilder(column: $table.number, builder: (column) => column);
+
+  GeneratedColumn<String> get cashSessionId => $composableBuilder(
+      column: $table.cashSessionId, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get generatedAt => $composableBuilder(
+      column: $table.generatedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get generatedByUserId => $composableBuilder(
+      column: $table.generatedByUserId, builder: (column) => column);
+
+  GeneratedColumn<int> get beginningInvoiceNumber => $composableBuilder(
+      column: $table.beginningInvoiceNumber, builder: (column) => column);
+
+  GeneratedColumn<int> get endingInvoiceNumber => $composableBuilder(
+      column: $table.endingInvoiceNumber, builder: (column) => column);
+
+  GeneratedColumn<int> get periodSalesCents => $composableBuilder(
+      column: $table.periodSalesCents, builder: (column) => column);
+
+  GeneratedColumn<int> get reversalCents => $composableBuilder(
+      column: $table.reversalCents, builder: (column) => column);
+
+  GeneratedColumn<int> get grandTotalCents => $composableBuilder(
+      column: $table.grandTotalCents, builder: (column) => column);
+
+  GeneratedColumn<int> get expectedCashCents => $composableBuilder(
+      column: $table.expectedCashCents, builder: (column) => column);
+
+  GeneratedColumn<int> get actualCashCents => $composableBuilder(
+      column: $table.actualCashCents, builder: (column) => column);
+}
+
+class $$ZReadingsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $ZReadingsTable,
+    ZReading,
+    $$ZReadingsTableFilterComposer,
+    $$ZReadingsTableOrderingComposer,
+    $$ZReadingsTableAnnotationComposer,
+    $$ZReadingsTableCreateCompanionBuilder,
+    $$ZReadingsTableUpdateCompanionBuilder,
+    (ZReading, BaseReferences<_$AppDatabase, $ZReadingsTable, ZReading>),
+    ZReading,
+    PrefetchHooks Function()> {
+  $$ZReadingsTableTableManager(_$AppDatabase db, $ZReadingsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ZReadingsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ZReadingsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ZReadingsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<int> number = const Value.absent(),
+            Value<String> cashSessionId = const Value.absent(),
+            Value<DateTime> generatedAt = const Value.absent(),
+            Value<String> generatedByUserId = const Value.absent(),
+            Value<int?> beginningInvoiceNumber = const Value.absent(),
+            Value<int?> endingInvoiceNumber = const Value.absent(),
+            Value<int> periodSalesCents = const Value.absent(),
+            Value<int> reversalCents = const Value.absent(),
+            Value<int> grandTotalCents = const Value.absent(),
+            Value<int> expectedCashCents = const Value.absent(),
+            Value<int> actualCashCents = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ZReadingsCompanion(
+            id: id,
+            number: number,
+            cashSessionId: cashSessionId,
+            generatedAt: generatedAt,
+            generatedByUserId: generatedByUserId,
+            beginningInvoiceNumber: beginningInvoiceNumber,
+            endingInvoiceNumber: endingInvoiceNumber,
+            periodSalesCents: periodSalesCents,
+            reversalCents: reversalCents,
+            grandTotalCents: grandTotalCents,
+            expectedCashCents: expectedCashCents,
+            actualCashCents: actualCashCents,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            required int number,
+            required String cashSessionId,
+            Value<DateTime> generatedAt = const Value.absent(),
+            required String generatedByUserId,
+            Value<int?> beginningInvoiceNumber = const Value.absent(),
+            Value<int?> endingInvoiceNumber = const Value.absent(),
+            required int periodSalesCents,
+            required int reversalCents,
+            required int grandTotalCents,
+            required int expectedCashCents,
+            required int actualCashCents,
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              ZReadingsCompanion.insert(
+            id: id,
+            number: number,
+            cashSessionId: cashSessionId,
+            generatedAt: generatedAt,
+            generatedByUserId: generatedByUserId,
+            beginningInvoiceNumber: beginningInvoiceNumber,
+            endingInvoiceNumber: endingInvoiceNumber,
+            periodSalesCents: periodSalesCents,
+            reversalCents: reversalCents,
+            grandTotalCents: grandTotalCents,
+            expectedCashCents: expectedCashCents,
+            actualCashCents: actualCashCents,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ));
+}
+
+typedef $$ZReadingsTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $ZReadingsTable,
+    ZReading,
+    $$ZReadingsTableFilterComposer,
+    $$ZReadingsTableOrderingComposer,
+    $$ZReadingsTableAnnotationComposer,
+    $$ZReadingsTableCreateCompanionBuilder,
+    $$ZReadingsTableUpdateCompanionBuilder,
+    (ZReading, BaseReferences<_$AppDatabase, $ZReadingsTable, ZReading>),
+    ZReading,
+    PrefetchHooks Function()>;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -9526,4 +11015,8 @@ class $AppDatabaseManager {
       $$AuditLogsTableTableManager(_db, _db.auditLogs);
   $$SettingsTableTableManager get settings =>
       $$SettingsTableTableManager(_db, _db.settings);
+  $$BirComplianceStateTableTableManager get birComplianceState =>
+      $$BirComplianceStateTableTableManager(_db, _db.birComplianceState);
+  $$ZReadingsTableTableManager get zReadings =>
+      $$ZReadingsTableTableManager(_db, _db.zReadings);
 }

@@ -16,6 +16,16 @@ class LicenseVerificationResult {
   final Map<String, dynamic>? payload;
   const LicenseVerificationResult(this.status, [this.payload]);
   bool get isValid => status == LicenseStatus.valid;
+  bool get isBirReady {
+    if (!isValid) return false;
+    final expires = payload?['expiresAt'] as String?;
+    if (expires != null &&
+        !DateTime.now().toUtc().isBefore(DateTime.parse(expires).toUtc())) {
+      return false;
+    }
+    return payload?['edition'] == 'bir_ready' ||
+        (payload?['features'] as List?)?.contains('bir_ready') == true;
+  }
 }
 
 /// UTF-8 JSON with these eight fields in this exact order and no whitespace.

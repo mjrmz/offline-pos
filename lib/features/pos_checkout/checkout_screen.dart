@@ -6,26 +6,14 @@ import '../../core/services/sale_service.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/services/catalog_service.dart';
 import '../../shared/utils/safe_message.dart';
+import '../../shared/utils/money.dart';
 import '../../data/daos/pos_repository.dart';
 import '../../hardware/printer/receipt_service.dart';
 import '../../hardware/barcode/camera_scanner.dart';
 import 'dart:io';
 
-String money(int cents) =>
-    '\u20B1${cents ~/ 100}.${(cents % 100).toString().padLeft(2, '0')}';
-int? tryParseMoney(String value) {
-  if (!RegExp(r'^\d+(\.\d{1,2})?$').hasMatch(value.trim())) return null;
-  final parts = value.trim().split('.');
-  final pesos = int.tryParse(parts[0]);
-  final fraction =
-      parts.length == 1 ? 0 : int.tryParse(parts[1].padRight(2, '0'));
-  if (pesos == null ||
-      fraction == null ||
-      pesos > (0x7fffffffffffffff - fraction) ~/ 100) {
-    return null;
-  }
-  return pesos * 100 + fraction;
-}
+String money(int cents) => formatPeso(cents);
+int? tryParseMoney(String value) => tryParsePeso(value);
 
 String? cashValidationMessage(String value, int totalCents) {
   if (value.trim().isEmpty) return 'Enter cash received';

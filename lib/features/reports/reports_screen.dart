@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/services/sales_service.dart';
 import '../../data/daos/sales_repository.dart';
 import '../../shared/utils/safe_message.dart';
-import '../pos_checkout/checkout_screen.dart';
+import '../../shared/utils/money.dart';
 
 class ReportsScreen extends StatefulWidget {
   final SalesService sales;
@@ -67,13 +67,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
             child: Text('Date: ${date.year}-${date.month}-${date.day}')),
         if (report != null) ...[
           Text('Completed sales: ${report!.completedCount}'),
-          Text('Gross sales: ${money(report!.grossCents)}'),
-          Text('Reversed sales: ${money(report!.reversalCents)}'),
-          Text('Net sales: ${money(report!.netCents)}'),
+          Text('Gross sales: ${formatPeso(report!.grossCents)}'),
+          Text('Reversed sales: ${formatPeso(report!.reversalCents)}'),
+          Text('Net sales: ${formatPeso(report!.netCents)}'),
           const Divider(),
           const Text('Cash breakdown'),
           ...report!.paymentBreakdown.entries
-              .map((entry) => Text('${entry.key}: ${money(entry.value)}')),
+              .map((entry) => Text('${entry.key}: ${formatPeso(entry.value)}')),
           const Divider(),
           const Text('Low stock'),
           ...report!.lowStock

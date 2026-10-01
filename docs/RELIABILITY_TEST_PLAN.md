@@ -87,6 +87,10 @@ automated test is not evidence that the physical power and peripheral checks
 passed.
 # Phase 7 disposable installation checks
 
+**Status: Complete.** Automated Phase 7 verification, manual live upgrade
+verification, manual offline BIR verification, and manual restore monotonicity
+verification are complete. The checks below remain repeatable test steps.
+
 1. On the currently activated Non-BIR test installation, add a product,
    stock, a user, two sales, an open cash session, and a manual backup.
    Record counts, stock, receipts, and the SQLite file location.
@@ -103,8 +107,18 @@ passed.
    the accumulated total must include all five issued BIR sales. The Z
    snapshot must remain in history. Keep the before-restore copy.
 
-These manual checks have not yet been performed. In particular, a build and
-an automated restore test do not satisfy the live upgrade exit criterion.
+The completed manual run confirmed that the existing Non-BIR installation
+upgraded in place while preserving products, inventory, users, sales, cash
+sessions, and other local data. Historical Non-BIR sales remained pre-BIR
+without retroactive invoice numbers, and normal POS functions still worked.
+The first and subsequent BIR sales had correct sequential numbers; receipts
+and reprints kept persisted numbers. The accumulating grand total followed
+the documented Phase 7 policy, and Z-readings were generated and retained.
+With the License API and dashboard stopped and the device offline, BIR-ready
+operation continued; restart preserved entitlement and numbering. The older
+backup restore test passed: issued numbers were not reused, the grand total
+did not improperly roll backward, and protected Z-reading/compliance state
+remained safe.
 
 ## Phase 7 destructive durability run (disposable installation only)
 

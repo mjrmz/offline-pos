@@ -3,6 +3,7 @@ import '../../core/models/active_user.dart';
 import '../../data/daos/cash_session_repository.dart';
 import '../../data/database.dart';
 import '../../shared/utils/safe_message.dart';
+import '../../shared/utils/money.dart';
 
 class CashSessionScreen extends StatefulWidget {
   final ActiveUser user;
@@ -48,9 +49,10 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
   }
 
   Future<void> execute(bool close) async {
-    final cents = int.tryParse(amount.text.trim());
-    if (cents == null || cents < 0) {
-      setState(() => error = 'Enter a nonnegative amount in cents');
+    final cents = tryParsePeso(amount.text);
+    if (cents == null) {
+      setState(() =>
+          error = 'Enter a nonnegative peso amount (up to 2 decimal places)');
       return;
     }
     setState(() => busy = true);
@@ -86,28 +88,26 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
       if (active != null) ...[
         Text(
             'Opened by user ${active.session.openedByUserId} at ${active.session.openedAt}'),
-        Text('Starting cash: ${active.session.startingCashCents} cents'),
-        Text('Expected cash: ${active.expectedCents} cents'),
+        Text('Starting cash: ${formatPeso(active.session.startingCashCents)}'),
+        Text('Expected cash: ${formatPeso(active.expectedCents)}'),
       ],
       TextField(
           controller: amount,
-          keyboardType: TextInputType.number,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
           decoration: InputDecoration(
-              labelText: active == null
-                  ? 'Starting cash (cents)'
-                  : 'Actual cash (cents)')),
+              labelText: active == null ? 'Starting cash' : 'Actual cash')),
       FilledButton(
           onPressed: busy ? null : () => execute(active != null),
           child: Text(active == null ? 'Open session' : 'Close session')),
       if (active != null)
-        Text('Variance on close = actual - ${active.expectedCents} cents'),
+        Text('Expected on close: ${formatPeso(active.expectedCents)}'),
       const Divider(),
       const Text('History'),
       for (final row in sessions.where((s) => s.session.closedAt != null))
         ListTile(
             title: Text('${row.session.openedAt}'),
             subtitle: Text(
-                'Expected ${row.expectedCents}, actual ${row.session.actualCashCents}, variance ${row.varianceCents} cents')),
+                'Expected ${formatPeso(row.expectedCents)}\nActual ${formatPeso(row.session.actualCashCents!)}\nVariance ${formatPeso(row.varianceCents!)}')),
       if (zReadings.isNotEmpty) ...[
         const Divider(),
         const Text('Z-reading history'),
@@ -115,7 +115,7 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
           ListTile(
               title: Text('Z ${z.number} · ${z.generatedAt}'),
               subtitle: Text(
-                  'Invoices ${z.beginningInvoiceNumber ?? "none"}–${z.endingInvoiceNumber ?? "none"}; sales ${z.periodSalesCents} cents; reversals ${z.reversalCents} cents; grand total ${z.grandTotalCents} cents')),
+                  'Invoices ${z.beginningInvoiceNumber ?? "none"}–${z.endingInvoiceNumber ?? "none"}\nSales ${formatPeso(z.periodSalesCents)}\nReversals ${formatPeso(z.reversalCents)}\nGrand total ${formatPeso(z.grandTotalCents)}')),
       ],
     ]);
   }

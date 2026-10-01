@@ -1,5 +1,7 @@
 # Roadmap — Master Build Plan (Start to Finish)
 
+For local final-product checks, see the [quick testing guide](QUICK_TEST_GUIDE.md).
+
 This is the complete, locked build order — every product decision made so far
 folded into one phased plan. Each phase should be genuinely done, tested, and
 stable before the next starts. Exit criteria are the bar for "actually done,"
@@ -86,9 +88,22 @@ set. The next real step is Phase 1 — not further feature planning.
   fully; license server can go down without affecting active customers
 
 ## Phase 7 — BIR-ready tier
-- **Software status**: Phase 7 software implementation complete with automated crash/recovery validation; live Non-BIR to BIR-ready
-  upgrade verification on an activated device is still pending. Do not mark
-  the exit criterion complete until that manual run succeeds.
+- **Status**: Complete. The live Non-BIR to BIR-ready upgrade met the exit criterion.
+- **Automated verification**: Complete, including crash/recovery and restore
+  monotonicity tests.
+- **Manual live upgrade verification**: Complete. The existing installation
+  retained products, inventory, users, sales, cash sessions, and other local
+  data. Historical Non-BIR sales stayed pre-BIR without invoice numbers;
+  normal POS functions continued to work. New BIR sales received sequential
+  invoice numbers, receipts and reprints used persisted numbers, the
+  accumulating grand total followed the Phase 7 policy, and Z-readings were
+  generated and retained.
+- **Manual offline BIR verification**: Complete. BIR sales continued with the
+  License API and dashboard stopped and the device offline. Restart retained
+  BIR entitlement and invoice numbering.
+- **Manual restore monotonicity verification**: Complete. Restoring an older
+  backup did not reuse issued invoice numbers or improperly roll back the
+  grand total; protected Z-reading and compliance state remained safe.
 - Sequential, non-resettable invoice numbering
 - Non-resettable accumulating grand total
 - Retained Z-reading

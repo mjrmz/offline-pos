@@ -3,7 +3,7 @@ import '../../core/models/active_user.dart';
 import '../../core/services/sales_service.dart';
 import '../../data/daos/sales_repository.dart';
 import '../../shared/utils/safe_message.dart';
-import '../pos_checkout/checkout_screen.dart';
+import '../../shared/utils/money.dart';
 import '../../hardware/printer/receipt_service.dart';
 
 class SalesHistoryScreen extends StatefulWidget {
@@ -68,10 +68,11 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                             ? 'Pre-BIR / Non-BIR sale'
                             : 'BIR invoice ${detail.summary.sale.birInvoiceNumber}'),
                         Text('Payment: ${detail.summary.paymentMethod}'),
-                        Text('Total: ${money(detail.summary.sale.totalCents)}'),
+                        Text(
+                            'Total: ${formatPeso(detail.summary.sale.totalCents)}'),
                         for (var i = 0; i < detail.items.length; i++)
                           Text(
-                              '${detail.productNames[i]} × ${detail.items[i].quantity} @ ${money(detail.items[i].unitPriceCents)} = ${money(detail.items[i].lineTotalCents)}'),
+                              '${detail.productNames[i]} × ${detail.items[i].quantity} @ ${formatPeso(detail.items[i].unitPriceCents)} = ${formatPeso(detail.items[i].lineTotalCents)}'),
                         if (detail.reversal != null)
                           Text(
                               '${detail.reversal!.kind} by user ${detail.reversal!.actorId} at ${detail.reversal!.createdAt}'),
@@ -159,7 +160,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
         if (error != null)
           Text(error!, style: const TextStyle(color: Colors.red)),
         ...rows.map((row) => ListTile(
-            title: Text('${row.sale.id} · ${money(row.sale.totalCents)}'),
+            title: Text('${row.sale.id} · ${formatPeso(row.sale.totalCents)}'),
             subtitle: Text(
                 '${row.sale.createdAt} · ${row.cashierName} · ${row.sale.status} · ${row.paymentMethod} · ${row.sale.birInvoiceNumber == null ? 'Pre-BIR / Non-BIR sale' : 'BIR invoice ${row.sale.birInvoiceNumber}'}'),
             onTap: () => open(row.sale.id)))

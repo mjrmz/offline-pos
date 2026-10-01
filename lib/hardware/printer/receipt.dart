@@ -1,4 +1,5 @@
 import '../../data/daos/sales_repository.dart';
+import '../../shared/utils/money.dart';
 
 class ReceiptDocument {
   final String reference;
@@ -48,8 +49,7 @@ class ReceiptLine {
   const ReceiptLine(this.name, this.quantity, this.unitCents, this.totalCents);
 }
 
-String receiptMoney(int cents) =>
-    '${cents ~/ 100}.${(cents % 100).toString().padLeft(2, '0')}';
+String receiptMoney(int cents) => formatPeso(cents).replaceFirst('₱', 'PHP ');
 
 class EscPosEncoder {
   List<int> encode(ReceiptDocument receipt, int widthMm) {

@@ -12,3 +12,10 @@ handled by the License API with an HttpOnly signed cookie. The dashboard
 lists and creates customers, issues licenses and displays the generated key
 once, lists licenses and devices, deactivates devices, revokes licenses,
 and displays activation events.
+
+After Issue, copy the highlighted **Activation key** into the POS Refresh
+License dialog. The **License ID** is an internal identifier and cannot
+activate the POS. The activation key appears only in the immediate Issue or
+Rotate activation key response. If it is lost, use **Rotate activation key**
+on that license and copy the new key. The previous key then stops working
+for new activations; already activated devices retain their signed licenses.

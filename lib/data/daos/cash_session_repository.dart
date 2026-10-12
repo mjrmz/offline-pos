@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:drift/drift.dart';
 import '../../core/models/active_user.dart';
 import '../database.dart';
@@ -33,6 +34,54 @@ class CashSessionRepository {
   Future<CashSession?> active() =>
       (db.select(db.cashSessions)..where((s) => s.closedAt.isNull()))
           .getSingleOrNull();
+
+  Future<CashSessionSummary?> currentFor(String userId) async {
+    final rows = await (db.select(db.cashSessions)
+          ..where((s) => s.closedAt.isNull()))
+        .get();
+    if (rows.length > 1) {
+      throw StateError('Multiple open cash sessions require reconciliation');
+    }
+    if (rows.isEmpty || rows.single.openedByUserId != userId) return null;
+    final row = rows.single;
+    return CashSessionSummary(row, await expected(row.id), null);
+  }
+
+  Stream<CashSessionSummary?> watchCurrentFor(String userId) {
+    late final StreamSubscription<dynamic> updates;
+    var revision = 0;
+    late final StreamController<CashSessionSummary?> controller;
+    Future<void> refresh() async {
+      final requested = ++revision;
+      try {
+        final shift = await currentFor(userId);
+        if (requested == revision && !controller.isClosed) {
+          controller.add(shift);
+        }
+      } catch (error, stack) {
+        if (requested == revision && !controller.isClosed) {
+          controller.addError(error, stack);
+        }
+      }
+    }
+
+    controller = StreamController<CashSessionSummary?>(
+      onListen: () {
+        updates = db
+            .tableUpdates(TableUpdateQuery.onAllTables([
+              db.cashSessions,
+              db.cashMovements,
+            ]))
+            .listen((_) => refresh());
+        refresh();
+      },
+      onCancel: () async {
+        revision++;
+        await updates.cancel();
+      },
+    );
+    return controller.stream;
+  }
 
   Future<int> expected(String sessionId) async {
     final session = await (db.select(db.cashSessions)
@@ -133,18 +182,15 @@ class CashSessionRepository {
                 .getSingle();
             await AuthRepository(db).audit(live.id, 'bir.cutover', 'activated');
           }
-          final movements = await (db.select(db.cashMovements)
-                ..where((m) => m.sessionId.equals(row.id)))
+          final sessionSales = await (db.select(db.sales)
+                ..where((s) =>
+                    s.cashSessionId.equals(row.id) &
+                    s.birInvoiceNumber.isNotNull()))
               .get();
           final numbers = <int>[];
           var salesTotal = 0;
           var reversalTotal = 0;
-          for (final movement in movements) {
-            if (movement.saleId == null) continue;
-            final sale = await (db.select(db.sales)
-                  ..where((s) => s.id.equals(movement.saleId!)))
-                .getSingle();
-            if (sale.birInvoiceNumber == null) continue;
+          for (final sale in sessionSales) {
             numbers.add(sale.birInvoiceNumber!);
             salesTotal += sale.totalCents;
             final reversal = await (db.select(db.saleReversals)
@@ -152,6 +198,11 @@ class CashSessionRepository {
                 .getSingleOrNull();
             reversalTotal += reversal?.amountCents ?? 0;
           }
+          final itemRefunds = await (db.select(db.saleItemRefunds)
+                ..where((r) => r.cashSessionId.equals(row.id)))
+              .get();
+          reversalTotal += itemRefunds.fold<int>(
+              0, (sum, refund) => sum + refund.amountCents);
           numbers.sort();
           final zNumber = state.highestZNumber + 1;
           reservedZId = const Uuid().v4();

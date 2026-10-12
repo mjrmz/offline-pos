@@ -143,11 +143,24 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
   @override
   Widget build(BuildContext context) =>
       ListView(padding: const EdgeInsets.all(16), children: [
-        const Text('Recovery and health', style: TextStyle(fontSize: 22)),
-        Text('Database: ${widget.databaseStatus}'),
-        Text('License: ${widget.licenseStatus}'),
-        Text(
-            'Backups: ${entries.where((e) => e.$2 != null).length} valid, ${entries.where((e) => e.$2 == null).length} invalid'),
+        Text('System health', style: Theme.of(context).textTheme.headlineSmall),
+        Card(
+            child: Column(children: [
+          ListTile(
+              leading: const Icon(Icons.storage),
+              title: const Text('Database'),
+              trailing: Text(widget.databaseStatus)),
+          ListTile(
+              leading: const Icon(Icons.verified_user),
+              title: const Text('License'),
+              trailing: Text(widget.licenseStatus)),
+          ListTile(
+              leading: const Icon(Icons.backup),
+              title: const Text('Backups'),
+              trailing:
+                  Text('${entries.where((e) => e.$2 != null).length} valid, '
+                      '${entries.where((e) => e.$2 == null).length} invalid')),
+        ])),
         if (message != null) Text(message!),
         if (widget.auth == null) ...[
           TextField(
@@ -179,9 +192,20 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
           FilledButton(
               onPressed: busy ? null : create,
               child: const Text('Create manual backup')),
+        const SizedBox(height: 16),
+        Text('Backups', style: Theme.of(context).textTheme.titleLarge),
+        if (entries.isEmpty)
+          const Card(
+              child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                      'No backups found. Create a manual backup to protect this device.'))),
         for (final entry in entries)
-          ListTile(
-            title: Text(entry.$1.uri.pathSegments.last),
+          Card(
+              child: ListTile(
+            title: Text(entry.$2 == null
+                ? 'Unverified backup'
+                : '${entry.$2!.kind.name} backup · ${entry.$2!.createdAt}'),
             subtitle: Text(entry.$2 == null
                 ? 'Invalid: ${entry.$3}'
                 : '${entry.$2!.kind.name} · ${entry.$2!.createdAt} · schema ${entry.$2!.schemaVersion} · ${entry.$2!.bytes} bytes · integrity ok'),
@@ -195,6 +219,6 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
                     onPressed: busy ? null : () => delete(entry.$1),
                     child: const Text('Delete')),
             ]),
-          ),
+          )),
       ]);
 }

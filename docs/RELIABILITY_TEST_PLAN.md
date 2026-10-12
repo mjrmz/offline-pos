@@ -148,3 +148,52 @@ The post-commit/pre-finalize interval is too short to target reliably by hand.
 The automated Phase 7 failure-injection tests deliberately stop at that exact
 boundary and verify persisted recovery. Manual power cuts exercise the full
 device and filesystem path but cannot prove that exact interval was hit.
+
+## Phase 8 manual verification — pending
+
+On a disposable upgraded installation, record existing products, sales,
+inventory, users, cash sessions, BIR state, and Z-readings before testing.
+Enable all six Business Features, restart, and confirm the flags persist.
+Configure one product per feature; disable and re-enable each flag and confirm
+its product fields and values return. Sell fractional weight and UOM items,
+both refill and tank choices, an explicitly chosen batch, and a made-to-order
+item through its status queue. Complete one mixed cart. Check exact stock,
+movements, payment, audit, receipt/reprint, and history. Repeat a specialty
+sale with BIR-ready enabled and inspect invoice sequence, grand total, Z
+snapshot, and compliance recovery. Stop the License API and network, restart,
+and repeat local checkout. Back up, mutate data, restore on disposable data,
+and compare Phase 8 rows. Record results; automated tests do not mark this
+manual check complete.
+# Phase 8.5 checks
+
+Verify schema-10, schema-17, and schema-18 installations upgrade to schema 19
+with all prior records. Check item-refund and supplier-replacement links after
+backup and restore.
+Record a cash expense during an open session and confirm expected cash falls
+by that amount; confirm the expense and cash movement survive backup/restore.
+Manually repeat Refresh License → Cancel in the packaged app and capture the
+full Flutter stack trace if the `_dependents.isEmpty` assertion recurs.
+For BIR, compare cash, full-credit, and mixed sales: Z period sales must
+include all full sale totals, while expected drawer increases only by cash
+received. A customer debt payment increases the drawer without creating a
+sale or invoice.
+Finalize a delivery with multiple products and a batch. Confirm all inventory
+and movement rows exist, then force a later line validation failure and confirm
+the entire delivery rolls back. Confirm the receiving survives backup/restore.
+Reverse a mixed credit sale only after confirming the cash portion was
+returned, then inspect its negative drawer movement. Reverse a partially paid
+credit sale and confirm utang reaches zero while the paid excess appears as a
+separate refund obligation. Settle that obligation and verify the payout
+history and drawer change.
+For layaway, reserve stock, attempt an overselling checkout, record cash
+payments, and confirm no Sale or invoice exists before completion. Complete
+once and compare physical stock, payments, cash movement, and sale total.
+Cancel a separate reservation and settle its refund obligation.
+Receive three serials and reject a duplicate in the same delivery. Sell one
+serial, verify the receipt/reprint and sale history, then reject a second sale
+of it. Correct only an unsold serial and verify its audit record. Open one
+customer RMA by receipt/product/serial and one supplier RMA by receiving
+record/product/serial; inspect their append-only events and stock quarantine.
+Create a quotation, verify it has no stock/cash/BIR effect, change catalog
+price, then convert once at the saved price. Check expired and out-of-stock
+conversion failure before sign-off.

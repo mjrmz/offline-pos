@@ -3,6 +3,7 @@ import '../../core/services/sales_service.dart';
 import '../../data/daos/sales_repository.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/utils/money.dart';
+import '../../core/models/quantity.dart';
 
 class ReportsScreen extends StatefulWidget {
   final SalesService sales;
@@ -57,27 +58,86 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
       appBar: AppBar(title: const Text('Reports'), actions: [
-        IconButton(onPressed: refresh, icon: const Icon(Icons.refresh))
+        IconButton(
+            tooltip: 'Refresh report',
+            onPressed: refresh,
+            icon: const Icon(Icons.refresh))
       ]),
       body: ListView(padding: const EdgeInsets.all(16), children: [
         if (error != null)
-          Text(error!, style: const TextStyle(color: Colors.red)),
-        OutlinedButton(
-            onPressed: chooseDate,
-            child: Text('Date: ${date.year}-${date.month}-${date.day}')),
+          Text(error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        Wrap(
+            spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              IconButton(
+                  tooltip: 'Previous day',
+                  icon: const Icon(Icons.chevron_left),
+                  onPressed: () {
+                    setState(
+                        () => date = date.subtract(const Duration(days: 1)));
+                    refresh();
+                  }),
+              OutlinedButton.icon(
+                  icon: const Icon(Icons.calendar_today),
+                  onPressed: chooseDate,
+                  label: Text('${date.year}-${date.month}-${date.day}')),
+              IconButton(
+                  tooltip: 'Next day',
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: date.isBefore(
+                          DateTime.now().subtract(const Duration(days: 1)))
+                      ? () {
+                          setState(
+                              () => date = date.add(const Duration(days: 1)));
+                          refresh();
+                        }
+                      : null),
+            ]),
         if (report != null) ...[
-          Text('Completed sales: ${report!.completedCount}'),
-          Text('Gross sales: ${formatPeso(report!.grossCents)}'),
-          Text('Reversed sales: ${formatPeso(report!.reversalCents)}'),
-          Text('Net sales: ${formatPeso(report!.netCents)}'),
+          LayoutBuilder(
+              builder: (context, constraints) =>
+                  Wrap(spacing: 12, runSpacing: 12, children: [
+                    _metric('Gross sales', formatPeso(report!.grossCents),
+                        constraints.maxWidth),
+                    _metric('Net sales', formatPeso(report!.netCents),
+                        constraints.maxWidth),
+                    _metric('Transactions', '${report!.completedCount}',
+                        constraints.maxWidth),
+                    _metric('Reversals', formatPeso(report!.reversalCents),
+                        constraints.maxWidth),
+                  ])),
           const Divider(),
-          const Text('Cash breakdown'),
-          ...report!.paymentBreakdown.entries
-              .map((entry) => Text('${entry.key}: ${formatPeso(entry.value)}')),
+          Text('Cash breakdown', style: Theme.of(context).textTheme.titleLarge),
+          ...report!.paymentBreakdown.entries.map((entry) => ListTile(
+              title: Text(entry.key), trailing: Text(formatPeso(entry.value)))),
           const Divider(),
-          const Text('Low stock'),
-          ...report!.lowStock
-              .map((entry) => Text('${entry.$1}: ${entry.$2} remaining')),
+          Text('Low stock', style: Theme.of(context).textTheme.titleLarge),
+          if (report!.lowStockDetails.isEmpty)
+            const Text('No low stock items.'),
+          ...report!.lowStockDetails.map((entry) => ListTile(
+              title: Text(entry.$1),
+              trailing:
+                  Text('${Quantity.format(entry.$2)} ${entry.$3} remaining'))),
         ]
       ]));
+
+  Widget _metric(String label, String value, double width) => SizedBox(
+      width: width >= 800
+          ? (width - 36) / 4
+          : width >= 480
+              ? (width - 12) / 2
+              : width,
+      child: Card(
+          child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label, style: Theme.of(context).textTheme.labelLarge),
+                    const SizedBox(height: 8),
+                    Text(value,
+                        style: Theme.of(context).textTheme.headlineSmall),
+                  ]))));
 }

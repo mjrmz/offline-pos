@@ -6,6 +6,11 @@ class SalesService {
   final SalesRepository repository;
   final AuthService auth;
   SalesService(this.repository, this.auth);
+  Future<Set<String>> searchSaleIds(String query) {
+    auth.requireSession(PosPermission.viewOwnSales);
+    return repository.searchSaleIds(query);
+  }
+
   Future<List<SaleSummary>> history() {
     return repository.history(auth.requireSession(PosPermission.viewOwnSales));
   }
@@ -15,17 +20,24 @@ class SalesService {
         auth.requireSession(PosPermission.viewOwnSales), saleId);
   }
 
-  Future<void> voidSale(String saleId) {
+  Future<List<MadeOrderSummary>> madeOrders() =>
+      repository.madeOrders(auth.requireSession(PosPermission.manageCatalog));
+
+  Future<void> advanceMadeOrder(String id) => repository.advanceMadeOrder(
+      auth.requireSession(PosPermission.manageCatalog), id);
+
+  Future<void> voidSale(String saleId, {bool cashRefundConfirmed = false}) {
     return repository.reverse(
         auth.requireSession(PosPermission.reverseSale), saleId, 'void',
-        stockRestored: true);
+        stockRestored: true, cashRefundConfirmed: cashRefundConfirmed);
   }
 
   Future<void> refundSale(String saleId,
-      {required bool returnToSellableStock}) {
+      {required bool returnToSellableStock, bool cashRefundConfirmed = false}) {
     return repository.reverse(
         auth.requireSession(PosPermission.reverseSale), saleId, 'refund',
-        stockRestored: returnToSellableStock);
+        stockRestored: returnToSellableStock,
+        cashRefundConfirmed: cashRefundConfirmed);
   }
 
   Future<DailyReport> report(DateTime date) {

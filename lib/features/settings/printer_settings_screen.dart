@@ -22,6 +22,10 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
   final host = TextEditingController();
   final port = TextEditingController(text: '9100');
   final storeName = TextEditingController();
+  final storeAddress = TextEditingController();
+  final storeContact = TextEditingController();
+  final receiptHeader = TextEditingController();
+  final receiptFooter = TextEditingController();
   bool enabled = false;
   bool drawer = false;
   int width = 80;
@@ -45,6 +49,10 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
         host.text = s.host;
         port.text = '${s.port}';
         storeName.text = s.storeName;
+        storeAddress.text = s.storeAddress;
+        storeContact.text = s.storeContact;
+        receiptHeader.text = s.receiptHeader;
+        receiptFooter.text = s.receiptFooter;
       });
     });
   }
@@ -54,6 +62,10 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
     host.dispose();
     port.dispose();
     storeName.dispose();
+    storeAddress.dispose();
+    storeContact.dispose();
+    receiptHeader.dispose();
+    receiptFooter.dispose();
     super.dispose();
   }
 
@@ -79,7 +91,11 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
         deviceName: deviceName,
         widthMm: width,
         drawerEnabled: drawer,
-        storeName: storeName.text.trim());
+        storeName: storeName.text.trim(),
+        storeAddress: storeAddress.text.trim(),
+        storeContact: storeContact.text.trim(),
+        receiptHeader: receiptHeader.text.trim(),
+        receiptFooter: receiptFooter.text.trim());
   }
 
   Future<void> discover() async {
@@ -136,17 +152,38 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Printer settings')),
+        appBar: AppBar(title: const Text('Printer & Receipt')),
         body: ListView(padding: const EdgeInsets.all(16), children: [
           const Text(
               'ESC/POS printer. LAN uses raw TCP; USB requires a Windows printer driver; Bluetooth requires a paired Android printer.'),
+          const SizedBox(height: 16),
+          Text('Receipt identity',
+              style: Theme.of(context).textTheme.titleLarge),
+          TextField(
+              controller: storeName,
+              decoration: const InputDecoration(labelText: 'Store name')),
+          TextField(
+              controller: storeAddress,
+              decoration:
+                  const InputDecoration(labelText: 'Store address (optional)')),
+          TextField(
+              controller: storeContact,
+              decoration:
+                  const InputDecoration(labelText: 'Store contact (optional)')),
+          TextField(
+              controller: receiptHeader,
+              decoration: const InputDecoration(
+                  labelText: 'Receipt header (optional)')),
+          TextField(
+              controller: receiptFooter,
+              decoration: const InputDecoration(
+                  labelText: 'Receipt footer (optional)')),
+          const SizedBox(height: 20),
+          Text('Printer', style: Theme.of(context).textTheme.titleLarge),
           SwitchListTile(
               title: const Text('Enable printer'),
               value: enabled,
               onChanged: (v) => setState(() => enabled = v)),
-          TextField(
-              controller: storeName,
-              decoration: const InputDecoration(labelText: 'Store name')),
           DropdownButtonFormField<PrinterConnection>(
               key: ValueKey(connection),
               initialValue: connection,

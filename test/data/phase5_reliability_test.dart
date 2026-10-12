@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/backup/backup_service.dart';
 import 'package:modern_offline_pos/backup/restore_service.dart';
 import 'package:modern_offline_pos/core/services/auth_service.dart';
+import 'package:modern_offline_pos/core/models/active_user.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
 import 'package:modern_offline_pos/data/daos/cash_session_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
@@ -55,6 +56,31 @@ void main() {
     expect((await sessions.history()).length, 1);
     expect((await db.select(db.auditLogs).get()).map((e) => e.action),
         containsAll(['cash_session.open', 'cash_session.close']));
+  });
+
+  test('current shift projection is user scoped and reacts to committed cash',
+      () async {
+    final sessions = CashSessionRepository(db);
+    final owner = auth.current!;
+    final otherId = await auth.createUser('Other', UserRole.cashier, '1234');
+    final seen = <CashSessionSummary?>[];
+    final subscription = sessions.watchCurrentFor(owner.id).listen(seen.add);
+    addTearDown(subscription.cancel);
+    await sessions.open(owner, 100000);
+    final current = await sessions.currentFor(owner.id);
+    expect(current?.expectedCents, 100000);
+    expect(await sessions.currentFor(otherId), isNull);
+    final product = await PosRepository(db).saveProduct(
+        name: 'Cash item', priceCents: 116000, costCents: 0, startingStock: 1);
+    await PosRepository(db)
+        .completeCashSale([SaleLineRequest(product, 1)], 116000, owner.id);
+    expect((await sessions.currentFor(owner.id))?.expectedCents, 216000);
+    await sessions.close(owner, 216000);
+    expect(await sessions.currentFor(owner.id), isNull);
+    expect((await sessions.history()).single.expectedCents, 216000);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(seen.any((shift) => shift?.expectedCents == 216000), isTrue);
+    expect(seen.last, isNull);
   });
 
   test('cash close rolls back when audit insert fails', () async {
@@ -129,7 +155,7 @@ void main() {
     final auditsBefore = await db.select(db.auditLogs).get();
     final service = BackupService(db, directory);
     final record = await service.create(BackupKind.manual);
-    expect(record.schemaVersion, 8);
+    expect(record.schemaVersion, db.schemaVersion);
     expect(record.integrity, 'ok');
     expect(record.bytes, greaterThan(0));
     expect(record.appVersion, '0.1.0');
@@ -271,7 +297,7 @@ void main() {
     final incompatible = File('${backup.file.parent.path}/future.sqlite');
     await backup.file.copy(incompatible.path);
     final future = sqlite.sqlite3.open(incompatible.path);
-    future.execute('PRAGMA user_version = 9');
+    future.execute('PRAGMA user_version = 11');
     future.dispose();
     final futureRecord = BackupRecord(incompatible, BackupKind.manual,
         DateTime.now(), 8, '0.1.0', await incompatible.length(), 'ok');

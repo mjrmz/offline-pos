@@ -25,3 +25,10 @@ HttpOnly cookie and an exact configured Origin on mutations. The API uses
 one license row lock per activation to enforce device allowances. The rate
 limiter is process-local; use a shared store for a scaled multi-instance
 deployment. Serve production API only behind HTTPS.
+
+The API stores only a SHA-256 hash of each activation key. Issuing a license
+and `POST /admin/licenses/:id/activation-key/rotate` return the full key once
+with `Cache-Control: no-store`. Rotation requires the same admin cookie and
+Origin checks as other mutations, replaces only the key hash on a nonrevoked
+license, and records an admin event. The License ID and existing device
+licenses do not change. A lost key cannot be retrieved; rotate it instead.

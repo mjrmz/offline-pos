@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../../core/models/active_user.dart';
 import '../../core/services/auth_service.dart';
 import '../../shared/utils/safe_message.dart';
+import '../../core/models/business_feature.dart';
+import '../../data/daos/business_feature_repository.dart';
 
 class AuthScreen extends StatefulWidget {
   final AuthService auth;
@@ -22,6 +24,7 @@ class _AuthScreenState extends State<AuthScreen> {
   bool setup = false;
   bool recovery = false;
   bool busy = false;
+  final Set<BusinessFeature> selectedFeatures = {};
   String? message;
   @override
   void initState() {
@@ -57,8 +60,12 @@ class _AuthScreenState extends State<AuthScreen> {
     });
     try {
       if (setup) {
-        await widget.auth
+        final ownerId = await widget.auth
             .bootstrap(name.text, credential.text, question.text, answer.text);
+        final featureStore =
+            BusinessFeatureRepository(widget.auth.repository.db);
+        final owner = ActiveUser(ownerId, name.text.trim(), UserRole.owner);
+        await featureStore.setInitialSelections(selectedFeatures, owner);
         credential.clear();
         answer.clear();
         await refresh();
@@ -81,6 +88,7 @@ class _AuthScreenState extends State<AuthScreen> {
       }
     } catch (e) {
       if (mounted) setState(() => message = safeMessage(e));
+      if (setup) await refresh();
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -112,7 +120,9 @@ class _AuthScreenState extends State<AuthScreen> {
                 constraints: const BoxConstraints(maxWidth: 460),
                 child: ListView(padding: const EdgeInsets.all(20), children: [
                   if (message != null)
-                    Text(message!, style: const TextStyle(color: Colors.red)),
+                    Text(message!,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error)),
                   if (setup) ...[
                     TextField(
                         controller: name,
@@ -132,6 +142,24 @@ class _AuthScreenState extends State<AuthScreen> {
                         obscureText: true,
                         decoration: const InputDecoration(
                             labelText: 'Recovery answer')),
+                    const SizedBox(height: 12),
+                    const Text('What do you sell?'),
+                    const Text(
+                        'Select any combination. You can change these later.'),
+                    for (final feature in BusinessFeature.values)
+                      CheckboxListTile(
+                        title: Text(feature.displayName),
+                        value: selectedFeatures.contains(feature),
+                        onChanged: busy
+                            ? null
+                            : (selected) => setState(() {
+                                  if (selected == true) {
+                                    selectedFeatures.add(feature);
+                                  } else {
+                                    selectedFeatures.remove(feature);
+                                  }
+                                }),
+                      ),
                   ] else if (recovery) ...[
                     DropdownButtonFormField<String>(
                         initialValue: ownerUsers.any((u) => u.id == selectedId)
@@ -190,16 +218,20 @@ class _AuthScreenState extends State<AuthScreen> {
                             }),
                         child: const Text('Recover owner password offline')),
                   ],
-                  const SizedBox(height: 16),
-                  FilledButton(
-                      onPressed: busy ? null : submit,
-                      child: Text(busy
-                          ? 'Please wait…'
-                          : setup
-                              ? 'Create owner'
-                              : recovery
-                                  ? 'Reset password'
-                                  : 'Log in')),
-                ]))));
+                ]))),
+        bottomNavigationBar: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: FilledButton(
+                onPressed: busy ? null : submit,
+                child: Text(busy
+                    ? 'Please wait…'
+                    : setup
+                        ? 'Create owner'
+                        : recovery
+                            ? 'Reset password'
+                            : 'Log in')),
+          ),
+        ));
   }
 }

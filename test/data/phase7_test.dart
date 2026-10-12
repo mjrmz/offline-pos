@@ -10,6 +10,51 @@ import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
 
 void main() {
+  test('Z sale totals come from session sales even without cash movement',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('pos-z-sales-source-');
+    final protection =
+        ComplianceProtection(File('${dir.path}/compliance.json'));
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    try {
+      final auth = AuthService(AuthRepository(db));
+      final ownerId =
+          await auth.bootstrap('Owner', 'password123', 'Question?', 'answer');
+      await auth.login(ownerId, 'password123');
+      final user = auth.current!;
+      final cash =
+          CashSessionRepository(db, birReady: true, protection: protection);
+      final session = await cash.open(user, 0);
+      final product = await PosRepository(db).saveProduct(
+          name: 'Item', priceCents: 50000, costCents: 0, startingStock: 2);
+      final first =
+          await PosRepository(db, birReady: true, protection: protection)
+              .completeCashSale([SaleLineRequest(product, 1)], 50000, ownerId);
+      final second =
+          await PosRepository(db, birReady: true, protection: protection)
+              .completeCashSale([SaleLineRequest(product, 1)], 50000, ownerId);
+      // Model a committed sale whose cash portion is zero. Checkout support
+      // for credit is added separately; Z must already count the sale row.
+      await db.customStatement(
+          'DELETE FROM cash_movements WHERE sale_id = ?', [second.saleId]);
+      expect(
+          (await db.select(db.sales).get())
+              .every((s) => s.cashSessionId == session.id),
+          true);
+      expect(await cash.expected(session.id), 50000);
+      final closed = await cash.close(user, 50000);
+      expect(closed.expectedCents, 50000);
+      final z = (await db.select(db.zReadings).get()).single;
+      expect(z.periodSalesCents, 100000);
+      expect(z.beginningInvoiceNumber, 1);
+      expect(z.endingInvoiceNumber, 2);
+      expect(first.birInvoiceNumber, 1);
+    } finally {
+      await db.close();
+      await dir.delete(recursive: true);
+    }
+  });
+
   test(
       'in-place cutover and old-backup reconciliation preserve issued counters and Z history',
       () async {

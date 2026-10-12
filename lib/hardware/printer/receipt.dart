@@ -1,11 +1,18 @@
 import '../../data/daos/sales_repository.dart';
 import '../../shared/utils/money.dart';
+import '../../core/models/quantity.dart';
+import '../../core/models/sale_line_format.dart';
+import '../../core/models/printer_settings.dart';
 
 class ReceiptDocument {
   final String reference;
   final DateTime timestamp;
   final String cashier;
   final String storeName;
+  final String storeAddress;
+  final String storeContact;
+  final String customHeader;
+  final String customFooter;
   final List<ReceiptLine> lines;
   final int totalCents;
   final String paymentMethod;
@@ -21,23 +28,39 @@ class ReceiptDocument {
       this.totalCents,
       this.paymentMethod,
       this.appliedCents,
-      [this.birInvoiceNumber]);
+      [this.birInvoiceNumber,
+      this.storeAddress = '',
+      this.storeContact = '',
+      this.customHeader = '',
+      this.customFooter = '']);
 
-  factory ReceiptDocument.fromDetail(SaleDetail detail, String storeName) =>
+  factory ReceiptDocument.fromDetail(SaleDetail detail, String storeName,
+          [PrinterSettings? settings]) =>
       ReceiptDocument(
-        detail.summary.sale.id,
+        detail.summary.sale.receiptNumber ?? 'Legacy sale',
         detail.summary.sale.createdAt,
         detail.summary.cashierName,
         storeName,
         [
           for (var i = 0; i < detail.items.length; i++)
             ReceiptLine(detail.productNames[i], detail.items[i].quantity,
-                detail.items[i].unitPriceCents, detail.items[i].lineTotalCents)
+                detail.items[i].unitPriceCents, detail.items[i].lineTotalCents,
+                quantityMilli: detail.items[i].quantityMilli,
+                unit: detail.items[i].saleUnit,
+                mode: detail.items[i].saleMode,
+                batchNumber: detail.items[i].batchNumber,
+                extraCents: detail.items[i].extraCents,
+                serialNumbers:
+                    detail.serialNumbersByItem[detail.items[i].id] ?? const [])
         ],
         detail.summary.sale.totalCents,
         detail.summary.paymentMethod,
         detail.paymentAmountCents,
         detail.summary.sale.birInvoiceNumber,
+        settings?.storeAddress ?? '',
+        settings?.storeContact ?? '',
+        settings?.receiptHeader ?? '',
+        settings?.receiptFooter ?? '',
       );
 }
 
@@ -46,7 +69,19 @@ class ReceiptLine {
   final int quantity;
   final int unitCents;
   final int totalCents;
-  const ReceiptLine(this.name, this.quantity, this.unitCents, this.totalCents);
+  final int quantityMilli;
+  final String unit;
+  final String mode;
+  final String? batchNumber;
+  final int extraCents;
+  final List<String> serialNumbers;
+  const ReceiptLine(this.name, this.quantity, this.unitCents, this.totalCents,
+      {this.quantityMilli = 0,
+      this.unit = 'pcs',
+      this.mode = 'ordinary',
+      this.batchNumber,
+      this.extraCents = 0,
+      this.serialNumbers = const []});
 }
 
 String receiptMoney(int cents) => formatPeso(cents).replaceFirst('₱', 'PHP ');
@@ -70,9 +105,12 @@ class EscPosEncoder {
     }
 
     line(receipt.storeName.isEmpty ? 'MASD POS' : receipt.storeName);
-    line('Sale: ${receipt.reference}');
+    if (receipt.storeAddress.isNotEmpty) line(receipt.storeAddress);
+    if (receipt.storeContact.isNotEmpty) line(receipt.storeContact);
+    if (receipt.customHeader.isNotEmpty) line(receipt.customHeader);
+    line('Receipt #: ${receipt.reference}');
     if (receipt.birInvoiceNumber != null) {
-      line('BIR invoice: ${receipt.birInvoiceNumber}');
+      line('Invoice #: ${receipt.birInvoiceNumber}');
     }
     line('Date: ${receipt.timestamp.toLocal()}');
     line('Cashier: ${receipt.cashier}');
@@ -81,14 +119,27 @@ class EscPosEncoder {
       line(item.name.length > columns
           ? item.name.substring(0, columns)
           : item.name);
-      pair('${item.quantity} x ${receiptMoney(item.unitCents)}',
+      final quantity = item.quantityMilli == 0
+          ? item.quantity * Quantity.scale
+          : item.quantityMilli;
+      pair(
+          '${saleQuantityLabel(quantity, item.unit)} x ${receiptMoney(item.unitCents)}',
           receiptMoney(item.totalCents));
+      final detail = saleModeLabel(item.mode, batchNumber: item.batchNumber);
+      if (detail.isNotEmpty) line(detail);
+      for (final serial in item.serialNumbers) {
+        line('Serial: $serial');
+      }
+      if (item.extraCents > 0) {
+        line('Extra: ${receiptMoney(item.extraCents)} per ${item.unit}');
+      }
     }
     line('-' * columns);
     pair('Subtotal', receiptMoney(receipt.totalCents));
     pair('Total', receiptMoney(receipt.totalCents));
     pair('Payment: ${receipt.paymentMethod}',
         receiptMoney(receipt.appliedCents));
+    if (receipt.customFooter.isNotEmpty) line(receipt.customFooter);
     b.addAll([10, 10, 10, 29, 86, 0]);
     return b;
   }

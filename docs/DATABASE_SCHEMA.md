@@ -278,3 +278,194 @@ the outcome can be established. This favors no reuse over gap-free numbering.
 Restoring an older backup may leave missing sale rows for invoices issued
 after that backup; finalized journal state raises the counters and grand total
 and restores retained Z snapshots rather than reusing those numbers.
+
+## Phase 8 foundation (schema version 9)
+
+`BusinessFeatureSettings` stores one local enabled flag per stable feature ID.
+Absent rows mean disabled. `ProductBusinessConfigurations` stores configuration
+JSON by product and feature. Disabling a feature does not remove these rows.
+Both tables are included in the same SQLite backup and restore path.
+
+## Phase 8 transactions (schema version 10)
+
+Commercial quantities use **integer thousandths**: 1000 = 1 unit, 500 =
+0.5 unit, 125 = 0.125 unit. `Inventory.QuantityMilli`,
+`InventoryMovements.QuantityDeltaMilli`, and `SaleItems.QuantityMilli` are
+authoritative. The old integer columns remain for older code and contain the
+whole-number part; they must never be used for fractional calculations. The
+forward migration multiplies existing whole quantities by 1000 without
+changing their meaning. Prices, extra charges, and sale totals remain integer
+cents. Line totals round half up once per line.
+
+`SaleItems` also captures sale unit, mode, optional batch ID and number, and
+optional per-unit extra charge. Receipts, reprints, and sales history read
+these snapshots, not the current Product configuration. One sale transaction
+writes the sale, all items, stock and movement rows, payment, cash movement,
+audit, and BIR state together.
+
+`ProductLots` holds multiple retained batches per product: batch number,
+optional expiry date, quantity in thousandths, and receipt time. For a
+batch-tracked product, the sum of lot quantities must equal Inventory's
+scaled quantity; checkout checks this invariant. A single unexpired stocked
+lot is selected automatically. With multiple eligible lots, checkout requires
+an explicit choice. Expired lots are retained but cannot be sold. Converting
+existing stock to batch tracking assigns it to an entered batch. A schema-9
+batch-enabled product with stock migrates into a `Legacy unassigned` lot.
+
+`TankEmptyMovements` is an append-only count ledger for returned empty tanks.
+An exchange consumes one full unit from Inventory and records one returned
+empty; a no-return sale consumes one full unit and adds the configured deposit
+amount to the sale. A void/restocked refund reverses the corresponding empty
+movement. This is count tracking, not per-tank asset identity.
+
+For refill products, Inventory counts refill units. The container option adds
+the configured per-unit container charge. Individual empty containers are not
+stock-tracked. `MadeOrders` links a paid sale item to the retained status flow
+`ordered → preparing → ready → completed`; these products do not deduct
+finished-goods inventory at sale time. Voids/refunds mark an order cancelled.
+# Phase 8.5 schema 11 additions
+
+Schema 11 adds `customers`, `suppliers`, `petty_cash_entries`, and
+`price_history` through a forward migration from schema 10. Contacts are
+deactivated, never hard-deleted. Petty cash records reference the open cash
+session and write a matching negative `cash_movements` row in one transaction.
+Price changes append old and new price/cost snapshots; prior sale item prices
+remain unchanged. SQLite backup/restore includes these tables.
+
+Schema 12 adds `sales.cash_session_id`, backfilled from historic cash
+movements. Schema 13 adds `sales.customer_id` and `customer_credit_entries`.
+Signed ledger amounts represent `credit_sale` (positive), `payment` (negative),
+and `sale_reversal` (negative). The ledger is the balance source. Sale payments
+record cash and credit portions separately; only cash enters the drawer.
+
+Schema 14 adds `stock_receivings` and `stock_receiving_items`. A finalized
+receiving stores supplier, actor, reference, each fixed-point quantity and
+unit-cost snapshot. The same transaction increases Inventory, updates batch
+lots where enabled, writes InventoryMovements, and appends an audit event.
+Schema 15 adds a nullable payment method snapshot to customer credit entries
+so a recorded cash or confirmed GCash debt payment remains explainable.
+Schema 16 adds receipt address, contact, optional header, and optional footer
+to the existing Settings row. Existing BIR invoice and total fields remain
+generated from persisted sale data.
+
+Schema 17 adds `customer_refund_obligations` and append-only
+`customer_refund_settlements`. A reversal of a credit sale offsets the pooled
+receivable by the smaller of the sale's credit amount and the current pooled
+balance. Any excess becomes a separate refund obligation, so utang never goes
+negative. Mixed-sale cash is returned in full before reversal and writes a
+negative cash movement in the current open session. A later cash settlement
+also writes a negative movement; confirmed GCash does not change drawer cash.
+The reversal, ledger change, obligation, cash movement, and audit are atomic.
+Schema 17 also adds `products.serial_tracking`, `serial_units`, and
+append-only `serial_sale_links`. Supplier receiving inserts one unique serial
+per whole unit; schema 21 also permits exact serial entry for opening stock.
+Checkout requires
+selected available serial IDs and atomically marks them sold with their sale
+item. The link table retains historical sale identity after a restocked void.
+Schema 17 also adds `rma_cases` and append-only `rma_events` for customer
+sale-item and supplier receiving-item origins. RMA cases retain the intake
+quantity in thousandths. Supplier intake quarantines that quantity out of
+sellable inventory; restock disposition reverses the quarantine. `quotations` and
+`quotation_items` hold price and unit snapshots. Quote creation writes no
+sale, payment, inventory movement, or BIR invoice. Conversion validates open
+status and stock in the normal sale transaction and links the Sale once.
+Schema 17 adds `layaways`, `layaway_items`, `layaway_serials`, and
+`layaway_payments`. Active item quantities reserve sellable stock without
+changing physical Inventory. Cash deposits and later payments write separate
+cash movements referencing their payment rows; they issue no Sale invoice.
+Completion consumes physical stock once through the normal sale transaction,
+recognizes the full sale total, and records previously paid funds separately
+from final cash. Cancellation releases reservations and creates a customer
+refund obligation for paid deposits, with no automatic payout.
+
+# Schema 18 RMA note
+
+`rma_cases.replacement_serial_unit_id` retains the issued same-product serial
+for a customer replacement. The original `serial_unit_id` remains attached to
+the returned unit. The schema-17 to 18 migration adds this nullable column
+without resetting existing RMA records.
+
+# Schema 20 inventory acquisition layers
+
+`products.pricing_policy` is `current` by default or `layer`. Product
+`cost_cents` is the current purchase cost reference, not historical COGS.
+`stock_receiving_items.unit_selling_price_cents` is nullable; its cost and
+optional price are snapshots when the delivery is finalized.
+
+`inventory_layers` has primary key `id`, Product FK, unique nullable
+ReceivingItem FK, source (`receiving`, `opening`, or `legacy_opening`),
+quantity received and remaining in integer thousandths, unit cost in cents,
+nullable unit selling price in cents, optional batch and expiry, and received
+time. Supplier is obtained through ReceivingItem → Receiving → Supplier.
+Depleted layers remain for audit. `serial_units.inventory_layer_id` points
+to the exact stock layer; `serial_sale_links` retains historical sale links.
+Since schema version 21, `serial_units.receiving_item_id` is nullable so
+opening serials link directly to an opening layer without a fabricated
+supplier delivery. Existing receiving links remain intact. Opening layers
+snapshot Product current purchase cost and, for layer pricing, its current
+selling price. FIFO includes opening layers; selected serials use their exact
+layer.
+
+`sale_item_inventory_allocations` has primary key `id`, SaleItem and
+InventoryLayer FKs, optional SerialUnit FK, quantity in thousandths, immutable
+unit cost and selling price snapshots in cents, and creation time. A current
+price SaleItem can have several cost allocations. Layer price sales split
+customer-facing SaleItems by consumed layer, all under one Sale/invoice.
+
+The 19→20 migration does not alter Inventory balances or historical sales.
+It creates receipt-linked layers for surviving quantities, assigning current
+stock to newest receipt lines first. Batch receipts reconcile to each
+current batch lot, and serialized receipts reconcile to available/reserved
+serial identities. Any remaining balance becomes a
+`legacy_opening` layer using Product's cost snapshot and no supplier. Because
+past sale provenance was never recorded, historical sales are not retroactively
+allocated. Receipt allocation during migration is a conservative
+reconstruction, not proof of which old units were sold. Indexes support FIFO
+lookup and SaleItem allocation lookup.
+SQLite guards reject edits/deletion of receiving source fields, inventory
+layer source fields, and sale allocation snapshots. Layer remaining quantity
+is the mutable stock balance and changes only in inventory transactions.
+
+# Schema 19 RMA resolution
+
+`sale_item_refunds` links one RMA, original Sale and SaleItem, refunded
+thousandth quantity, original-line refund amount, pooled cash/credit allocation,
+receivable reduction, obligation, cash payout, and the open cash session used
+for Z-reading. Each RMA is unique. Original Sale and SaleItem rows stay intact.
+`customer_refund_obligations.rma_case_id` links deferred item refunds without
+reusing the unique full-sale reversal reference. `inbound_rma_replacements`
+links one inbound RMA to the replacement receiving header, item, quantity,
+and new serial. Batch and expiry live on the linked receiving item. Schema 18
+upgrades forward; existing records are preserved.
+
+# Schema 22 RMA lifecycle
+
+Schema 22 adds append-only `rma_lifecycle_events` for new customer and linked
+supplier claims. Each row records a typed action, actor, timestamp, bounded
+quantity, serial evidence, inspection finding, outcome, disposition, financial
+amount, recipient, and optional related case. Existing `rma_cases` and
+`rma_events` are preserved. No lifecycle facts are backfilled for legacy rows.
+The migration creates the table and case/action index without resetting data.
+
+# Schema 23 serialized warranty snapshots
+
+Schema 23 adds append-only `serial_warranty_snapshots`. Each row identifies the
+SerialUnit, source RMA and lifecycle event, treatment, source, optional start
+and end dates, notes, and creation time. Customer handoff writes a new fact;
+supplier replacement fulfillment can write a separate supplier warranty fact.
+Original Sale and SaleItem history is unchanged. Missing historical warranty
+facts remain Legacy / unknown. The forward migration creates this table and a
+serial/creation index without deleting or backfilling existing data.
+
+# Schema 24 operational receipt reference
+
+`sales.receipt_number` is a nullable, unique operational reference. Every new
+completed sale receives a `POS-000001` style value inside the sale transaction.
+The next value is derived from committed `POS-` references, so rollback does
+not reserve a number and a restored database continues after its highest
+existing reference. A unique index prevents duplicates and a trigger prevents
+changing an assigned reference. Preexisting sales remain null and display
+`Legacy sale`; no old reference is represented as having been printed.
+`receipt_number` is separate from `bir_invoice_number` and does not participate
+in BIR numbering, grand total, Z-reading, or FIFO. SQLite backups include the
+column and its values.

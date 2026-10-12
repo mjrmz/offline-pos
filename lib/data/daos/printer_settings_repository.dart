@@ -55,8 +55,12 @@ class PrinterSettingsStore {
   }
 
   SettingsCompanion _companion(PrinterSettings s) => SettingsCompanion.insert(
-    id: const Value(1),
+        id: const Value(1),
         storeName: Value(s.storeName),
+        storeAddress: Value(s.storeAddress),
+        storeContact: Value(s.storeContact),
+        receiptHeader: Value(s.receiptHeader),
+        receiptFooter: Value(s.receiptFooter),
         printerEnabled: Value(s.enabled),
         printerTransport: Value(s.transport.name),
         printerHost: Value(s.host),
@@ -80,5 +84,9 @@ class PrinterSettingsStore {
         widthMm: row.printerWidthMm,
         drawerEnabled: row.drawerEnabled,
         storeName: row.storeName,
+        storeAddress: row.storeAddress,
+        storeContact: row.storeContact,
+        receiptHeader: row.receiptHeader,
+        receiptFooter: row.receiptFooter,
       );
 }

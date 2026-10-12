@@ -9,7 +9,13 @@ enum PosPermission {
   manageUsers,
   manageCatalog,
   manageRecovery,
-  manageCashSession
+  manageCashSession,
+  manageContacts,
+  customerCredit,
+  stockReceiving,
+  manageRma,
+  manageQuotations,
+  manageLayaway
 }
 
 class ActiveUser {
@@ -21,6 +27,8 @@ class ActiveUser {
 
   bool can(PosPermission permission) => switch (permission) {
         PosPermission.sell ||
+        PosPermission.manageQuotations ||
+        PosPermission.manageLayaway ||
         PosPermission.viewOwnSales ||
         PosPermission.manageCashSession =>
           true,
@@ -28,6 +36,11 @@ class ActiveUser {
         PosPermission.reverseSale ||
         PosPermission.reports ||
         PosPermission.manageCatalog =>
+          role != UserRole.cashier,
+        PosPermission.manageContacts => role != UserRole.cashier,
+        PosPermission.customerCredit => true,
+        PosPermission.stockReceiving ||
+        PosPermission.manageRma =>
           role != UserRole.cashier,
         PosPermission.manageUsers ||
         PosPermission.manageRecovery =>

@@ -22,6 +22,28 @@ void main() {
   });
   tearDown(() => db.close());
 
+  test('receipts are sequential, unique and immutable after commit', () async {
+    await repo.saveProduct(
+        name: 'Receipt item', priceCents: 100, costCents: 0,
+        startingStock: 3);
+    final service = SaleService(repo, auth);
+    final product = (await repo.products()).single;
+    final first = await service.checkout(Cart()..add(product), 100);
+    final second = await service.checkout(Cart()..add(product), 100);
+    final sales = await db.select(db.sales).get();
+    expect(sales.map((sale) => sale.receiptNumber).toSet(),
+        {'POS-000001', 'POS-000002'});
+    expect(sales.every((sale) => sale.birInvoiceNumber == null), isTrue);
+    await expectLater(
+        db.customStatement("UPDATE sales SET receipt_number='POS-999999' WHERE id=?",
+            [first.saleId]),
+        throwsA(isA<Exception>()));
+    await expectLater(
+        db.customStatement("UPDATE sales SET receipt_number='POS-000001' WHERE id=?",
+            [second.saleId]),
+        throwsA(isA<Exception>()));
+  });
+
   test('barcode, category, initial stock, checkout and historical snapshot',
       () async {
     final category = await repo.addCategory('Drinks');
@@ -169,9 +191,11 @@ class _DelayedRepository extends PosRepository {
   final Completer<void> gate;
   _DelayedRepository(super.db, this.gate);
   @override
-  Future<CommittedSale> completeCashSale(List<SaleLineRequest> items,
-      int cashReceivedCents, String cashierId) async {
+  Future<CommittedSale> completeCashSale(
+      List<SaleLineRequest> items, int cashReceivedCents, String cashierId,
+      {String? quotationId, String? layawayId}) async {
     await gate.future;
-    return super.completeCashSale(items, cashReceivedCents, cashierId);
+    return super.completeCashSale(items, cashReceivedCents, cashierId,
+        quotationId: quotationId, layawayId: layawayId);
   }
 }

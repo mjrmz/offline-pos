@@ -49,7 +49,9 @@ class _UsersScreenState extends State<UsersScreen> {
                             Column(mainAxisSize: MainAxisSize.min, children: [
                           if (dialogError != null)
                             Text(dialogError!,
-                                style: const TextStyle(color: Colors.red)),
+                                style: TextStyle(
+                                    color:
+                                        Theme.of(context).colorScheme.error)),
                           TextField(
                               controller: name,
                               decoration:
@@ -106,7 +108,8 @@ class _UsersScreenState extends State<UsersScreen> {
                     content: Column(mainAxisSize: MainAxisSize.min, children: [
                       if (dialogError != null)
                         Text(dialogError!,
-                            style: const TextStyle(color: Colors.red)),
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.error)),
                       TextField(
                           controller: secret,
                           obscureText: true,
@@ -137,23 +140,54 @@ class _UsersScreenState extends State<UsersScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Users'), actions: [
-          IconButton(onPressed: refresh, icon: const Icon(Icons.refresh))
+        appBar: AppBar(title: const Text('Users & Roles'), actions: [
+          TextButton.icon(
+              onPressed: create,
+              icon: const Icon(Icons.add),
+              label: const Text('Add user')),
+          IconButton(
+              tooltip: 'Refresh users',
+              onPressed: refresh,
+              icon: const Icon(Icons.refresh))
         ]),
-        body: ListView(children: [
+        body: ListView(padding: const EdgeInsets.all(16), children: [
           if (error != null)
-            Text(error!, style: const TextStyle(color: Colors.red)),
-          FilledButton(onPressed: create, child: const Text('Add user')),
-          ...users.map((u) => ListTile(
+            Text(error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          ...users.map((u) => Card(
+                  child: ListTile(
                 title: Text(u.name),
                 subtitle: Text(
                     '${u.role.name} · ${u.isActive ? 'Active' : 'Inactive'}'),
                 trailing: Wrap(children: [
                   IconButton(
+                      tooltip: 'Reset ${u.name} credential',
                       onPressed: () => reset(u),
                       icon: const Icon(Icons.password)),
                   IconButton(
+                    tooltip: u.isActive
+                        ? 'Deactivate ${u.name}'
+                        : 'Reactivate ${u.name}',
                     onPressed: () async {
+                      if (u.isActive) {
+                        final confirmed = await showDialog<bool>(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                                    title: Text('Deactivate ${u.name}?'),
+                                    content: const Text(
+                                        'This user will no longer be able to sign in.'),
+                                    actions: [
+                                      TextButton(
+                                          onPressed: () =>
+                                              Navigator.pop(context, false),
+                                          child: const Text('Cancel')),
+                                      FilledButton(
+                                          onPressed: () =>
+                                              Navigator.pop(context, true),
+                                          child: const Text('Deactivate')),
+                                    ]));
+                        if (confirmed != true) return;
+                      }
                       try {
                         await widget.auth.setActive(u.id, !u.isActive);
                         await refresh();
@@ -165,7 +199,7 @@ class _UsersScreenState extends State<UsersScreen> {
                         Icon(u.isActive ? Icons.person_off : Icons.person_add),
                   ),
                 ]),
-              )),
+              ))),
         ]),
       );
 }

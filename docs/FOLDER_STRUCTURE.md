@@ -68,6 +68,14 @@ masd_pos/
 
 ## Placement rules
 
+The Inventory sidebar destination is implemented in
+`lib/features/inventory/inventory_workspace.dart`; supplier delivery stays in
+`stock_receiving_screen.dart`, and the Product screen is currently in
+`features/pos_checkout/checkout_screen.dart`. FIFO allocation and layer
+queries live in `data/daos/inventory_layer_repository.dart` and
+`pos_repository.dart`. Schema 20 layer and schema 21 opening-serial migrations
+remain in `data/database.dart`.
+
 Phase 6 adds `lib/licensing/license_store.dart`, `lib/features/activation/`,
 PostgreSQL migrations and admin routes under `cloud/license_api/`, and a
 separate React/Vite deployable under `cloud/admin_dashboard/`.

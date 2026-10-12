@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:path/path.dart' as p;
+import 'shared/theme/app_theme.dart';
+import 'shared/theme/theme_mode_controller.dart';
 
 import 'core/models/app_config.dart';
 import 'core/models/active_user.dart';
@@ -38,6 +40,7 @@ class PosApp extends StatefulWidget {
 }
 
 class _PosAppState extends State<PosApp> {
+  final ThemeModeController themeController = ThemeModeController();
   AppDatabase? database;
   AuthService? auth;
   File? databaseFile;
@@ -53,7 +56,15 @@ class _PosAppState extends State<PosApp> {
   @override
   void initState() {
     super.initState();
+    themeController.addListener(_refreshTheme);
+    unawaited(themeController.load().catchError((Object error) {
+      AppLogger.info('Appearance preference unavailable: $error');
+    }));
     initialize();
+  }
+
+  void _refreshTheme() {
+    if (mounted) setState(() {});
   }
 
   Future<void> initialize() async {
@@ -225,6 +236,8 @@ class _PosAppState extends State<PosApp> {
 
   @override
   void dispose() {
+    themeController.removeListener(_refreshTheme);
+    themeController.dispose();
     backupTimer?.cancel();
     database?.close();
     super.dispose();
@@ -234,74 +247,83 @@ class _PosAppState extends State<PosApp> {
   Widget build(BuildContext context) {
     final db = database;
     final currentAuth = auth;
-    return MaterialApp(
-      title: AppConfig.appName,
-      home: health == null
-          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
-          : !health!.canUseRegister || db == null || currentAuth == null
-              ? RecoveryScreen(
-                  backupDirectory: Directory(p.join(
-                      databaseFile?.parent.path ?? Directory.systemTemp.path,
-                      'backups')),
-                  databaseStatus: health!.databaseStatus,
-                  licenseStatus: licenseResult?.status.name ?? 'unavailable',
-                  onRestore: restoreBackup,
-                  onRecheck: () async {
-                    await initialize();
-                  })
-              : licenseResult?.isValid != true
-                  ? deviceId == null ||
-                          licenseApiUrl.isEmpty ||
-                          SignatureVerifier.embeddedPublicKeyBase64.isEmpty
-                      ? Scaffold(
-                          body: Center(
-                              child: Text(licensingError ??
-                                  'License configuration or device ID is unavailable. Contact support.')))
-                      : ActivationScreen(
-                          deviceId: deviceId!,
-                          client: ActivationClient(Uri.parse(licenseApiUrl),
-                              SignatureVerifier(), const LicenseStore()),
-                          reason: licenseResult?.status == LicenseStatus.missing
-                              ? null
-                              : 'License: ${licenseResult?.status.name}',
-                          onActivated: () async {
-                            await checkLicense();
-                            if (mounted) setState(() {});
-                          })
-                  : currentAuth.current == null
-                      ? AuthScreen(
-                          auth: currentAuth, onChanged: () => setState(() {}))
-                      : HomeScreen(
-                          auth: currentAuth,
-                          pos: PosRepository(db,
-                              birEntitled: () =>
-                                  licenseResult?.isBirReady == true,
-                              protection: complianceProtection),
-                          salesRepository: SalesRepository(db),
-                          refreshLicense:
-                              licenseApiUrl.isEmpty || deviceId == null
+    return AppThemeController(
+        controller: themeController,
+        child: MaterialApp(
+          title: AppConfig.appName,
+          theme: AppTheme.light,
+          darkTheme: AppTheme.dark,
+          themeMode: themeController.mode,
+          home: health == null
+              ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+              : !health!.canUseRegister || db == null || currentAuth == null
+                  ? RecoveryScreen(
+                      backupDirectory: Directory(p.join(
+                          databaseFile?.parent.path ??
+                              Directory.systemTemp.path,
+                          'backups')),
+                      databaseStatus: health!.databaseStatus,
+                      licenseStatus:
+                          licenseResult?.status.name ?? 'unavailable',
+                      onRestore: restoreBackup,
+                      onRecheck: () async {
+                        await initialize();
+                      })
+                  : licenseResult?.isValid != true
+                      ? deviceId == null ||
+                              licenseApiUrl.isEmpty ||
+                              SignatureVerifier.embeddedPublicKeyBase64.isEmpty
+                          ? Scaffold(
+                              body: Center(
+                                  child: Text(licensingError ??
+                                      'License configuration or device ID is unavailable. Contact support.')))
+                          : ActivationScreen(
+                              deviceId: deviceId!,
+                              client: ActivationClient(Uri.parse(licenseApiUrl),
+                                  SignatureVerifier(), const LicenseStore()),
+                              reason: licenseResult?.status ==
+                                      LicenseStatus.missing
                                   ? null
-                                  : (key) async {
-                                      await ActivationClient(
-                                              Uri.parse(licenseApiUrl),
-                                              SignatureVerifier(),
-                                              const LicenseStore())
-                                          .activate(key, deviceId!);
-                                      await checkLicense();
-                                      if (mounted) setState(() {});
-                                    },
-                          recoveryScreen: RecoveryScreen(
-                              backupDirectory: Directory(
-                                  p.join(databaseFile!.parent.path, 'backups')),
-                              databaseStatus: health!.databaseStatus,
-                              licenseStatus:
-                                  licenseResult?.status.name ?? 'unavailable',
+                                  : 'License: ${licenseResult?.status.name}',
+                              onActivated: () async {
+                                await checkLicense();
+                                if (mounted) setState(() {});
+                              })
+                      : currentAuth.current == null
+                          ? AuthScreen(
                               auth: currentAuth,
-                              onRestore: restoreBackup,
-                              onCreate: createManualBackup,
-                              onDelete: deleteBackup),
-                          onChanged: () => setState(() {}),
-                        ),
-    );
+                              onChanged: () => setState(() {}))
+                          : HomeScreen(
+                              auth: currentAuth,
+                              pos: PosRepository(db,
+                                  birEntitled: () =>
+                                      licenseResult?.isBirReady == true,
+                                  protection: complianceProtection),
+                              salesRepository: SalesRepository(db),
+                              refreshLicense:
+                                  licenseApiUrl.isEmpty || deviceId == null
+                                      ? null
+                                      : (key) async {
+                                          await ActivationClient(
+                                                  Uri.parse(licenseApiUrl),
+                                                  SignatureVerifier(),
+                                                  const LicenseStore())
+                                              .activate(key, deviceId!);
+                                          await checkLicense();
+                                          if (mounted) setState(() {});
+                                        },
+                              recoveryScreen: RecoveryScreen(
+                                  backupDirectory: Directory(p.join(
+                                      databaseFile!.parent.path, 'backups')),
+                                  databaseStatus: health!.databaseStatus,
+                                  licenseStatus: licenseResult?.status.name ??
+                                      'unavailable',
+                                  auth: currentAuth,
+                                  onRestore: restoreBackup,
+                                  onCreate: createManualBackup,
+                                  onDelete: deleteBackup),
+                              onChanged: () => setState(() {}),
+                            ),
+        ));
   }
 }

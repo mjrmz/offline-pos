@@ -30,6 +30,13 @@ function checkPassword(password, stored) {
     return timingSafeEqual(scryptSync(password, Buffer.from(salt, 'base64'), 64), Buffer.from(hash, 'base64'));
   } catch (_) { return false; }
 }
+function newActivationKey() {
+  const raw = randomBytes(10).toString('hex').toUpperCase();
+  return `${raw.slice(0,5)}-${raw.slice(5,10)}-${raw.slice(10,15)}-${raw.slice(15,20)}`;
+}
+function activationKeyHash(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
 export function makePasswordHash(password) {
   const salt = randomBytes(16);
   return `${salt.toString('base64')}:${scryptSync(password, salt, 64).toString('base64')}`;
@@ -63,9 +70,9 @@ export function adminRouter(pool) {
     try { res.json((await pool.query('SELECT * FROM customers WHERE business_name ILIKE $1 ORDER BY created_at DESC LIMIT 100', [`%${req.query.q ?? ''}%`])).rows); } catch (e) { next(e); }
   });
   router.post('/admin/customers', async (req, res, next) => {
-    const p = z.object({ businessName: z.string().trim().min(1).max(200), contactEmail: z.string().email().nullable().optional(), contactPhone: z.string().max(100).nullable().optional() }).strict().safeParse(req.body);
+    const p = z.object({ businessName: z.string().trim().min(1).max(200), contactEmail: z.string().email().nullable().optional(), contactPhone: z.string().max(100).nullable().optional(), notes: z.string().max(2000).nullable().optional() }).strict().safeParse(req.body);
     if (!p.success) return res.status(400).json({ error: 'Invalid customer' });
-    try { res.status(201).json((await pool.query('INSERT INTO customers(business_name,contact_email,contact_phone) VALUES($1,$2,$3) RETURNING *', [p.data.businessName, p.data.contactEmail ?? null, p.data.contactPhone ?? null])).rows[0]); } catch (e) { next(e); }
+    try { res.status(201).json((await pool.query('INSERT INTO customers(business_name,contact_email,contact_phone,notes) VALUES($1,$2,$3,$4) RETURNING *', [p.data.businessName, p.data.contactEmail ?? null, p.data.contactPhone ?? null, p.data.notes ?? null])).rows[0]); } catch (e) { next(e); }
   });
   router.get('/admin/licenses', async (_req, res, next) => {
     try { res.json((await pool.query(`SELECT l.id,l.customer_id,l.plan_id,l.status,l.max_devices,l.max_reactivations,l.reactivations_used,l.issued_at,l.expires_at,
@@ -75,10 +82,9 @@ export function adminRouter(pool) {
   router.post('/admin/licenses', async (req, res, next) => {
     const p = z.object({ customerId: z.string().uuid(), planId: z.string().min(1), maxDevices: z.number().int().min(1).max(100), maxReactivations: z.number().int().min(0).max(100).default(3), expiresAt: z.string().datetime().nullable().optional() }).strict().safeParse(req.body);
     if (!p.success) return res.status(400).json({ error: 'Invalid license' });
-    const raw = randomBytes(10).toString('hex').toUpperCase();
-    const activationKey = `${raw.slice(0,5)}-${raw.slice(5,10)}-${raw.slice(10,15)}-${raw.slice(15,20)}`;
+    const activationKey = newActivationKey();
     // Five-character groups provide 80 bits of randomness.
-    const hash = createHash('sha256').update(activationKey).digest('hex');
+    const hash = activationKeyHash(activationKey);
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -86,11 +92,41 @@ export function adminRouter(pool) {
         VALUES($1,$2,$3,$4,$5,$6) RETURNING id,status`, [p.data.customerId,p.data.planId,hash,p.data.maxDevices,p.data.maxReactivations,p.data.expiresAt ?? null]);
       await client.query('INSERT INTO admin_events(actor,action,target_id) VALUES($1,$2,$3)', [req.adminUser,'license.issue',inserted.rows[0].id]);
       await client.query('COMMIT');
-      res.status(201).json({ ...inserted.rows[0], activationKey });
+      res.set('Cache-Control', 'no-store').status(201).json({ ...inserted.rows[0], activationKey });
     } catch(e) { await client.query('ROLLBACK'); next(e); } finally { client.release(); }
+  });
+  router.post('/admin/licenses/:id/activation-key/rotate', async (req, res, next) => {
+    if (!z.string().uuid().safeParse(req.params.id).success) {
+      return res.status(400).json({ error: 'Invalid License ID' });
+    }
+    const activationKey = newActivationKey();
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const updated = await client.query(`UPDATE licenses SET activation_key_hash=$2
+        WHERE id=$1 AND status<>'revoked' RETURNING id`,
+        [req.params.id, activationKeyHash(activationKey)]);
+      if (!updated.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Active license not found' });
+      }
+      await client.query('INSERT INTO admin_events(actor,action,target_id) VALUES($1,$2,$3)',
+        [req.adminUser, 'license.activation_key_rotate', req.params.id]);
+      await client.query('COMMIT');
+      return res.set('Cache-Control', 'no-store').json({ id: req.params.id, activationKey });
+    } catch (e) { await client.query('ROLLBACK'); next(e); } finally { client.release(); }
   });
   router.get('/admin/licenses/:id/devices', async (req,res,next) => {
     try { res.json((await pool.query('SELECT id,license_id,device_fingerprint,status,activated_at,deactivated_at FROM devices WHERE license_id=$1 ORDER BY activated_at DESC',[req.params.id])).rows); } catch(e) { next(e); }
+  });
+  router.get('/admin/devices', async (_req, res, next) => {
+    try {
+      res.json((await pool.query(`SELECT d.id,d.license_id,d.device_fingerprint,d.status,d.activated_at,d.deactivated_at,
+        l.customer_id,c.business_name
+        FROM devices d JOIN licenses l ON l.id=d.license_id
+        JOIN customers c ON c.id=l.customer_id
+        ORDER BY d.activated_at DESC LIMIT 500`)).rows);
+    } catch (e) { next(e); }
   });
   router.post('/admin/licenses/:id/edition', async (req,res,next) => {
     const parsed = z.object({ edition: z.enum(['non_bir','bir_ready']) }).strict().safeParse(req.body);
@@ -123,6 +159,18 @@ export function adminRouter(pool) {
   router.post('/admin/devices/:id/deactivate',(req,res,next)=>change(req,res,next,'deactivate'));
   router.get('/admin/activation-events',async(req,res,next)=>{
     try { res.json((await pool.query('SELECT * FROM activation_events ORDER BY created_at DESC LIMIT 200')).rows); } catch(e) { next(e); }
+  });
+  router.get('/admin/activity', async (_req, res, next) => {
+    try {
+      res.json((await pool.query(`SELECT id, license_id, device_id, event_type, reason, created_at
+        FROM activation_events
+        UNION ALL
+        SELECT id, target_id AS license_id, NULL::uuid AS device_id, action AS event_type,
+          NULL::text AS reason, created_at
+        FROM admin_events
+        WHERE action IN ('license.issue', 'license.activation_key_rotate', 'license.edition_change')
+        ORDER BY created_at DESC LIMIT 200`)).rows);
+    } catch (e) { next(e); }
   });
   return router;
 }

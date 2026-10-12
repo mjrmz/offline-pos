@@ -35,13 +35,19 @@ void main() {
           transport: PrinterConnection.bluetooth,
           deviceId: 'AA:BB',
           deviceName: 'BT',
-          storeName: 'New Shop'));
+          storeName: 'New Shop',
+          storeAddress: '123 Main Street',
+          storeContact: '0917 123 4567',
+          receiptHeader: 'Thank you for visiting',
+          receiptFooter: 'Please come again'));
       await db.close();
       db = AppDatabase.forTesting(NativeDatabase(file));
       final loaded = await PrinterSettingsStore(db).load();
       expect(loaded.transport, PrinterConnection.bluetooth);
       expect(loaded.deviceId, 'AA:BB');
       expect(loaded.storeName, 'New Shop');
+      expect(loaded.storeAddress, '123 Main Street');
+      expect(loaded.receiptFooter, 'Please come again');
       expect((await db.select(db.settings).get()).length, 1);
     } finally {
       await db.close();

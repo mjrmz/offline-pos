@@ -10,6 +10,10 @@ class PrinterSettings {
   final int widthMm;
   final bool drawerEnabled;
   final String storeName;
+  final String storeAddress;
+  final String storeContact;
+  final String receiptHeader;
+  final String receiptFooter;
 
   const PrinterSettings({
     this.enabled = false,
@@ -21,6 +25,10 @@ class PrinterSettings {
     this.widthMm = 80,
     this.drawerEnabled = false,
     this.storeName = '',
+    this.storeAddress = '',
+    this.storeContact = '',
+    this.receiptHeader = '',
+    this.receiptFooter = '',
   });
 
   bool get configured =>

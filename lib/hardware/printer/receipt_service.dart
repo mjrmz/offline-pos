@@ -21,7 +21,8 @@ class ReceiptService {
   final CashDrawer drawer;
   ReceiptService(this.sales, this.settingsStore, this.printer, this.drawer);
 
-  Future<HardwareOutcome> afterCommittedCashSale(String saleId) async {
+  Future<HardwareOutcome> afterCommittedCashSale(String saleId,
+      {bool openDrawer = true}) async {
     PrinterSettings settings;
     try {
       settings = await settingsStore.load();
@@ -36,16 +37,18 @@ class ReceiptService {
     try {
       final detail = await sales.detail(saleId);
       await printer.print(
-          ReceiptDocument.fromDetail(detail, settings.storeName), settings);
+          ReceiptDocument.fromDetail(detail, settings.storeName, settings),
+          settings);
       printed = true;
     } catch (_) {/* Sale is already committed. */}
-    if (settings.drawerEnabled) {
+    if (settings.drawerEnabled && openDrawer) {
       try {
         await drawer.open(settings);
         opened = true;
       } catch (_) {/* Independent post-commit outcome. */}
     }
-    return HardwareOutcome(true, printed, settings.drawerEnabled, opened);
+    return HardwareOutcome(
+        true, printed, settings.drawerEnabled && openDrawer, opened);
   }
 
   Future<bool> reprint(String saleId) async {
@@ -54,7 +57,8 @@ class ReceiptService {
       if (!settings.configured) return false;
       final detail = await sales.detail(saleId);
       await printer.print(
-          ReceiptDocument.fromDetail(detail, settings.storeName), settings);
+          ReceiptDocument.fromDetail(detail, settings.storeName, settings),
+          settings);
       return true;
     } catch (_) {
       return false;

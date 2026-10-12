@@ -67,7 +67,7 @@ class BackupService {
         'ok');
   }
 
-  static int verify(File file, {int maxSchemaVersion = 8}) {
+  static int verify(File file, {int maxSchemaVersion = 24}) {
     if (!file.existsSync() || file.lengthSync() == 0) {
       throw StateError('Backup is missing or empty');
     }
@@ -96,11 +96,35 @@ class BackupService {
         'users',
         'cash_sessions',
         'audit_logs',
+        if (version >= 22) 'rma_lifecycle_events',
+        if (version >= 23) 'serial_warranty_snapshots',
         if (version >= 2) ...['categories', 'inventory'],
         if (version >= 3) 'sale_reversals',
         if (version >= 6) 'settings',
         if (version >= 7) 'cash_movements',
         if (version >= 8) ...['bir_compliance_state', 'z_readings'],
+        if (version >= 9) ...[
+          'business_feature_settings',
+          'product_business_configurations'
+        ],
+        if (version >= 10) ...[
+          'product_lots',
+          'made_orders',
+          'tank_empty_movements'
+        ],
+        if (version >= 11) ...[
+          'customers',
+          'suppliers',
+          'petty_cash_entries',
+          'price_history'
+        ],
+        if (version >= 13) 'customer_credit_entries',
+        if (version >= 14) ...['stock_receivings', 'stock_receiving_items'],
+        if (version >= 19) ...['sale_item_refunds', 'inbound_rma_replacements'],
+        if (version >= 20) ...[
+          'inventory_layers',
+          'sale_item_inventory_allocations'
+        ],
       };
       for (final name in requiredTables) {
         final rows = connection.select(
@@ -122,11 +146,14 @@ class BackupService {
           'created_at',
           if (version >= 2) 'category_id',
           if (version >= 3) 'low_stock_threshold',
+          if (version >= 17) 'serial_tracking',
+          if (version >= 20) 'pricing_policy',
         ],
         'inventory_movements': [
           'id',
           'product_id',
           'quantity_delta',
+          if (version >= 10) 'quantity_delta_milli',
           'reason',
           'reference_id',
           'created_at',
@@ -137,13 +164,24 @@ class BackupService {
           'total_cents',
           'status',
           'created_at',
-          if (version >= 8) 'bir_invoice_number'
+          if (version >= 8) 'bir_invoice_number',
+          if (version >= 12) 'cash_session_id',
+          if (version >= 13) 'customer_id',
+          if (version >= 24) 'receipt_number'
         ],
         'sale_items': [
           'id',
           'sale_id',
           'product_id',
           'quantity',
+          if (version >= 10) ...[
+            'quantity_milli',
+            'sale_unit',
+            'sale_mode',
+            'batch_id',
+            'batch_number',
+            'extra_cents'
+          ],
           'unit_price_cents',
           if (version >= 2) 'line_total_cents',
           if (version >= 5) 'product_name',
@@ -174,7 +212,12 @@ class BackupService {
         ],
         'audit_logs': ['id', 'user_id', 'action', 'details', 'created_at'],
         if (version >= 2) 'categories': ['id', 'name', 'parent_category_id'],
-        if (version >= 2) 'inventory': ['product_id', 'quantity'],
+        if (version >= 2)
+          'inventory': [
+            'product_id',
+            'quantity',
+            if (version >= 10) 'quantity_milli'
+          ],
         if (version >= 3)
           'sale_reversals': [
             'id',
@@ -189,6 +232,12 @@ class BackupService {
           'settings': [
             'id',
             'store_name',
+            if (version >= 16) ...[
+              'store_address',
+              'store_contact',
+              'receipt_header',
+              'receipt_footer'
+            ],
             'printer_enabled',
             'printer_transport',
             'printer_host',
@@ -203,6 +252,7 @@ class BackupService {
             'id',
             'session_id',
             'sale_id',
+            if (version >= 17) 'reference_id',
             'amount_cents',
             'kind',
             'created_at',
@@ -229,6 +279,230 @@ class BackupService {
             'grand_total_cents',
             'expected_cash_cents',
             'actual_cash_cents'
+          ],
+        if (version >= 9)
+          'business_feature_settings': ['feature_id', 'enabled'],
+        if (version >= 9)
+          'product_business_configurations': [
+            'product_id',
+            'feature_id',
+            'configuration_json'
+          ],
+        if (version >= 10)
+          'product_lots': [
+            'id',
+            'product_id',
+            'batch_number',
+            'expiry_date',
+            'quantity_milli',
+            'received_at'
+          ],
+        if (version >= 10)
+          'made_orders': [
+            'id',
+            'sale_item_id',
+            'status',
+            'created_at',
+            'updated_at'
+          ],
+        if (version >= 10)
+          'tank_empty_movements': [
+            'id',
+            'product_id',
+            'quantity_delta',
+            'reason',
+            'reference_id',
+            'created_at'
+          ],
+        if (version >= 17)
+          'customer_refund_obligations': [
+            'id',
+            'customer_id',
+            'sale_id',
+            'user_id',
+            'amount_cents',
+            'layaway_id',
+            if (version >= 19) 'rma_case_id',
+            'settled_cents',
+            'created_at'
+          ],
+        if (version >= 19)
+          'sale_item_refunds': [
+            'id',
+            'rma_case_id',
+            'sale_id',
+            'sale_item_id',
+            'cash_session_id',
+            'quantity_milli',
+            'amount_cents',
+            'cash_allocation_cents',
+            'credit_allocation_cents',
+            'receivable_reduction_cents',
+            'obligation_cents',
+            'immediate_cash_cents',
+            'obligation_id',
+            'cash_movement_id',
+            'created_at'
+          ],
+        if (version >= 19)
+          'inbound_rma_replacements': [
+            'id',
+            'rma_case_id',
+            'receiving_id',
+            'receiving_item_id',
+            'serial_unit_id',
+            'quantity_milli',
+            'created_at'
+          ],
+        if (version >= 17)
+          'customer_refund_settlements': [
+            'id',
+            'obligation_id',
+            'user_id',
+            'amount_cents',
+            'method',
+            'note',
+            'created_at'
+          ],
+        if (version >= 17)
+          'serial_units': [
+            'id',
+            'product_id',
+            'serial_number',
+            'status',
+            'receiving_item_id',
+            if (version >= 20) 'inventory_layer_id',
+            'sale_item_id',
+            'created_at'
+          ],
+        if (version >= 20)
+          'stock_receiving_items': [
+            'id',
+            'receiving_id',
+            'product_id',
+            'quantity_milli',
+            'unit_cost_cents',
+            'unit_selling_price_cents'
+          ],
+        if (version >= 20)
+          'inventory_layers': [
+            'id',
+            'product_id',
+            'receiving_item_id',
+            'source',
+            'quantity_received_milli',
+            'quantity_remaining_milli',
+            'unit_cost_cents',
+            'unit_selling_price_cents',
+            'received_at'
+          ],
+        if (version >= 20)
+          'sale_item_inventory_allocations': [
+            'id',
+            'sale_item_id',
+            'inventory_layer_id',
+            'serial_unit_id',
+            'quantity_milli',
+            'unit_cost_snapshot_cents',
+            'unit_selling_price_snapshot_cents',
+            'created_at'
+          ],
+        if (version >= 17)
+          'serial_sale_links': [
+            'id',
+            'serial_unit_id',
+            'sale_item_id',
+            'created_at'
+          ],
+        if (version >= 17)
+          'rma_cases': [
+            'id',
+            'reference',
+            'origin',
+            'sale_id',
+            'sale_item_id',
+            'receiving_id',
+            'receiving_item_id',
+            'customer_id',
+            'supplier_id',
+            'serial_unit_id',
+            'issue_description',
+            'intake_condition',
+            'quantity_milli',
+            'notes',
+            'status',
+            'customer_resolution',
+            'unit_disposition',
+            'created_at'
+          ],
+        if (version >= 17)
+          'rma_events': [
+            'id',
+            'case_id',
+            'actor_id',
+            'status',
+            'note',
+            'created_at'
+          ],
+        if (version >= 17)
+          'quotations': [
+            'id',
+            'reference',
+            'customer_id',
+            'created_by',
+            'valid_until',
+            'status',
+            'notes',
+            'converted_sale_id',
+            'created_at'
+          ],
+        if (version >= 17)
+          'quotation_items': [
+            'id',
+            'quotation_id',
+            'product_id',
+            'quantity_milli',
+            'unit_snapshot',
+            'unit_price_cents',
+            'line_total_cents'
+          ],
+        if (version >= 17)
+          'layaways': [
+            'id',
+            'reference',
+            'customer_id',
+            'created_by',
+            'total_cents',
+            'status',
+            'sale_id',
+            'created_at',
+            'completed_at'
+          ],
+        if (version >= 17)
+          'layaway_items': [
+            'id',
+            'layaway_id',
+            'product_id',
+            'quantity_milli',
+            'unit_snapshot',
+            'unit_price_cents',
+            'line_total_cents'
+          ],
+        if (version >= 17)
+          'layaway_serials': [
+            'id',
+            'layaway_id',
+            'serial_unit_id',
+            'product_id'
+          ],
+        if (version >= 17)
+          'layaway_payments': [
+            'id',
+            'layaway_id',
+            'user_id',
+            'amount_cents',
+            'method',
+            'created_at'
           ],
       };
       for (final entry in columns.entries) {

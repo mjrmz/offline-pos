@@ -1,3 +1,5 @@
+import 'business_product.dart';
+
 class PosProduct {
   final String id;
   final String name;
@@ -8,7 +10,16 @@ class PosProduct {
   final String? categoryId;
   final int costCents;
   final int lowStockThreshold;
+  final BusinessProduct business;
+  final bool serialTracking;
+  final String pricingPolicy;
   const PosProduct(
       this.id, this.name, this.barcode, this.priceCents, this.isActive,
-      [this.sku, this.categoryId, this.costCents = 0, this.lowStockThreshold = 5]);
+      [this.sku,
+      this.categoryId,
+      this.costCents = 0,
+      this.lowStockThreshold = 5,
+      this.business = const BusinessProduct(),
+      this.serialTracking = false,
+      this.pricingPolicy = 'current']);
 }

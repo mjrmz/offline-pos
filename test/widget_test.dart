@@ -40,6 +40,10 @@ void main() {
 
   testWidgets('invalid cash disables checkout and writes nothing',
       (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
     final repo = PosRepository(db);
@@ -53,20 +57,20 @@ void main() {
         home:
             CheckoutScreen(repository: repo, user: auth.current!, auth: auth)));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.add).first);
+    await tester.tap(find.text('Coke'));
     await tester.pump();
-    final button = find.widgetWithText(FilledButton, 'Complete sale');
+    final button = find.byKey(const Key('pay-button'));
     expect(tester.widget<FilledButton>(button).onPressed, isNull);
     expect(find.text('Enter cash received'), findsWidgets);
     for (final value in ['abc', '1.234', '-1', '0', '20']) {
       await tester.enterText(
-          find.widgetWithText(TextField, 'Cash received'), value);
+          find.widgetWithText(TextField, 'Cash tendered'), value);
       await tester.pump();
       expect(tester.widget<FilledButton>(button).onPressed, isNull);
     }
     for (final value in ['100', '100.00', '40.50']) {
       await tester.enterText(
-          find.widgetWithText(TextField, 'Cash received'), value);
+          find.widgetWithText(TextField, 'Cash tendered'), value);
       await tester.pump();
       expect(tester.widget<FilledButton>(button).onPressed, isNotNull);
     }

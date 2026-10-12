@@ -51,3 +51,30 @@ Every login, logout, and failed attempt is written to `AuditLogs` — who,
 when, from which role — regardless of connectivity. This is what resolves
 disputes later ("who voided this sale," "who was logged in during the
 shortfall").
+# Phase 8.5 permissions
+
+`manageContacts` permits managers and owners to create, edit, and deactivate
+customers and suppliers. Petty cash uses the existing `manageCashSession`
+permission and requires an open cash session. Product price changes from the
+UI continue through `manageCatalog`.
+`customerCredit` allows active staff to record customer debt payments. Credit
+checkout uses the existing `sell` permission. Creating or editing customers
+continues to require `manageContacts`.
+Sale reversal requires `reverseSale`; settling a customer refund obligation
+requires `customerCredit`, with an open cash session for a cash payout. Both
+actions are audited.
+`manageRma` permits managers and owners to record intake and status events.
+For schema 22 claims it also guards approval, receipt, inspection, resolution
+intent, disposition, reservation, handoff, and supplier decision. A serial
+mismatch override additionally requires Owner and a recorded reason.
+Executing an RMA refund also requires `reverseSale`. Supplier replacement
+receipt requires both `manageRma` and `stockReceiving`.
+`manageQuotations` permits active staff to save and convert quotes; normal
+checkout still enforces `sell` at conversion.
+`manageLayaway` permits active staff to reserve stock, record payments,
+complete a sale, or cancel a reservation. Normal sale completion also enforces
+`sell`.
+`stockReceiving` permits managers and owners to finalize supplier deliveries;
+the repository rechecks the active actor before writing stock.
+It also controls correction of an unsold serial. A serial linked to any sale
+cannot be renamed; correction writes an audit record.

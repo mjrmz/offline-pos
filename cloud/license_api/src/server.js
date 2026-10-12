@@ -25,6 +25,7 @@ export function createApp(pool) {
   app.get('/healthz', (_req,res) => res.json({status:'ok'}));
   app.use(activationRouter(pool));
   app.use(adminRouter(pool));
+  app.use((_req,res) => res.status(404).json({error:'Route not found'}));
   app.use((_err,_req,res,_next) => res.status(500).json({error:'Internal server error'}));
   return app;
 }

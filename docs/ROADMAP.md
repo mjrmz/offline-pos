@@ -114,6 +114,9 @@ set. The next real step is Phase 1 — not further feature planning.
   data loss and correct numbering going forward
 
 ## Phase 8 — Business-type feature toggles
+- **Current implementation status**: six core workflows implemented in schema
+  version 10. All 97 automated tests and Windows and Android release builds
+  pass. The Owner's manual exit check remains pending.
 - Setup wizard asks "what do you sell?" (multi-select), not a single
   business-type choice — real shops (e.g. a sari-sari store selling rice,
   water refills, and LPG alongside general retail) combine categories
@@ -179,3 +182,78 @@ set. The next real step is Phase 1 — not further feature planning.
 - **Fuel-pump gas stations** — explicitly out of scope permanently;
   different hardware integration problem (pump controller protocols), not
   a POS feature
+# Inventory architecture cleanup after Phase 8.5
+
+Schema 20 adds one Inventory destination with Overview, Products, Receiving,
+and Movements; supplier-linked acquisition layers; FIFO allocation for
+ordinary stock; exact serial allocation; and current versus receipt-layer
+selling price policies. Sale allocations retain quantity, cost, and price
+snapshots. Migration preserves existing stock as reconstructed receipt layers
+and explicit opening balances. Packaged desktop/mobile verification remains
+pending. Phase 9 is unstarted.
+
+Schema 21 makes the SerialUnit receiving-item reference nullable for
+serialized opening balances. Opening inventory creates supplier-free layers,
+requires exact serial entry for serialized units, preserves batch rows, and
+uses the Product cost and applicable selling price as opening snapshots.
+Supplier Receiving remains a separate delivery workflow. Phase 9 remains
+unstarted.
+
+# Phase 8.5 software implementation
+
+Schema 17 supports customer purchases, an append-only utang ledger, full and
+partial credit checkout, customer payments, and Z-reading sales based on sale
+rows. Supplier directories, petty cash, price history, and expiry UX are also
+implemented. The reported Refresh License Cancel assertion awaits production
+verification. Mixed-credit cash refunds and paid-credit reversal now have an
+explicit accounting path. Serial receiving and sale linkage are implemented.
+RMA intake and event history and quotation conversion are implemented.
+The Vertex-BOS aligned RMA rework is in progress. Schema 22 adds append-only
+lifecycle facts for new claims: approval, receipt, inspection, custody,
+intent, execution, exact replacement reservation, handoff, and linked supplier
+decision/fulfillment. Existing cases remain single-line. Multi-item claims,
+warranty policy configuration, supplier SLA, remaining outcome paths, and
+manual review are still required. Schema 23 adds append-only serialized warranty
+snapshots without rewriting original sale history.
+Customer refund completion now follows refund execution independently of linked
+supplier recovery. Exact store replacement handoff can also complete the
+customer case while supplier recovery remains open. The supplier warranty path
+holds an exact supplier replacement serial for customer handoff; direct or
+already-satisfied recovery becomes store stock. The detail page shows a
+separate supplier recovery action or link. Linked Supplier RMA creation now
+occurs at authorization; physical sending is a later custody event. Exact
+repaired-original and no-fault returns, rejected original disposition, and
+warranty treatment at handoff are supported.
+The RMA UI now has customer/supplier tabs, a lifecycle-derived queue, compact
+summary metrics, a four-step customer request page, and a full detail page with
+progress, custody, next action, and timeline. Direct supplier intake from
+Receiving is available without a customer; it quarantines exact sourced stock
+and records a separate lifecycle intake fact. Supplier creation has a four-step
+page for linked customer claims and direct defective inventory. Receipt and
+inspection now use dedicated responsive dialogs with bounded quantities,
+condition choices, serial mismatch evidence, and visible validation hints.
+Resolution intent uses a four-step outcome/details/disposition/review dialog.
+Customer handoff and supported supplier fulfillment now have dedicated
+responsive dialogs. Remaining dedicated approval, refund, and supplier decision
+action sheets,
+broader widget coverage,
+and responsive/theme manual verification remain to finish the UI rebuild.
+See [RMA.md](RMA.md) for the exact current boundary. Phase 8.5 RMA is not
+complete.
+RMA financial resolution now supports a claimed SaleItem quantity. Layaway stock
+reservation, deposits, completion, and cancellation are implemented. Do
+not start Phase 9 or claim manual verification.
+Schema 18 adds a persisted replacement serial link. Same-item customer
+replacement now consumes inventory in one transaction without a new sale or
+invoice. Repaired-item return is executable. Schema 19 records item-level RMA
+refunds and linked supplier replacement receipts. The refund uses the original
+line snapshot, pooled credit ledger, refund obligations, and cash movements.
+Supplier replacements reuse receiving stock and serial/batch rules. Automated
+software validation is recorded in the final run report; packaged-app manual
+verification remains pending with the owner.
+Supplier receiving now supports multi-item ordinary, batch, and serialized
+stock with cost snapshots, history, rollback, and backup.
+An Owner Operations screen now lists out-of-stock and low-stock products,
+expired and soon-expiring batches, outstanding utang, and pending made orders.
+Owner printer settings now include store address, contact, and receipt
+header/footer while preserving BIR sale details.

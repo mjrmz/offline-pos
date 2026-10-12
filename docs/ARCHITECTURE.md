@@ -47,6 +47,14 @@ deliberately added later as an opt-in feature.
 
 ## 3. Client-side layering
 
+The app supports System, Light, and Dark appearance. `AppTheme` defines both
+palettes; `ThemeModeController` owns the selected mode and saves only
+`system`, `light`, or `dark` under `appearance.themeMode` in device-local
+SharedPreferences. A fresh installation defaults to System, which follows the
+operating system appearance. Existing installations without this preference
+also use System. Changes apply immediately without rebuilding business state
+or modifying the SQLite database.
+
 ```
 features/   →  UI screens, per-platform responsive layout
    │
@@ -237,3 +245,123 @@ does not carry a continuous BIR sequence. The former single-file
 `compliance-protection.json` mirror is migrated only when the live database
 can validate its state; a historical commit lost before that old mirror was
 written cannot be reconstructed.
+
+## Phase 8 local business capabilities
+
+The six business features are local configuration, separate from the signed
+license. Setup asks “What do you sell?” with independent choices; Owner
+Settings can change them later. Store flags govern which product fields may be
+edited. Existing configured products keep their runtime behavior while a flag
+is off. Product configuration is stored by product and feature in the same
+SQLite database and backup path.
+
+One checkout path handles ordinary and specialty cart lines. The repository
+revalidates sale mode, unit precision, stock, batch eligibility, and extra
+charges inside the existing transaction before reserving any BIR invoice.
+Quantity math uses integer thousandths and integer-cent half-up line rounding.
+SaleItem stores the transaction-time unit, mode, batch, and charge snapshot;
+receipt and history never reinterpret it from current catalog settings.
+Batch stock and full-tank/refill stock use Inventory and its movement ledger;
+batch rows and returned-empty-tank movements are additional local records.
+## Unified Inventory workspace and acquisition layers
+
+The sidebar exposes one Inventory destination with Overview, Products,
+Receiving, and Movements views. Product is catalog configuration and the
+current reference purchase cost/selling price. Receiving is a supplier
+delivery. Each finalized receiving line creates an InventoryLayer with its
+own remaining thousandth quantity, cost, optional selling price, batch, and
+receipt link. The receipt supplies supplier provenance. Opening stock is
+pre-existing inventory: it creates an `opening` layer without a supplier or
+receiving document. Its cost snapshots Product current purchase cost; layer
+price mode snapshots Product selling price. Serialized opening stock requires
+one unique serial per unit linked to that layer. Batch opening stock retains
+its batch metadata. Legacy opening stock has no invented supplier.
+
+Ordinary stock is consumed FIFO by received time and stable layer ID.
+Serialized checkout uses the selected serial's exact layer. Batch checkout
+keeps its existing explicit batch selection and allocates only inside that
+batch; it does not silently use FEFO. Every SaleItem consumption persists
+allocation quantity, cost, and selling price snapshots. Current price mode
+charges the current Product price while keeping each consumed layer cost.
+Layer price mode charges each consumed layer's price, falling back to Product
+price where an older layer has no override. When prices differ, checkout
+persists separate SaleItems under the same Sale and BIR invoice. All amounts
+are integer cents and quantities are integer thousandths.
+
+Receiving, sale allocation, stock balance, serial state, payment, and movement
+writes share their existing transactions. A full void or restocked full-sale
+refund restores original layer quantities. RMA supplier quarantine and
+restock use the receiving layer; customer restock uses original sale
+allocations. Layaway still reserves available stock before final sale and
+consumes layers only at completion. Historic sale prices and acquisition costs
+do not change when current Product defaults are edited.
+Existing reports continue to show sales and cash metrics; they do not yet
+expose a historical COGS or gross-margin read model. Allocation snapshots
+are the source for any future margin calculation.
+Quotation conversion and layaway completion continue to honor their saved
+selling-price snapshots; they do not reprice from later receiving layers.
+
+# Phase 8.5 local records
+
+Customer and supplier directories, petty cash, and price history live in the
+same local SQLite database as sales. Their writes use the existing Drift
+transaction and audit pattern. No new network dependency was added.
+Schema 12 links each sale to its cash session. Z-reading sales and reversals
+come from sale rows; expected drawer cash still comes from cash movements.
+Schema 13 links sales to customers and adds an append-only credit ledger.
+Credit checkout records cash and receivable separately while the BIR invoice
+and grand total use the full sale amount. Debt payment creates no product sale
+or BIR invoice.
+Schema 17 supports mixed-credit reversal with a confirmed cash payout in an
+open session. A reversal offsets the pooled receivable only up to its current
+balance. Previously paid excess becomes an explicit customer refund obligation,
+separate from debt. Its later cash or confirmed GCash settlement is recorded
+with an append-only settlement and audit event. Cash payout decreases the
+current drawer; neither payout nor debt settlement creates a new sale.
+Supplier receiving is a separate local workflow. One transaction writes its
+header and lines, inventory and batch changes, movement ledger, and audit.
+Serial-enabled products receive only through supplier receiving. One unique
+serial is required per unit, and a sale selects exact available serials in
+the same inventory transaction. An append-only sale link preserves serial
+history when a restocked void makes a unit available again.
+Schema 22 customer claims use `RmaLifecycleRepository` and append-only
+`rma_lifecycle_events`. Request, approval, receipt, inspection, intent,
+disposition, financial execution, replacement reservation, supplier action,
+handoff, and completion are separate local transactions. Physical receipt
+does not increase sellable stock. Legacy RMA rows retain their original
+`rma_events`; missing physical facts are not inferred. See [RMA.md](RMA.md).
+
+Customer RMA intake searches receipts, customers, products, and serials;
+supplier intake searches receiving records, suppliers, products, batches, and
+serials. Both retain status events. Supplier intake quarantines measured stock,
+including batch quantities and serials; restock disposition restores it.
+Customer same-item replacement deducts stock and records its issued serial
+against the case without changing the sale or issuing an invoice. Repaired
+return restores the original serial to its sold state. Item-level RMA refunds
+reuse the shared sale reversal accounting path: the original SaleItem snapshot
+sets the amount; pooled credit is allocated proportionally with cumulative
+integer rounding; receivables are offset up to the current balance and the
+remainder is paid from an open drawer or retained as a refund obligation.
+Original sales and invoices remain unchanged. The RMA disposition controls
+stock separately. A supplier replacement creates a linked receiving record;
+its replacement serial or batch becomes available once while the defective
+original remains unavailable.
+Quotations are stored separately from sales and convert once through the
+normal checkout transaction at their saved prices.
+Layaway reserves quantities against physical stock. Ordinary checkout uses
+physical minus active reservations; serialized units have a reserved status.
+Inventory layers retain the FIFO provenance and remaining physical quantities.
+The `inventory` row is the transactionally maintained physical stock projection;
+receiving, sales, and stock adjustments update it alongside layers and movement
+history. Active layaway items supply the reserved amount. Inventory and POS read
+the same physical and reserved totals through `PosRepository.stockLevels()`;
+available stock is physical minus reserved. The mounted POS catalog watches the
+tables that affect its products and availability, so receiving and catalog edits
+appear without restarting the application.
+Deposits and later payments affect cash sessions when cash is collected, while
+the full Sale and BIR invoice occur only on completion. Cancellation releases
+reservations and records money owed back as a customer refund obligation.
+# Cash shift ownership
+
+POS owns the current cashier's normal shift lifecycle: opening cash, opening the shift, reviewing expected cash and variance, and closing the shift. Cash Session provides read-only current status and details, previous shift reconciliation, and Z-reading history. Administrative handling of another user's shift remains subject to existing permissions and repository rules. Both screens use the same Cash Session repository; this split changes only the user interface.
+The POS "Shift open" amount is expected cash: opening cash plus recorded cash movements. It equals opening cash immediately after a new shift opens, and changes as cash sales and other movements are recorded. An open session remains open across app restarts until it is explicitly closed.

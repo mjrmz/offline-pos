@@ -2,7 +2,7 @@
 
 Repository: `C:\Users\MJ\Desktop\VERTEX\modern-offline-pos`
 
-## Terminal 1 — Start PostgreSQL
+## Terminal 1 â€” Start PostgreSQL
 
 ```powershell
 & 'C:\Program Files\PostgreSQL\17\bin\pg_ctl.exe' start -D "$env:LOCALAPPDATA\modern-offline-pos-phase6\postgres-data" -l "$env:LOCALAPPDATA\modern-offline-pos-phase6\postgres.log" -o '-h 127.0.0.1 -p 55432'
@@ -10,7 +10,7 @@ Repository: `C:\Users\MJ\Desktop\VERTEX\modern-offline-pos`
 
 Expected: PostgreSQL listens on `127.0.0.1:55432`.
 
-## Terminal 2 — Start License API
+## Terminal 2 â€” Start License API
 
 ```powershell
 cd C:\Users\MJ\Desktop\VERTEX\modern-offline-pos\cloud\license_api
@@ -24,7 +24,7 @@ Expected: `http://localhost:3000`. In another terminal, check:
 Invoke-RestMethod http://localhost:3000/healthz
 ```
 
-## Terminal 3 — Start Admin Dashboard
+## Terminal 3 â€” Start Admin Dashboard
 
 ```powershell
 cd C:\Users\MJ\Desktop\VERTEX\modern-offline-pos\cloud\admin_dashboard
@@ -33,7 +33,7 @@ npm run dev
 
 Expected: `http://localhost:5173`.
 
-## Terminal 4 — Start POS
+## Terminal 4 â€” Start POS
 
 ```powershell
 cd C:\Users\MJ\Desktop\VERTEX\modern-offline-pos
@@ -69,13 +69,9 @@ Get-Content "$env:LOCALAPPDATA\modern-offline-pos-phase6\admin-password.txt"
 
 # 5. BIR-ready test
 
-Phase 7 status: **Complete**. Automated verification and manual live upgrade,
-offline BIR, and restore monotonicity verification passed. Repeat the steps
-below for future releases or installations.
-
 1. Start API and dashboard; find the active Non-BIR license.
 2. Click **Upgrade to BIR-ready**.
-3. In POS: Owner → top-right menu → **Refresh license**.
+3. In POS: Owner â†’ top-right menu â†’ **Refresh license**.
 4. Enter the existing activation key; restart POS.
 5. Open cash session; make two sales; close the session.
 6. Verify:
@@ -166,7 +162,11 @@ Log in as Owner; ensure `LICENSE_API_URL` is configured and a device ID is avail
 - [ ] App launches; licensing and offline restart work
 - [ ] Checkout, inventory, sales history, reports, and cash sessions work
 - [ ] Backup/restore works
-- [ ] Non-BIR → BIR-ready upgrade preserves data
+- [ ] Non-BIR â†’ BIR-ready upgrade preserves data
 - [ ] BIR invoice numbering, grand total, and Z-reading work
 - [ ] BIR works offline; old backup does not reuse invoice numbers
 - [ ] Windows and Android builds pass; automated tests pass
+
+## Cashier shift in POS
+
+POS opens, shows, and closes the logged-in cashier's current shift. With no owned shift, POS shows an opening cash form and blocks checkout. Opening cash is the physical drawer float. Expected cash is calculated by CashSessionRepository from opening cash plus signed cash movements. Counted cash is the physical count at close; variance is counted minus expected. A sale in progress must be finished or cleared before closing. Cash Sessions remains available for session details, reconciliation, history, Z-readings, and permitted management of other users' shifts.

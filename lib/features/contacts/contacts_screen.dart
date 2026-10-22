@@ -4,16 +4,32 @@ import '../../core/models/active_user.dart';
 import '../../data/database.dart';
 import '../../data/daos/directory_repository.dart';
 import '../../data/daos/customer_credit_repository.dart';
+import '../../data/daos/sale_return_repository.dart';
 import '../../data/daos/stock_receiving_repository.dart';
+import '../../data/daos/pos_repository.dart';
+import '../../core/services/sales_service.dart';
+import '../../hardware/printer/receipt_service.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/utils/money.dart';
-import '../../core/models/quantity.dart';
+import '../../shared/widgets/app_workspace.dart';
+import 'customer_profile_screen.dart';
+import 'customer_profile_ui.dart';
+import 'supplier_profile_drawer.dart';
+import '../../shared/widgets/record_details_drawer.dart';
 
 class ContactsScreen extends StatefulWidget {
   final DirectoryRepository repository;
   final ActiveUser user;
+  final SalesService? sales;
+  final PosRepository? pos;
+  final ReceiptService? receipts;
   const ContactsScreen(
-      {super.key, required this.repository, required this.user});
+      {super.key,
+      required this.repository,
+      required this.user,
+      this.sales,
+      this.pos,
+      this.receipts});
   @override
   State<ContactsScreen> createState() => _ContactsScreenState();
 }
@@ -21,6 +37,74 @@ class ContactsScreen extends StatefulWidget {
 class _ContactsScreenState extends State<ContactsScreen> {
   bool suppliers = false;
   String search = '';
+  int page = 0;
+  Future<void> _openCustomer(Customer row) => showRecordDetailsDrawer<void>(
+          context: context,
+          builder: (context) => Align(
+              alignment: Alignment.centerRight,
+              child: SizedBox(
+                  width: (MediaQuery.sizeOf(context).width * .58)
+                      .clamp(0, 880)
+                      .toDouble(),
+                  height: double.infinity,
+                  child: CustomerProfileScreen(
+                      customer: row,
+                      repository:
+                          CustomerCreditRepository(widget.repository.db),
+                      user: widget.user,
+                      sales: widget.sales,
+                      pos: widget.pos,
+                      receipts: widget.receipts,
+                      onEdit: () => edit(customer: row))))).then((_) {
+        if (mounted) setState(() {});
+      });
+
+  Future<void> _openSupplier(Supplier row) => showRecordDetailsDrawer<void>(
+              context: context,
+              builder: (context) => Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(
+                      width: MediaQuery.sizeOf(context)
+                          .width
+                          .clamp(0, 800)
+                          .toDouble(),
+                      height: double.infinity,
+                      child: SupplierProfileDrawer(
+                          supplier: row,
+                          user: widget.user,
+                          onEdit: () => edit(supplier: row),
+                          repository:
+                              StockReceivingRepository(widget.repository.db)))))
+          .then((_) {
+        if (mounted) setState(() {});
+      });
+  String _customerSubtitle(Customer row, CustomerSummary? summary) {
+    if (summary == null) return row.phone ?? 'No phone';
+    final last = summary.lastPurchase == null
+        ? 'No purchases'
+        : MaterialLocalizations.of(context)
+            .formatMediumDate(summary.lastPurchase!);
+    return '${row.phone ?? 'No phone'}\n'
+        '${summary.purchases} ${summary.purchases == 1 ? 'purchase' : 'purchases'} · Last $last · ${summary.points} pts'
+        '${summary.creditCents == 0 || !widget.user.can(PosPermission.customerCredit) ? '' : ' · ${formatPeso(summary.creditCents)} credit'}';
+  }
+
+  Future<List<Object>> _loadPage() async {
+    if (suppliers) {
+      final total = await widget.repository.countSuppliers(search);
+      final rows = await widget.repository.supplierPage(search, page);
+      final now = DateTime.now();
+      final summaries = await widget.repository.supplierSummaries(rows,
+          DateTime(now.year, now.month), DateTime(now.year, now.month + 1));
+      return [total, rows, summaries];
+    }
+    final total = await widget.repository.countCustomers(search);
+    final rows = await widget.repository.customerPage(search, page);
+    final summaries = await widget.repository
+        .customerSummaries(ids: rows.map((row) => row.id).toList());
+    return [total, rows, summaries];
+  }
+
   Future<void> edit({Customer? customer, Supplier? supplier}) async {
     final name = TextEditingController(text: customer?.name ?? supplier?.name);
     final phone =
@@ -129,225 +213,136 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Customers & suppliers')),
-        body: Column(children: [
-          if (widget.user.can(PosPermission.manageContacts))
-            SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(value: false, label: Text('Customers')),
-                  ButtonSegment(value: true, label: Text('Suppliers')),
-                ],
-                selected: {
-                  suppliers
-                },
-                onSelectionChanged: (value) => setState(() {
-                      suppliers = value.first;
+          body: Column(children: [
+        Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
+            child: AppPageHeader(
+                title: 'Customers & Suppliers',
+                subtitle:
+                    'Manage customer relationships, supplier records, purchasing history, and account activity.',
+                action: widget.user.can(PosPermission.manageContacts)
+                    ? FilledButton.icon(
+                        onPressed: () => edit(),
+                        icon: const Icon(Icons.add),
+                        label:
+                            Text('Add ${suppliers ? 'supplier' : 'customer'}'))
+                    : null)),
+        Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: AppWorkspaceTabs(
+                labels: const ['Customers', 'Suppliers'],
+                selectedIndex: suppliers ? 1 : 0,
+                onSelected: (index) => setState(() {
+                      suppliers = index == 1;
                       search = '';
-                    })),
-          Padding(
-              padding: const EdgeInsets.all(8),
-              child: TextField(
-                decoration: InputDecoration(
-                    prefixIcon: const Icon(Icons.search),
-                    labelText:
-                        'Search ${suppliers ? 'suppliers' : 'customers'}'),
-                onChanged: (value) =>
-                    setState(() => search = value.toLowerCase().trim()),
-              )),
-          Expanded(
-              child: FutureBuilder(
-            future: suppliers
-                ? widget.repository.suppliers()
-                : widget.repository.customers(),
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
-                return Center(child: Text(safeMessage(snapshot.error!)));
-              }
-              if (!snapshot.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final rows = snapshot.data!;
-              final filtered = rows.where((row) {
-                final name =
-                    row is Customer ? row.name : (row as Supplier).name;
-                return name.toLowerCase().contains(search);
-              }).toList();
-              if (filtered.isEmpty) {
-                return Center(
-                    child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 420),
-                        child: Card(
-                            child: Padding(
-                                padding: const EdgeInsets.all(24),
-                                child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                          search.isEmpty
-                                              ? 'No ${suppliers ? 'suppliers' : 'customers'} yet'
-                                              : 'No matching records',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleMedium),
-                                      const SizedBox(height: 8),
-                                      Text(search.isEmpty
-                                          ? suppliers
-                                              ? 'Add suppliers to record stock receiving and supplier RMA.'
-                                              : 'Add customers to track purchases, credit, RMA, and layaways.'
-                                          : 'Try a different name.'),
-                                      if (search.isEmpty &&
-                                          widget.user.can(
-                                              PosPermission.manageContacts))
-                                        TextButton.icon(
-                                            onPressed: () => edit(),
-                                            icon: const Icon(Icons.add),
-                                            label: Text(
-                                                'Add ${suppliers ? 'supplier' : 'customer'}')),
-                                    ])))));
-              }
-              return ListView(padding: const EdgeInsets.all(8), children: [
-                for (final row in filtered)
-                  Card(
-                      child: ListTile(
-                    title: Text(
-                        row is Customer ? row.name : (row as Supplier).name),
-                    subtitle: Text(row is Customer
-                        ? '${row.phone ?? 'No phone'}${row.isActive ? '' : ' · Inactive'}'
-                        : '${(row as Supplier).phone ?? 'No phone'}${row.isActive ? '' : ' · Inactive'}'),
-                    onTap: () => row is Customer
-                        ? Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                                builder: (_) => CustomerDetailsScreen(
-                                    customer: row,
-                                    repository: CustomerCreditRepository(
-                                        widget.repository.db),
-                                    user: widget.user)))
-                        : Navigator.push(
-                            context,
-                            MaterialPageRoute<void>(
-                                builder: (_) => SupplierDetailsScreen(
-                                    supplier: row as Supplier,
-                                    repository: StockReceivingRepository(
-                                        widget.repository.db)))),
-                    trailing: widget.user.can(PosPermission.manageContacts)
-                        ? IconButton(
-                            tooltip: 'Edit',
-                            icon: const Icon(Icons.edit),
-                            onPressed: () => edit(
-                                customer: row is Customer ? row : null,
-                                supplier: row is Supplier ? row : null))
-                        : null,
-                  ))
-              ]);
-            },
-          )),
-        ]),
-        floatingActionButton: widget.user.can(PosPermission.manageContacts)
-            ? FloatingActionButton.extended(
-                heroTag: 'contacts-add',
-                onPressed: () => edit(),
-                icon: const Icon(Icons.add),
-                label: Text('Add ${suppliers ? 'supplier' : 'customer'}'),
-              )
-            : null,
-      );
-}
-
-class SupplierDetailsScreen extends StatelessWidget {
-  final Supplier supplier;
-  final StockReceivingRepository repository;
-  const SupplierDetailsScreen(
-      {super.key, required this.supplier, required this.repository});
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: Text(supplier.name)),
-        body: FutureBuilder(
-          future: repository.history(supplierId: supplier.id),
-          builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return Center(child: Text(safeMessage(snapshot.error!)));
-            }
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final rows = snapshot.data!;
-            return ListView(padding: const EdgeInsets.all(16), children: [
-              Text(supplier.contact ?? ''),
-              Text(supplier.phone ?? ''),
-              Text(supplier.address ?? ''),
-              Text(supplier.notes ?? ''),
-              const Divider(),
-              const Text('Receiving history'),
-              if (rows.isEmpty) const Text('No deliveries recorded yet'),
-              for (final row in rows)
-                FutureBuilder(
-                  future: repository.items(row.id),
-                  builder: (context, items) => ListTile(
-                    onTap: items.hasData
-                        ? () async {
-                            final details = <Widget>[];
-                            for (final item in items.data!) {
-                              final product = await (repository.db
-                                      .select(repository.db.products)
-                                    ..where((p) => p.id.equals(item.productId)))
-                                  .getSingleOrNull();
-                              final serials =
-                                  await repository.serialsForItem(item.id);
-                              details.add(ListTile(
-                                title: Text(product?.name ?? 'Product'),
-                                subtitle: Text(
-                                    '${Quantity.format(item.quantityMilli)} · ${formatPeso(item.unitCostCents)} / unit${item.batchNumber == null ? '' : ' · ${item.batchNumber}'}${serials.isEmpty ? '' : '\nSerials: ${serials.map((s) => s.serialNumber).join(', ')}'}'),
-                              ));
+                      page = 0;
+                    }))),
+        Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            child: AppSearchField(
+                key: ValueKey(suppliers),
+                hintText: suppliers
+                    ? 'Search supplier or contact...'
+                    : 'Search customer or phone...',
+                onChanged: (value) => setState(() {
+                      search = value.toLowerCase().trim();
+                      page = 0;
+                    }))),
+        Expanded(
+            child: FutureBuilder<List<Object>>(
+                key: ValueKey('$suppliers:$search:$page'),
+                future: _loadPage(),
+                builder: (context, snapshot) {
+                  if (snapshot.hasError) {
+                    return Center(child: Text(safeMessage(snapshot.error!)));
+                  }
+                  final data = snapshot.data;
+                  final total = data == null ? 0 : data[0] as int;
+                  final rows =
+                      data == null ? <dynamic>[] : data[1] as List<dynamic>;
+                  final summaries = data == null || suppliers
+                      ? <String, CustomerSummary>{}
+                      : data[2] as Map<String, CustomerSummary>;
+                  final supplierSummaries = data == null || !suppliers
+                      ? <String, SupplierListSummary>{}
+                      : data[2] as Map<String, SupplierListSummary>;
+                  return Padding(
+                      padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+                      child: AppPagedListPanel(
+                          title: suppliers ? 'Suppliers' : 'Customers',
+                          total: total,
+                          count: rows.length,
+                          loading: data == null,
+                          page: page,
+                          onPrevious: () => setState(() => page--),
+                          onNext: () => setState(() => page++),
+                          emptyTitle:
+                              'No ${suppliers ? 'suppliers' : 'customers'} found.',
+                          itemBuilder: (context, index) {
+                            final row = rows[index];
+                            if (row is Customer) {
+                              final summary = summaries[row.id];
+                              return AppEntityRow(
+                                  title: row.name,
+                                  subtitle: _customerSubtitle(row, summary),
+                                  amount: summary == null
+                                      ? null
+                                      : formatPeso(summary.lifetimeCents),
+                                  status: summary == null
+                                      ? null
+                                      : AppSemanticStatusBadge(
+                                          label: summary.group),
+                                  onTap: () => _openCustomer(row));
                             }
-                            if (!context.mounted) return;
-                            await showDialog<void>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                      title: Text(
-                                          row.externalReference ?? 'Delivery'),
-                                      content: SizedBox(
-                                          width: 450,
-                                          child: ListView(
-                                              shrinkWrap: true,
-                                              children: details)),
-                                      actions: [
-                                        TextButton(
-                                            onPressed: () =>
-                                                Navigator.pop(context),
-                                            child: const Text('Close'))
-                                      ],
-                                    ));
-                          }
-                        : null,
-                    title: Text(row.externalReference ?? 'Delivery'),
-                    subtitle: Text(MaterialLocalizations.of(context)
-                        .formatMediumDate(row.receivedAt)),
-                    trailing: Text(
-                        items.hasData ? '${items.data!.length} items' : '…'),
-                  ),
-                ),
-            ]);
-          },
-        ),
-      );
+                            final supplier = row as Supplier;
+                            final summary = supplierSummaries[supplier.id];
+                            String dateOrNone(DateTime? date) => date == null
+                                ? 'None'
+                                : MaterialLocalizations.of(context)
+                                    .formatMediumDate(date);
+                            return AppEntityRow(
+                                title: supplier.name,
+                                subtitle:
+                                    '${supplier.contact ?? supplier.phone ?? 'No contact'}\n'
+                                    'Last receiving ${dateOrNone(summary?.lastReceiving)} · Last PO ${dateOrNone(summary?.lastOrder)}',
+                                amount: summary == null ||
+                                        !widget.user.can(PosPermission.reports)
+                                    ? null
+                                    : '${formatPeso(summary.purchasedCents)} this month',
+                                status: AppSemanticStatusBadge(
+                                    label: supplier.isActive
+                                        ? 'Active'
+                                        : 'Inactive'),
+                                onTap: () => _openSupplier(supplier));
+                          }));
+                })),
+      ]));
 }
 
 class CustomerDetailsScreen extends StatefulWidget {
   final Customer customer;
   final CustomerCreditRepository repository;
   final ActiveUser user;
+  final bool embedded;
   const CustomerDetailsScreen(
       {super.key,
       required this.customer,
       required this.repository,
-      required this.user});
+      required this.user,
+      this.embedded = false});
   @override
   State<CustomerDetailsScreen> createState() => _CustomerDetailsScreenState();
 }
 
 class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
+  int creditPage = 0;
+
+  @override
+  void didUpdateWidget(covariant CustomerDetailsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.customer.id != widget.customer.id) creditPage = 0;
+  }
+
   Future<void> settleRefund(CustomerRefundObligation obligation) async {
     final due = obligation.amountCents - obligation.settledCents;
     final amount = TextEditingController(text: (due / 100).toStringAsFixed(2));
@@ -432,7 +427,7 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
           context: context,
           builder: (context) => StatefulBuilder(
               builder: (context, update) => AlertDialog(
-                    title: const Text('Record utang payment'),
+                    title: const Text('Record credit payment'),
                     content: SizedBox(
                         width: 350,
                         child:
@@ -503,83 +498,223 @@ class _CustomerDetailsScreenState extends State<CustomerDetailsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: Text(widget.customer.name)),
-        body: FutureBuilder(
-          future: Future.wait<Object>([
-            widget.repository.balance(widget.customer.id),
-            widget.repository.entries(widget.customer.id),
-            widget.repository.purchases(widget.customer.id),
-            widget.repository.refundObligations(widget.customer.id),
-          ]),
-          builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return Center(child: Text(safeMessage(snapshot.error!)));
-            }
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final balance = snapshot.data![0] as int;
-            final entries = snapshot.data![1] as List<CustomerCreditEntry>;
-            final purchases = snapshot.data![2] as List<Sale>;
-            final refunds = snapshot.data![3] as List<CustomerRefundObligation>;
-            return ListView(padding: const EdgeInsets.all(16), children: [
-              if (widget.customer.phone != null)
-                Text('Phone: ${widget.customer.phone}'),
-              if (widget.customer.address != null)
-                Text('Address: ${widget.customer.address}'),
-              if (widget.customer.notes != null)
-                Text('Notes: ${widget.customer.notes}'),
-              Text('Outstanding utang: ${formatPeso(balance)}'),
-              if (balance > 0)
-                FilledButton(
-                    onPressed: recordPayment,
-                    child: const Text('Record payment')),
-              if (refunds.isNotEmpty) ...[
-                const Divider(),
-                const Text('Customer refunds due'),
-                for (final obligation in refunds)
-                  ListTile(
-                    title: Text(obligation.saleId == null
-                        ? 'Layaway ${obligation.layawayId?.substring(0, 8) ?? ''}'
-                        : 'Sale ${obligation.saleId!.substring(0, 8)}'),
-                    subtitle: Text(
-                        '${formatPeso(obligation.settledCents)} returned of ${formatPeso(obligation.amountCents)}'),
-                    trailing:
-                        obligation.settledCents < obligation.amountCents &&
-                                widget.user.can(PosPermission.customerCredit)
-                            ? FilledButton(
-                                onPressed: () => settleRefund(obligation),
-                                child: const Text('Return balance'))
-                            : null,
+  Widget build(BuildContext context) {
+    final content = FutureBuilder(
+      future: Future.wait<Object>([
+        widget.repository.balance(widget.customer.id),
+        widget.embedded
+            ? widget.repository.entriesPage(widget.customer.id, creditPage)
+            : widget.repository.entries(widget.customer.id),
+        widget.embedded
+            ? Future.value(<Sale>[])
+            : widget.repository.purchases(widget.customer.id),
+        widget.repository.refundObligations(widget.customer.id),
+        widget.embedded
+            ? Future.value(<CommercialReturn>[])
+            : SaleReturnRepository(widget.repository.db)
+                .forCustomer(widget.customer.id),
+        widget.repository.activitySummary(widget.customer.id),
+      ]),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return Center(child: Text(safeMessage(snapshot.error!)));
+        }
+        if (snapshot.connectionState != ConnectionState.done ||
+            !snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final balance = snapshot.data![0] as int;
+        final entries = snapshot.data![1] as List<CustomerCreditEntry>;
+        final purchases = snapshot.data![2] as List<Sale>;
+        final refunds = snapshot.data![3] as List<CustomerRefundObligation>;
+        final returns = snapshot.data![4] as List<CommercialReturn>;
+        final activity = snapshot.data![5] as CustomerCreditActivitySummary;
+        if (widget.embedded) {
+          return Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(children: [
+                CustomerProfileKpis([
+                  ('Outstanding credit', formatPeso(balance)),
+                  ('Credit purchases', '${activity.creditSales}'),
+                  ('Payments', '${activity.payments}'),
+                  (
+                    'Last credit activity',
+                    activity.lastActivity == null
+                        ? '—'
+                        : MaterialLocalizations.of(context)
+                            .formatMediumDate(activity.lastActivity!)
                   ),
-              ],
-              const Divider(),
-              const Text('Purchases'),
-              if (purchases.isEmpty) const Text('No purchases linked yet'),
-              for (final sale in purchases)
+                ]),
+                if (balance > 0) ...[
+                  const SizedBox(height: 10),
+                  Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton(
+                          onPressed: recordPayment,
+                          child: const Text('Record payment'))),
+                ],
+                if (refunds.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  CustomerProfilePanel(
+                      title: 'Customer refunds due',
+                      count: refunds.length,
+                      child: Column(children: [
+                        for (final obligation in refunds)
+                          ListTile(
+                              title: Text(obligation.saleId == null
+                                  ? 'Layaway refund'
+                                  : 'Sale refund'),
+                              subtitle: Text(
+                                  '${formatPeso(obligation.settledCents)} returned of ${formatPeso(obligation.amountCents)}'),
+                              trailing: obligation.settledCents <
+                                      obligation.amountCents
+                                  ? TextButton(
+                                      onPressed: () => settleRefund(obligation),
+                                      child: const Text('Return balance'))
+                                  : null),
+                      ])),
+                ],
+                const SizedBox(height: 20),
+                Expanded(
+                    child: FutureBuilder<Map<String, String>>(
+                        future: widget.repository.saleReferences(entries),
+                        builder: (context, referenceSnapshot) {
+                          if (referenceSnapshot.hasError) {
+                            return Center(
+                                child: Text(
+                                    safeMessage(referenceSnapshot.error!)));
+                          }
+                          if (referenceSnapshot.connectionState !=
+                                  ConnectionState.done ||
+                              !referenceSnapshot.hasData) {
+                            return const Center(
+                                child: CircularProgressIndicator());
+                          }
+                          final references = referenceSnapshot.data!;
+                          return AppPagedListPanel(
+                              title: 'Credit activity',
+                              total: activity.total,
+                              count: entries.length,
+                              page: creditPage,
+                              emptyTitle: 'No credit activity',
+                              emptyMessage:
+                                  'Credit sales and related activity will appear here.',
+                              onPrevious: () => setState(() => creditPage--),
+                              onNext: () => setState(() => creditPage++),
+                              itemBuilder: (context, index) {
+                                final entry = entries[index];
+                                return Card(
+                                    margin: EdgeInsets.zero,
+                                    child: ListTile(
+                                        dense: true,
+                                        title: Text(entry.kind == 'credit_sale'
+                                            ? 'Credit sale'
+                                            : entry.kind == 'payment'
+                                                ? 'Payment'
+                                                : 'Sale reversal'),
+                                        subtitle: Text(
+                                            '${MaterialLocalizations.of(context).formatMediumDate(entry.createdAt)}${entry.saleId == null ? '' : ' · ${references[entry.saleId] ?? 'Sale ${entry.saleId!.substring(0, 8)}'}'}${entry.paymentMethod == null ? '' : ' · ${entry.paymentMethod == 'gcash' ? 'Confirmed GCash' : 'Cash'}'}${entry.note == null ? '' : ' · ${entry.note}'}'),
+                                        trailing: Text(
+                                            '${entry.amountCents >= 0 ? '+' : ''}${formatPeso(entry.amountCents)}')));
+                              });
+                        }))
+              ]));
+        }
+        return ListView(padding: const EdgeInsets.all(16), children: [
+          if (!widget.embedded && widget.customer.phone != null)
+            Text('Phone: ${widget.customer.phone}'),
+          if (!widget.embedded && widget.customer.address != null)
+            Text('Address: ${widget.customer.address}'),
+          if (!widget.embedded && widget.customer.notes != null)
+            Text('Notes: ${widget.customer.notes}'),
+          CustomerProfileKpis([
+            ('Outstanding credit', formatPeso(balance)),
+            (
+              'Credit purchases',
+              '${entries.where((e) => e.kind == 'credit_sale').length}'
+            ),
+            ('Payments', '${entries.where((e) => e.kind == 'payment').length}'),
+            (
+              'Last credit activity',
+              entries.isEmpty
+                  ? '—'
+                  : MaterialLocalizations.of(context)
+                      .formatMediumDate(entries.last.createdAt)
+            ),
+          ]),
+          if (balance > 0 && widget.user.can(PosPermission.customerCredit))
+            FilledButton(
+                onPressed: recordPayment, child: const Text('Record payment')),
+          if (refunds.isNotEmpty) ...[
+            const Divider(),
+            const Text('Customer refunds due'),
+            for (final obligation in refunds)
+              ListTile(
+                title: Text(obligation.saleId == null
+                    ? 'Layaway ${obligation.layawayId?.substring(0, 8) ?? ''}'
+                    : 'Sale ${obligation.saleId!.substring(0, 8)}'),
+                subtitle: Text(
+                    '${formatPeso(obligation.settledCents)} returned of ${formatPeso(obligation.amountCents)}'),
+                trailing: obligation.settledCents < obligation.amountCents &&
+                        widget.user.can(PosPermission.customerCredit)
+                    ? FilledButton(
+                        onPressed: () => settleRefund(obligation),
+                        child: const Text('Return balance'))
+                    : null,
+              ),
+          ],
+          if (!widget.embedded) ...[
+            const Divider(),
+            const Text('Purchases'),
+            if (purchases.isEmpty) const Text('No purchases linked yet'),
+            for (final sale in purchases)
+              Column(children: [
                 ListTile(
                     title: Text(
-                        'Sale ${sale.birInvoiceNumber == null ? sale.id.substring(0, 8) : '#${sale.birInvoiceNumber}'}'),
+                        'Sale ${sale.receiptNumber ?? (sale.birInvoiceNumber == null ? 'Legacy sale' : '#${sale.birInvoiceNumber}')}'),
                     subtitle: Text(MaterialLocalizations.of(context)
                         .formatMediumDate(sale.createdAt)),
                     trailing: Text(formatPeso(sale.totalCents))),
-              const Divider(),
-              const Text('Utang history'),
-              if (entries.isEmpty) const Text('No credit transactions yet'),
-              for (final entry in entries)
-                ListTile(
-                    title: Text(entry.kind == 'credit_sale'
-                        ? 'Credit sale'
-                        : entry.kind == 'payment'
-                            ? 'Payment'
-                            : 'Sale reversal'),
-                    subtitle: Text(
-                        '${MaterialLocalizations.of(context).formatMediumDate(entry.createdAt)}${entry.paymentMethod == null ? '' : ' · ${entry.paymentMethod == 'gcash' ? 'Confirmed GCash' : 'Cash'}'}${entry.note == null ? '' : ' · ${entry.note}'}'),
-                    trailing: Text(
-                        '${entry.amountCents >= 0 ? '+' : ''}${formatPeso(entry.amountCents)}')),
-            ]);
-          },
-        ),
-      );
+                for (final row in returns.where((r) => r.saleId == sale.id))
+                  ListTile(
+                      contentPadding: const EdgeInsets.only(left: 28),
+                      title: Text(
+                          '${row.reference} Â· ${row.kind == 'exchange' ? 'Exchange' : 'Return'}'),
+                      subtitle: Text(MaterialLocalizations.of(context)
+                          .formatMediumDate(row.createdAt)),
+                      trailing: Text(row.cashEffectCents < 0
+                          ? '${formatPeso(-row.cashEffectCents)} refunded'
+                          : row.cashEffectCents > 0
+                              ? '${formatPeso(row.cashEffectCents)} paid'
+                              : 'No cash movement'))
+              ]),
+          ],
+          const SizedBox(height: 20),
+          CustomerProfilePanel(
+              title: 'Credit activity',
+              count: entries.length,
+              child: entries.isEmpty
+                  ? const CustomerProfileEmpty('No credit activity',
+                      'Credit sales and related activity will appear here.')
+                  : Column(children: [
+                      for (final entry in entries.reversed)
+                        ListTile(
+                            title: Text(entry.kind == 'credit_sale'
+                                ? 'Credit sale'
+                                : entry.kind == 'payment'
+                                    ? 'Payment'
+                                    : 'Sale reversal'),
+                            subtitle: Text(
+                                '${MaterialLocalizations.of(context).formatMediumDate(entry.createdAt)}${entry.paymentMethod == null ? '' : ' Â· ${entry.paymentMethod == 'gcash' ? 'Confirmed GCash' : 'Cash'}'}${entry.note == null ? '' : ' Â· ${entry.note}'}'),
+                            trailing: Text(
+                                '${entry.amountCents >= 0 ? '+' : ''}${formatPeso(entry.amountCents)}')),
+                    ])),
+        ]);
+      },
+    );
+    return widget.embedded
+        ? content
+        : Scaffold(
+            appBar: AppBar(title: Text(widget.customer.name)), body: content);
+  }
 }

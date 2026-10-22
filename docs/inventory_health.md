@@ -1,0 +1,13 @@
+# Current inventory health (schema 37)
+
+Inventory health is a present-state read model. The three persisted thresholds default to 60 days for slow moving, 180 days for dead stock, and 30 days for near expiry. Settings require values from 1 to 3650 days, with dead stock at least as old as slow moving. Derived flags, ages, velocity, and expiry statuses are never persisted.
+
+Available stock uses the existing physical stock less active layaway and RMA reservations. Incoming purchase orders remain separate. Slow moving and dead stock require positive available quantity. If a product has a completed sale, age is calendar days since its last completed sale. If it has never sold, age is calendar days since its oldest *remaining* inventory layer. Slow moving means age at least the configured slow threshold; dead stock means age at least the configured dead threshold. These classifications do not write stock or accounting records.
+
+Last sold is the latest completed sale item date. Voided sales and non-sale documents are excluded. Recent net quantities are fixed-point quantities from completed sales in the trailing 30 or 90 days, less finalized commercial returns and item refunds posted in that same trailing period. A return may make a recent period's net quantity zero or negative. Stock cover appears only when the first completed sale is at least 30 days old, recent net 30-day sales are positive, and available stock is positive. It is the ceiling of `availableMilli * 30 / netSold30Milli` in days. Otherwise the UI says “Insufficient sales history,” “No recent sales,” or “Out of stock.” This is an operational estimate, not a forecast.
+
+Aging uses only layers with positive remaining quantity. The mutually exclusive buckets are 0–30, 31–60, 61–90, 91–180, and 180+ calendar days. Quantity is summed in thousandths; cost value uses each layer's actual unit cost with the existing half-up fixed-point money calculation. Depleted layers contribute neither current age nor value.
+
+Expiry Monitor uses only positive remaining batch layers with an expiry date. Expired, within 7 days, near expiry under the configured threshold, and later are read-only statuses. The owner-only “Adjust expired stock” action opens the existing adjustment form with product, batch, reason, and suggested negative quantity. The user can edit the quantity and must post it explicitly. FIFO is unchanged.
+
+Reports → Inventory labels current valuation, aging, dead-stock value, expiry, reorder needs, product ranking, and category value as present state. The selected report period continues to apply to historical adjustments; it does not fabricate a past inventory snapshot. Only finalized adjustments affect management profit.

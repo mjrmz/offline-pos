@@ -216,7 +216,7 @@ void main() {
             .where((m) => m.kind == 'item_refund'),
         isEmpty);
     final backup = await BackupService(f.db, dir).create(BackupKind.manual);
-    expect(BackupService.verify(backup.file), 24);
+    expect(BackupService.verify(backup.file), f.db.schemaVersion);
     final restored = AppDatabase.forTesting(NativeDatabase(backup.file));
     try {
       expect((await restored.select(restored.saleItemRefunds).get()).length, 2);
@@ -402,7 +402,7 @@ void main() {
         throwsA(isA<StateError>()));
     expect(await f.pos.stockMilli(product), 1000);
     final backup = await BackupService(f.db, dir).create(BackupKind.manual);
-    expect(BackupService.verify(backup.file), 24);
+    expect(BackupService.verify(backup.file), f.db.schemaVersion);
     final restored = AppDatabase.forTesting(NativeDatabase(backup.file));
     try {
       expect(

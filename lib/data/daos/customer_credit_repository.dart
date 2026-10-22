@@ -4,6 +4,15 @@ import '../../core/models/active_user.dart';
 import '../database.dart';
 import 'auth_repository.dart';
 
+class CustomerCreditActivitySummary {
+  final int total;
+  final int creditSales;
+  final int payments;
+  final DateTime? lastActivity;
+  const CustomerCreditActivitySummary(
+      this.total, this.creditSales, this.payments, this.lastActivity);
+}
+
 class CustomerCreditRepository {
   final AppDatabase db;
   CustomerCreditRepository(this.db);
@@ -14,8 +23,61 @@ class CustomerCreditRepository {
             ..orderBy([(e) => OrderingTerm(expression: e.createdAt)]))
           .get();
 
-  Future<int> balance(String customerId) async =>
-      (await entries(customerId)).fold<int>(0, (sum, e) => sum + e.amountCents);
+  Future<CustomerCreditActivitySummary> activitySummary(
+      String customerId) async {
+    final row = await db.customSelect('''
+      SELECT COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN kind='credit_sale' THEN 1 ELSE 0 END),0) AS sales,
+        COALESCE(SUM(CASE WHEN kind='payment' THEN 1 ELSE 0 END),0) AS payments,
+        MAX(created_at) AS last_activity
+      FROM customer_credit_entries WHERE customer_id=?
+    ''', variables: [Variable.withString(customerId)]).getSingle();
+    final seconds = row.readNullable<int>('last_activity');
+    return CustomerCreditActivitySummary(
+        row.read<int>('total'),
+        row.read<int>('sales'),
+        row.read<int>('payments'),
+        seconds == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(seconds * 1000));
+  }
+
+  Future<List<CustomerCreditEntry>> entriesPage(String customerId, int page) =>
+      (db.select(db.customerCreditEntries)
+            ..where((e) => e.customerId.equals(customerId))
+            ..orderBy([
+              (e) =>
+                  OrderingTerm(expression: e.createdAt, mode: OrderingMode.desc)
+            ])
+            ..limit(50, offset: page * 50))
+          .get();
+
+  Future<Map<String, String>> saleReferences(
+      List<CustomerCreditEntry> entries) async {
+    final ids = entries
+        .map((entry) => entry.saleId)
+        .whereType<String>()
+        .toSet()
+        .toList();
+    if (ids.isEmpty) return {};
+    final marks = List.filled(ids.length, '?').join(',');
+    final rows = await db.customSelect('''
+      SELECT id, receipt_number FROM sales WHERE id IN ($marks)
+    ''', variables: [for (final id in ids) Variable.withString(id)]).get();
+    return {
+      for (final row in rows)
+        if (row.readNullable<String>('receipt_number') != null)
+          row.read<String>('id'): row.read<String>('receipt_number')
+    };
+  }
+
+  Future<int> balance(String customerId) async {
+    final row = await db.customSelect('''
+      SELECT COALESCE(SUM(amount_cents), 0) AS balance
+      FROM customer_credit_entries WHERE customer_id=?
+    ''', variables: [Variable.withString(customerId)]).getSingle();
+    return row.read<int>('balance');
+  }
 
   Future<List<CustomerRefundObligation>> refundObligations(String customerId) =>
       (db.select(db.customerRefundObligations)

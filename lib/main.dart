@@ -253,7 +253,7 @@ class _PosAppState extends State<PosApp> {
           title: AppConfig.appName,
           theme: AppTheme.light,
           darkTheme: AppTheme.dark,
-          themeMode: themeController.mode,
+          themeMode: themeController.workspaceMode,
           home: health == null
               ? const Scaffold(body: Center(child: CircularProgressIndicator()))
               : !health!.canUseRegister || db == null || currentAuth == null
@@ -304,6 +304,8 @@ class _PosAppState extends State<PosApp> {
                                   licenseApiUrl.isEmpty || deviceId == null
                                       ? null
                                       : (key) async {
+                                          currentAuth.requireSession(
+                                              PosPermission.refreshLicense);
                                           await ActivationClient(
                                                   Uri.parse(licenseApiUrl),
                                                   SignatureVerifier(),

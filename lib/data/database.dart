@@ -10,6 +10,7 @@ import 'package:drift/native.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
+import '../core/models/active_user.dart';
 
 part 'database.g.dart';
 
@@ -31,6 +32,10 @@ class Products extends Table {
   BoolColumn get serialTracking =>
       boolean().withDefault(const Constant(false))();
   IntColumn get lowStockThreshold => integer().withDefault(const Constant(5))();
+  IntColumn get reorderLevelQtyMilli => integer().nullable()();
+  IntColumn get targetStockQtyMilli => integer().nullable()();
+  TextColumn get preferredSupplierId =>
+      text().nullable().references(Suppliers, #id)();
   DateTimeColumn get createdAt =>
       dateTime().clientDefault(() => DateTime.now())();
 
@@ -78,6 +83,9 @@ class Sales extends Table {
   TextColumn get cashSessionId =>
       text().nullable().references(CashSessions, #id)();
   TextColumn get customerId => text().nullable().references(Customers, #id)();
+  TextColumn get walkInName => text().nullable()();
+  TextColumn get walkInContact => text().nullable()();
+  TextColumn get heldReference => text().nullable()();
   IntColumn get totalCents => integer()();
   IntColumn get birInvoiceNumber => integer().nullable().unique()();
   TextColumn get status => text().withDefault(
@@ -103,7 +111,37 @@ class SaleItems extends Table {
   IntColumn get extraCents => integer().withDefault(const Constant(0))();
   IntColumn get unitPriceCents => integer()();
   IntColumn get lineTotalCents => integer().withDefault(const Constant(0))();
+  IntColumn get manualDiscountCents =>
+      integer().withDefault(const Constant(0))();
 
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class HeldSales extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get reference => text().unique()();
+  TextColumn get label => text().nullable()();
+  TextColumn get snapshotJson => text()();
+  TextColumn get heldBy => text().references(Users, #id)();
+  DateTimeColumn get heldAt => dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class SaleManualDiscounts extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get saleId => text().references(Sales, #id)();
+  TextColumn get scope => text()();
+  TextColumn get lineKey => text().nullable()();
+  TextColumn get kind => text()();
+  IntColumn get value => integer()();
+  IntColumn get effectCents => integer()();
+  TextColumn get reason => text()();
+  TextColumn get notes => text().nullable()();
+  TextColumn get requestedBy => text().references(Users, #id)();
+  TextColumn get authorizedBy => text().references(Users, #id)();
+  DateTimeColumn get authorizedAt => dateTime()();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -358,14 +396,70 @@ class Suppliers extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class PurchaseOrders extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  IntColumn get sequence => integer().unique()();
+  TextColumn get supplierId => text().references(Suppliers, #id)();
+  TextColumn get status => text().withDefault(const Constant('draft'))();
+  DateTimeColumn get orderDate => dateTime()();
+  DateTimeColumn get expectedDeliveryDate => dateTime().nullable()();
+  TextColumn get supplierReference => text().nullable()();
+  TextColumn get notes => text().nullable()();
+  TextColumn get createdBy => text().references(Users, #id)();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  DateTimeColumn get updatedAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  DateTimeColumn get sentAt => dateTime().nullable()();
+  TextColumn get sentBy => text().nullable().references(Users, #id)();
+  DateTimeColumn get cancelledAt => dateTime().nullable()();
+  TextColumn get cancelledBy => text().nullable().references(Users, #id)();
+  TextColumn get cancelReason => text().nullable()();
+  DateTimeColumn get closedAt => dateTime().nullable()();
+  TextColumn get closedBy => text().nullable().references(Users, #id)();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class PurchaseOrderLines extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get purchaseOrderId => text().references(PurchaseOrders, #id)();
+  TextColumn get productId => text().references(Products, #id)();
+  IntColumn get orderedQtyMilli => integer()();
+  IntColumn get expectedUnitCostCents => integer()();
+  IntColumn get cancelledQtyMilli => integer().withDefault(const Constant(0))();
+  TextColumn get notes => text().nullable()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class PurchaseOrderLineSourceLinks extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get purchaseOrderLineId =>
+      text().references(PurchaseOrderLines, #id)();
+  TextColumn get quotationId => text().references(Quotations, #id)();
+  // Historical identity only: quotation edits can replace their item rows.
+  TextColumn get quotationLineId => text().nullable()();
+  IntColumn get plannedQtyMilli => integer()();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  TextColumn get createdByUserId => text().nullable().references(Users, #id)();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 class StockReceivings extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
+  IntColumn get sequence => integer().nullable().unique()();
   TextColumn get supplierId => text().references(Suppliers, #id)();
   TextColumn get userId => text().references(Users, #id)();
+  TextColumn get purchaseOrderId =>
+      text().nullable().references(PurchaseOrders, #id)();
   TextColumn get externalReference => text().nullable()();
   TextColumn get notes => text().nullable()();
   DateTimeColumn get receivedAt =>
       dateTime().clientDefault(() => DateTime.now())();
+  DateTimeColumn get finalizedAt => dateTime().nullable()();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -374,6 +468,8 @@ class StockReceivingItems extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get receivingId => text().references(StockReceivings, #id)();
   TextColumn get productId => text().references(Products, #id)();
+  TextColumn get purchaseOrderLineId =>
+      text().nullable().references(PurchaseOrderLines, #id)();
   IntColumn get quantityMilli => integer()();
   IntColumn get unitCostCents => integer()();
   IntColumn get unitSellingPriceCents => integer().nullable()();
@@ -397,6 +493,63 @@ class InventoryLayers extends Table {
   DateTimeColumn get expiryDate => dateTime().nullable()();
   DateTimeColumn get receivedAt =>
       dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class StockCounts extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get reference => text().unique()();
+  TextColumn get status => text().withDefault(const Constant('draft'))();
+  TextColumn get scope => text()();
+  TextColumn get notes => text().nullable()();
+  TextColumn get createdBy => text().references(Users, #id)();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  TextColumn get finalizedBy => text().nullable().references(Users, #id)();
+  DateTimeColumn get finalizedAt => dateTime().nullable()();
+  DateTimeColumn get cancelledAt => dateTime().nullable()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class StockCountLines extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get stockCountId => text().references(StockCounts, #id)();
+  TextColumn get productId => text().references(Products, #id)();
+  TextColumn get unitLabel => text()();
+  IntColumn get expectedMilli => integer()();
+  IntColumn get movementCount => integer()();
+  IntColumn get countedMilli => integer().nullable()();
+  TextColumn get notes => text().nullable()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class InventoryAdjustments extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get reference => text().unique()();
+  TextColumn get productId => text().references(Products, #id)();
+  IntColumn get deltaMilli => integer()();
+  TextColumn get reason => text()();
+  TextColumn get notes => text().nullable()();
+  TextColumn get createdBy => text().references(Users, #id)();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  TextColumn get stockCountLineId =>
+      text().nullable().unique().references(StockCountLines, #id)();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class InventoryAdjustmentAllocations extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get adjustmentId => text().references(InventoryAdjustments, #id)();
+  TextColumn get inventoryLayerId => text().references(InventoryLayers, #id)();
+  TextColumn get serialUnitId =>
+      text().nullable().references(SerialUnits, #id)();
+  IntColumn get quantityMilli => integer()();
+  IntColumn get unitCostCents => integer()();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -549,7 +702,10 @@ class Quotations extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get reference => text().unique()();
   TextColumn get customerId => text().nullable().references(Customers, #id)();
+  TextColumn get customerNameSnapshot => text().nullable()();
+  TextColumn get customerPhoneSnapshot => text().nullable()();
   TextColumn get createdBy => text().references(Users, #id)();
+  TextColumn get preparedBySnapshot => text().withDefault(const Constant(''))();
   DateTimeColumn get validUntil => dateTime().nullable()();
   TextColumn get status => text().withDefault(const Constant('open'))();
   TextColumn get notes => text().nullable()();
@@ -564,11 +720,55 @@ class Quotations extends Table {
 class QuotationItems extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get quotationId => text().references(Quotations, #id)();
-  TextColumn get productId => text().references(Products, #id)();
+  TextColumn get productId => text().nullable().references(Products, #id)();
+  TextColumn get productNameSnapshot =>
+      text().withDefault(const Constant(''))();
+  TextColumn get skuSnapshot => text().nullable()();
+  TextColumn get barcodeSnapshot => text().nullable()();
+  TextColumn get customNotes => text().nullable()();
+  TextColumn get saleMode => text().withDefault(const Constant('ordinary'))();
+  IntColumn get extraCents => integer().withDefault(const Constant(0))();
   IntColumn get quantityMilli => integer()();
   TextColumn get unitSnapshot => text()();
   IntColumn get unitPriceCents => integer()();
   IntColumn get lineTotalCents => integer()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class QuotationSourcingRequirements extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get quotationId => text().references(Quotations, #id)();
+  TextColumn get productId => text().references(Products, #id)();
+  IntColumn get quantityRequiredMilli => integer()();
+  IntColumn get quantityAvailableAtRequestMilli => integer()();
+  IntColumn get quantityToSourceMilli => integer()();
+  TextColumn get preferredSupplierId =>
+      text().nullable().references(Suppliers, #id)();
+  TextColumn get notes => text().nullable()();
+  TextColumn get status => text().withDefault(const Constant('pending'))();
+  TextColumn get createdBy => text().references(Users, #id)();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  DateTimeColumn get resolvedAt => dateTime().nullable()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class QuotationDocumentSettings extends Table {
+  IntColumn get id => integer()();
+  BoolColumn get showSku => boolean().withDefault(const Constant(true))();
+  BoolColumn get showBarcode => boolean().withDefault(const Constant(false))();
+  BoolColumn get showUnit => boolean().withDefault(const Constant(true))();
+  BoolColumn get showPreparedBy =>
+      boolean().withDefault(const Constant(true))();
+  BoolColumn get showSignature =>
+      boolean().withDefault(const Constant(false))();
+  BoolColumn get showAcceptance =>
+      boolean().withDefault(const Constant(false))();
+  TextColumn get footer => text().withDefault(const Constant(
+      'This document is a quotation only and is not an official receipt or tax invoice.'))();
+  TextColumn get terms => text().withDefault(const Constant(''))();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -634,6 +834,40 @@ class PettyCashEntries extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class CashExpenseCategories extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get name => text()();
+  BoolColumn get active => boolean().withDefault(const Constant(true))();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class BusinessCashMovements extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get type => text()(); // expense, replenishment, reversal
+  IntColumn get amountCents => integer()();
+  TextColumn get source =>
+      text().nullable()(); // drawer, petty, company, personal
+  TextColumn get destination => text().nullable()();
+  TextColumn get cashSessionId =>
+      text().nullable().references(CashSessions, #id)();
+  TextColumn get drawerMovementId =>
+      text().nullable().references(CashMovements, #id)();
+  TextColumn get categoryId =>
+      text().nullable().references(CashExpenseCategories, #id)();
+  TextColumn get categoryName => text().nullable()();
+  TextColumn get payee => text().nullable()();
+  TextColumn get reference => text().nullable()();
+  TextColumn get note => text().nullable()();
+  TextColumn get personallyPaidBy => text().nullable()();
+  TextColumn get recordedByUserId => text().references(Users, #id)();
+  TextColumn get reversalOfId => text().nullable().unique()();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 class PriceHistory extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get productId => text().references(Products, #id)();
@@ -690,6 +924,8 @@ class ZReadings extends Table {
   SaleReversals,
   SaleItemRefunds,
   SaleItems,
+  HeldSales,
+  SaleManualDiscounts,
   Payments,
   Users,
   CashSessions,
@@ -706,9 +942,15 @@ class ZReadings extends Table {
   CustomerRefundObligations,
   CustomerRefundSettlements,
   Suppliers,
+  PurchaseOrders,
+  PurchaseOrderLines,
   StockReceivings,
   StockReceivingItems,
   InventoryLayers,
+  StockCounts,
+  StockCountLines,
+  InventoryAdjustments,
+  InventoryAdjustmentAllocations,
   SaleItemInventoryAllocations,
   SerialUnits,
   SerialSaleLinks,
@@ -719,11 +961,16 @@ class ZReadings extends Table {
   InboundRmaReplacements,
   Quotations,
   QuotationItems,
+  QuotationSourcingRequirements,
+  PurchaseOrderLineSourceLinks,
+  QuotationDocumentSettings,
   Layaways,
   LayawayItems,
   LayawaySerials,
   LayawayPayments,
   PettyCashEntries,
+  CashExpenseCategories,
+  BusinessCashMovements,
   PriceHistory,
   BirComplianceState,
   ZReadings,
@@ -738,12 +985,15 @@ class AppDatabase extends _$AppDatabase {
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 24;
+  int get schemaVersion => 40;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
+          await _createRoleTables(this);
+          await _createCommercialReturnTables(this);
+          await _createLoyaltyTables(this);
           await customStatement('CREATE UNIQUE INDEX cash_sessions_one_open '
               'ON cash_sessions ((1)) WHERE closed_at IS NULL');
           await _createBirGuards(this);
@@ -777,6 +1027,7 @@ class AppDatabase extends _$AppDatabase {
               'CREATE INDEX IF NOT EXISTS serial_warranty_unit_created '
               'ON serial_warranty_snapshots (serial_unit_id, created_at)');
           await _createInventoryGuards(this);
+          await _createInventoryHealthSettings(this);
           final saleTables = await customSelect(
                   "SELECT name FROM sqlite_master WHERE type='table' AND name='sales'")
               .get();
@@ -1247,11 +1498,234 @@ class AppDatabase extends _$AppDatabase {
               await _createReceiptGuards(this);
             }
           }
+          if (from < 25) {
+            final columns =
+                (await customSelect('PRAGMA table_info(quotation_items)').get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!columns.contains('product_name_snapshot')) {
+              await m.addColumn(
+                  quotationItems, quotationItems.productNameSnapshot);
+            }
+            if (!columns.contains('sku_snapshot')) {
+              await m.addColumn(quotationItems, quotationItems.skuSnapshot);
+            }
+            if (!columns.contains('barcode_snapshot')) {
+              await m.addColumn(quotationItems, quotationItems.barcodeSnapshot);
+            }
+            if (!columns.contains('sale_mode')) {
+              await m.addColumn(quotationItems, quotationItems.saleMode);
+            }
+            if (!columns.contains('extra_cents')) {
+              await m.addColumn(quotationItems, quotationItems.extraCents);
+            }
+            final productTables = await customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='products'")
+                .get();
+            if (productTables.isNotEmpty) {
+              final productColumns =
+                  (await customSelect('PRAGMA table_info(products)').get())
+                      .map((row) => row.read<String>('name'))
+                      .toSet();
+              final skuExpression = productColumns.contains('sku')
+                  ? '(SELECT sku FROM products WHERE products.id = quotation_items.product_id)'
+                  : 'NULL';
+              final barcodeExpression = productColumns.contains('barcode')
+                  ? '(SELECT barcode FROM products WHERE products.id = quotation_items.product_id)'
+                  : 'NULL';
+              await customStatement('UPDATE quotation_items SET '
+                  'product_name_snapshot = COALESCE((SELECT name FROM products '
+                  'WHERE products.id = quotation_items.product_id), \'Product\'), '
+                  'sku_snapshot = $skuExpression, '
+                  'barcode_snapshot = $barcodeExpression '
+                  "WHERE product_name_snapshot = ''");
+            }
+          }
+          if (from < 26) {
+            final tables = await customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='quotation_document_settings'")
+                .get();
+            if (tables.isEmpty) await m.createTable(quotationDocumentSettings);
+          }
+          if (from < 27) {
+            final columns =
+                (await customSelect('PRAGMA table_info(quotations)').get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!columns.contains('customer_name_snapshot')) {
+              await m.addColumn(quotations, quotations.customerNameSnapshot);
+            }
+            if (!columns.contains('customer_phone_snapshot')) {
+              await m.addColumn(quotations, quotations.customerPhoneSnapshot);
+            }
+            if (!columns.contains('prepared_by_snapshot')) {
+              await m.addColumn(quotations, quotations.preparedBySnapshot);
+            }
+            final identityTables = (await customSelect(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('customers','users')")
+                    .get())
+                .map((row) => row.read<String>('name'))
+                .toSet();
+            if (identityTables.contains('customers') &&
+                identityTables.contains('users')) {
+              await customStatement('UPDATE quotations SET '
+                  'customer_name_snapshot = (SELECT name FROM customers '
+                  'WHERE customers.id = quotations.customer_id), '
+                  'customer_phone_snapshot = (SELECT phone FROM customers '
+                  'WHERE customers.id = quotations.customer_id), '
+                  'prepared_by_snapshot = COALESCE((SELECT name FROM users '
+                  'WHERE users.id = quotations.created_by), \'\') '
+                  "WHERE prepared_by_snapshot = ''");
+            }
+          }
+          if (from < 28) {
+            await m.createTable(quotationSourcingRequirements);
+          }
+          if (from < 29) {
+            // Drift rebuilds the table to make product_id nullable while
+            // preserving every existing quotation item and its snapshots.
+            // ignore: experimental_member_use
+            await m.alterTable(TableMigration(quotationItems,
+                newColumns: [quotationItems.customNotes]));
+          }
+          if (from < 30) {
+            await m.createTable(cashExpenseCategories);
+            await m.createTable(businessCashMovements);
+          }
+          if (from < 31) {
+            await m.createTable(purchaseOrders);
+            await m.createTable(purchaseOrderLines);
+            final receivingColumns =
+                (await customSelect('PRAGMA table_info(stock_receivings)')
+                        .get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!receivingColumns.contains('purchase_order_id')) {
+              await m.addColumn(
+                  stockReceivings, stockReceivings.purchaseOrderId);
+            }
+            final itemColumns =
+                (await customSelect('PRAGMA table_info(stock_receiving_items)')
+                        .get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!itemColumns.contains('purchase_order_line_id')) {
+              await m.addColumn(
+                  stockReceivingItems, stockReceivingItems.purchaseOrderLineId);
+            }
+          }
+          if (from < 32) {
+            await m.createTable(stockCounts);
+            await m.createTable(stockCountLines);
+            await m.createTable(inventoryAdjustments);
+            await m.createTable(inventoryAdjustmentAllocations);
+          }
+          if (from < 33) await _createCommercialReturnTables(this);
+          if (from < 34) await _createLoyaltyTables(this);
+          if (from < 35) {
+            final saleColumns =
+                (await customSelect('PRAGMA table_info(sales)').get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!saleColumns.contains('walk_in_name')) {
+              await m.addColumn(sales, sales.walkInName);
+            }
+            if (!saleColumns.contains('walk_in_contact')) {
+              await m.addColumn(sales, sales.walkInContact);
+            }
+            if (!saleColumns.contains('held_reference')) {
+              await m.addColumn(sales, sales.heldReference);
+            }
+            final itemColumns =
+                (await customSelect('PRAGMA table_info(sale_items)').get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!itemColumns.contains('manual_discount_cents')) {
+              await m.addColumn(saleItems, saleItems.manualDiscountCents);
+            }
+            final tables = (await customSelect(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('held_sales','sale_manual_discounts')")
+                    .get())
+                .map((row) => row.read<String>('name'))
+                .toSet();
+            if (!tables.contains('held_sales')) await m.createTable(heldSales);
+            if (!tables.contains('sale_manual_discounts')) {
+              await m.createTable(saleManualDiscounts);
+            }
+          }
+          if (from < 36) {
+            final columns =
+                (await customSelect('PRAGMA table_info(products)').get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!columns.contains('reorder_level_qty_milli')) {
+              await m.addColumn(products, products.reorderLevelQtyMilli);
+            }
+            if (!columns.contains('target_stock_qty_milli')) {
+              await m.addColumn(products, products.targetStockQtyMilli);
+            }
+            if (!columns.contains('preferred_supplier_id')) {
+              await m.addColumn(products, products.preferredSupplierId);
+            }
+          }
+          if (from < 37) await _createInventoryHealthSettings(this);
+          if (from < 38) {
+            final receivingColumns =
+                (await customSelect('PRAGMA table_info(stock_receivings)')
+                        .get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!receivingColumns.contains('sequence')) {
+              await customStatement(
+                  'ALTER TABLE stock_receivings ADD COLUMN sequence INTEGER');
+            }
+            await customStatement('UPDATE stock_receivings SET sequence = '
+                '(SELECT COUNT(*) FROM stock_receivings AS earlier '
+                'WHERE earlier.rowid <= stock_receivings.rowid) '
+                'WHERE sequence IS NULL');
+            await customStatement('CREATE UNIQUE INDEX IF NOT EXISTS '
+                'stock_receivings_sequence ON stock_receivings(sequence)');
+          }
+          if (from < 39) {
+            final poColumns =
+                (await customSelect('PRAGMA table_info(purchase_orders)').get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!poColumns.contains('sent_by')) {
+              await m.addColumn(purchaseOrders, purchaseOrders.sentBy);
+            }
+            if (!poColumns.contains('closed_by')) {
+              await m.addColumn(purchaseOrders, purchaseOrders.closedBy);
+            }
+            final receiptColumns =
+                (await customSelect('PRAGMA table_info(stock_receivings)')
+                        .get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!receiptColumns.contains('finalized_at')) {
+              await m.addColumn(stockReceivings, stockReceivings.finalizedAt);
+            }
+            final sourceTables = await customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='purchase_order_line_source_links'")
+                .get();
+            if (sourceTables.isEmpty) {
+              await m.createTable(purchaseOrderLineSourceLinks);
+            }
+          }
+          if (from < 40) await _createRoleTables(this);
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
           await customStatement('PRAGMA journal_mode = WAL');
           await customStatement('PRAGMA busy_timeout = 5000');
+          final cashActivityTables = await customSelect(
+                  "SELECT name FROM sqlite_master WHERE type='table' "
+                  "AND name='business_cash_movements'")
+              .get();
+          if (cashActivityTables.isNotEmpty) {
+            await _createCashActivityGuards(this);
+          }
           final layerTables = await customSelect(
                   "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
                   "('stock_receiving_items','inventory_layers','sale_item_inventory_allocations')")
@@ -1270,6 +1744,127 @@ class AppDatabase extends _$AppDatabase {
           }
         },
       );
+}
+
+Future<void> _createInventoryHealthSettings(AppDatabase db) async {
+  await db
+      .customStatement('''CREATE TABLE IF NOT EXISTS inventory_health_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    slow_moving_days INTEGER NOT NULL DEFAULT 60 CHECK (slow_moving_days BETWEEN 1 AND 3650),
+    dead_stock_days INTEGER NOT NULL DEFAULT 180 CHECK (dead_stock_days BETWEEN 1 AND 3650),
+    near_expiry_days INTEGER NOT NULL DEFAULT 30 CHECK (near_expiry_days BETWEEN 1 AND 3650),
+    CHECK (dead_stock_days >= slow_moving_days)
+  )''');
+  await db.customStatement(
+      'INSERT OR IGNORE INTO inventory_health_settings (id) VALUES (1)');
+}
+
+Future<void> _createLoyaltyTables(AppDatabase db) async {
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS loyalty_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1), enabled INTEGER NOT NULL DEFAULT 1,
+    spend_per_point_cents INTEGER NOT NULL DEFAULT 10000 CHECK (spend_per_point_cents > 0),
+    redeem_points INTEGER NOT NULL DEFAULT 100 CHECK (redeem_points > 0),
+    redeem_value_cents INTEGER NOT NULL DEFAULT 1000 CHECK (redeem_value_cents > 0))''');
+  await db.customStatement(
+      '''INSERT OR IGNORE INTO loyalty_settings (id) VALUES (1)''');
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS loyalty_ledger (
+    id TEXT PRIMARY KEY, customer_id TEXT NOT NULL REFERENCES customers(id),
+    kind TEXT NOT NULL, points_delta INTEGER NOT NULL CHECK (points_delta != 0),
+    source_id TEXT, actor_id TEXT REFERENCES users(id), reason TEXT,
+    note TEXT, eligible_cents INTEGER, rule_snapshot TEXT,
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    UNIQUE(kind, source_id))''');
+  await db.customStatement('''CREATE INDEX IF NOT EXISTS loyalty_ledger_customer
+    ON loyalty_ledger(customer_id, created_at)''');
+  await db
+      .customStatement('''CREATE TRIGGER IF NOT EXISTS loyalty_ledger_no_update
+    BEFORE UPDATE ON loyalty_ledger BEGIN
+      SELECT RAISE(ABORT, 'Loyalty ledger is append-only');
+    END''');
+  await db
+      .customStatement('''CREATE TRIGGER IF NOT EXISTS loyalty_ledger_no_delete
+    BEFORE DELETE ON loyalty_ledger BEGIN
+      SELECT RAISE(ABORT, 'Loyalty ledger is append-only');
+    END''');
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS sale_loyalty (
+    sale_id TEXT PRIMARY KEY REFERENCES sales(id),
+    customer_id TEXT NOT NULL REFERENCES customers(id),
+    eligible_cents INTEGER NOT NULL, earned_points INTEGER NOT NULL,
+    redeemed_points INTEGER NOT NULL, discount_cents INTEGER NOT NULL,
+    spend_per_point_cents INTEGER NOT NULL, redeem_unit_points INTEGER NOT NULL,
+    redeem_unit_cents INTEGER NOT NULL)''');
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS customer_groups (
+    customer_id TEXT PRIMARY KEY REFERENCES customers(id),
+    group_name TEXT NOT NULL DEFAULT 'Retail')''');
+}
+
+Future<void> _createCommercialReturnTables(AppDatabase db) async {
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS sale_returns (
+    id TEXT PRIMARY KEY NOT NULL,
+    reference TEXT NOT NULL UNIQUE,
+    original_sale_id TEXT NOT NULL REFERENCES sales(id),
+    actor_id TEXT NOT NULL REFERENCES users(id),
+    kind TEXT NOT NULL CHECK(kind IN ('refund','exchange')),
+    status TEXT NOT NULL DEFAULT 'finalized' CHECK(status IN ('draft','finalized')),
+    reason TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    refund_value_cents INTEGER NOT NULL CHECK(refund_value_cents >= 0),
+    replacement_sale_id TEXT REFERENCES sales(id),
+    replacement_value_cents INTEGER NOT NULL DEFAULT 0,
+    cash_effect_cents INTEGER NOT NULL DEFAULT 0,
+    cash_session_id TEXT REFERENCES cash_sessions(id),
+    created_at INTEGER NOT NULL
+  )''');
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS sale_return_lines (
+    id TEXT PRIMARY KEY NOT NULL,
+    return_id TEXT NOT NULL REFERENCES sale_returns(id),
+    sale_item_id TEXT NOT NULL REFERENCES sale_items(id),
+    quantity_milli INTEGER NOT NULL CHECK(quantity_milli > 0),
+    refund_cents INTEGER NOT NULL CHECK(refund_cents >= 0),
+    disposition TEXT NOT NULL CHECK(disposition IN ('sellable','non_sellable')),
+    cost_cents INTEGER NOT NULL DEFAULT 0
+  )''');
+  await db
+      .customStatement('''CREATE TABLE IF NOT EXISTS sale_return_allocations (
+    id TEXT PRIMARY KEY NOT NULL,
+    return_line_id TEXT NOT NULL REFERENCES sale_return_lines(id),
+    original_allocation_id TEXT NOT NULL REFERENCES sale_item_inventory_allocations(id),
+    quantity_milli INTEGER NOT NULL CHECK(quantity_milli > 0),
+    serial_unit_id TEXT REFERENCES serial_units(id),
+    unit_cost_cents INTEGER NOT NULL
+  )''');
+  await db.customStatement(
+      'CREATE INDEX IF NOT EXISTS sale_returns_original_sale ON sale_returns(original_sale_id)');
+  await db.customStatement(
+      'CREATE INDEX IF NOT EXISTS sale_return_lines_sale_item ON sale_return_lines(sale_item_id)');
+  await db.customStatement(
+      'CREATE INDEX IF NOT EXISTS sale_return_allocations_original ON sale_return_allocations(original_allocation_id)');
+  await db.customStatement(
+      'CREATE INDEX IF NOT EXISTS sale_return_serial_history ON sale_return_allocations(serial_unit_id) WHERE serial_unit_id IS NOT NULL');
+  await db.customStatement(
+      '''CREATE TRIGGER IF NOT EXISTS sale_returns_final_immutable
+    BEFORE UPDATE ON sale_returns WHEN OLD.status='finalized'
+    BEGIN SELECT RAISE(ABORT, 'Finalized return cannot be changed'); END''');
+  await db
+      .customStatement('''CREATE TRIGGER IF NOT EXISTS sale_returns_no_delete
+    BEFORE DELETE ON sale_returns
+    BEGIN SELECT RAISE(ABORT, 'Return cannot be deleted'); END''');
+  await db.customStatement(
+      '''CREATE TRIGGER IF NOT EXISTS sale_return_lines_no_update
+    BEFORE UPDATE ON sale_return_lines
+    BEGIN SELECT RAISE(ABORT, 'Return line cannot be changed'); END''');
+  await db.customStatement(
+      '''CREATE TRIGGER IF NOT EXISTS sale_return_lines_no_delete
+    BEFORE DELETE ON sale_return_lines
+    BEGIN SELECT RAISE(ABORT, 'Return line cannot be deleted'); END''');
+  await db.customStatement(
+      '''CREATE TRIGGER IF NOT EXISTS sale_return_allocations_no_update
+    BEFORE UPDATE ON sale_return_allocations
+    BEGIN SELECT RAISE(ABORT, 'Return allocation cannot be changed'); END''');
+  await db.customStatement(
+      '''CREATE TRIGGER IF NOT EXISTS sale_return_allocations_no_delete
+    BEFORE DELETE ON sale_return_allocations
+    BEGIN SELECT RAISE(ABORT, 'Return allocation cannot be deleted'); END''');
 }
 
 LazyDatabase _openConnection() {
@@ -1353,4 +1948,57 @@ Future<void> _createBirGuards(AppDatabase db) async {
       'WHEN OLD.bir_invoice_number IS NOT NULL AND '
       'NEW.bir_invoice_number IS NOT OLD.bir_invoice_number '
       "BEGIN SELECT RAISE(ABORT, 'BIR invoice cannot be changed'); END");
+}
+
+Future<void> _createCashActivityGuards(AppDatabase db) async {
+  await db.customStatement(
+      'CREATE TRIGGER IF NOT EXISTS business_cash_movement_no_update '
+      'BEFORE UPDATE ON business_cash_movements '
+      "BEGIN SELECT RAISE(ABORT, 'Cash movement cannot be changed'); END");
+  await db.customStatement(
+      'CREATE TRIGGER IF NOT EXISTS business_cash_movement_no_delete '
+      'BEFORE DELETE ON business_cash_movements '
+      "BEGIN SELECT RAISE(ABORT, 'Cash movement cannot be deleted'); END");
+}
+
+// The existing users.role column is the stable role code. Keeping it avoids
+// rewriting user rows or historical audit records during the upgrade.
+Future<void> _createRoleTables(AppDatabase db) async {
+  await db.customStatement('CREATE TABLE IF NOT EXISTS roles ('
+      'code TEXT PRIMARY KEY, name TEXT NOT NULL COLLATE NOCASE UNIQUE, '
+      'description TEXT NOT NULL DEFAULT \'\', is_system INTEGER NOT NULL, '
+      'created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)');
+  await db.customStatement('CREATE TABLE IF NOT EXISTS role_permissions ('
+      'role_code TEXT NOT NULL REFERENCES roles(code) ON DELETE CASCADE, '
+      'permission_key TEXT NOT NULL, PRIMARY KEY(role_code, permission_key))');
+  final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  for (final role in [UserRole.owner, UserRole.manager, UserRole.cashier]) {
+    await db.customStatement(
+        'INSERT OR IGNORE INTO roles '
+        '(code, name, description, is_system, created_at, updated_at) '
+        'VALUES (?, ?, ?, 1, ?, ?)',
+        [
+          role.name,
+          '${role.name[0].toUpperCase()}${role.name.substring(1)}',
+          'Protected system role',
+          now,
+          now
+        ]);
+    for (final permission in PermissionRegistry.baseline(role)) {
+      await db.customStatement(
+          'INSERT OR IGNORE INTO role_permissions '
+          '(role_code, permission_key) VALUES (?, ?)',
+          [role.name, permission.name]);
+    }
+  }
+  await db
+      .customStatement('CREATE TRIGGER IF NOT EXISTS users_valid_role_insert '
+          'BEFORE INSERT ON users WHEN NOT EXISTS '
+          '(SELECT 1 FROM roles WHERE code = NEW.role) '
+          "BEGIN SELECT RAISE(ABORT, 'Unknown role'); END");
+  await db
+      .customStatement('CREATE TRIGGER IF NOT EXISTS users_valid_role_update '
+          'BEFORE UPDATE OF role ON users WHEN NOT EXISTS '
+          '(SELECT 1 FROM roles WHERE code = NEW.role) '
+          "BEGIN SELECT RAISE(ABORT, 'Unknown role'); END");
 }

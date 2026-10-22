@@ -27,6 +27,7 @@ void main() {
         pricingPolicy: 'layer',
         serialTracking: true,
         startingStock: 2,
+        openingSellingPriceCents: 350000,
         openingSerials: [' SN001 ', 'SN002']);
     final layer = (await pos.layersForProduct(id)).single;
     expect(layer.source, 'opening');

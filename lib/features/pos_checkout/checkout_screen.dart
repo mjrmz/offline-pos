@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:drift/drift.dart' show TableUpdateQuery;
+import 'package:drift/drift.dart' show TableUpdateQuery, Variable;
 import '../../core/models/cart.dart';
+import '../../core/models/manual_discount.dart';
 import '../../core/models/active_user.dart';
 import '../../core/models/product.dart';
 import '../../core/models/business_product.dart';
@@ -14,14 +15,24 @@ import '../../core/services/catalog_service.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/widgets/expiry_date_field.dart';
+import '../../shared/widgets/record_details_drawer.dart';
 import '../../data/daos/pos_repository.dart';
+import '../../data/daos/loyalty_repository.dart';
+import '../../data/daos/held_sale_repository.dart';
+import '../../data/daos/directory_repository.dart';
 import '../../data/daos/stock_receiving_repository.dart';
+import '../../data/daos/purchase_order_repository.dart';
+import '../../data/daos/inventory_planning_repository.dart';
+import '../../data/daos/inventory_health_repository.dart';
 import '../../data/database.dart';
 import '../inventory/inventory_overview.dart' show inventoryMovementLabel;
 import '../../hardware/printer/receipt_service.dart';
 import '../../hardware/barcode/camera_scanner.dart';
 import 'dart:io';
 import 'dart:async';
+import 'package:flutter/services.dart';
+import 'pos_layout_preference.dart';
+import 'pos_shortcut_profile.dart';
 
 String money(int cents) => formatPeso(cents);
 int? tryParseMoney(String value) => tryParsePeso(value);
@@ -46,10 +57,13 @@ DateTime? parseOptionalDate(String value) {
 }
 
 String? cashValidationMessage(String value, int totalCents) {
+  if (totalCents == 0 && value.trim().isEmpty) return null;
   if (value.trim().isEmpty) return 'Enter cash received';
   final cents = tryParseMoney(value);
   if (cents == null) return 'Enter a valid amount (up to 2 decimal places)';
-  if (cents <= 0) return 'Cash received must be greater than zero';
+  if (cents < 0 || (cents == 0 && totalCents > 0)) {
+    return 'Cash received must be greater than zero';
+  }
   if (cents < totalCents) return 'Cash received is below the total';
   return null;
 }
@@ -62,19 +76,89 @@ String? quantityValidationMessage(String value) {
   return null;
 }
 
+class _LookupIntent extends Intent {
+  const _LookupIntent();
+}
+
+class _CustomerIntent extends Intent {
+  const _CustomerIntent();
+}
+
+class _PayIntent extends Intent {
+  const _PayIntent();
+}
+
+class _HoldIntent extends Intent {
+  const _HoldIntent();
+}
+
+class _HeldSalesIntent extends Intent {
+  const _HeldSalesIntent();
+}
+
+class SaleCompletion {
+  final String saleId;
+  final String reference;
+  final int totalCents;
+  final List<(String, int)> payments;
+  final int changeCents;
+  final String customer;
+  final int earnedPoints;
+  final int? pointsBalance;
+  final String? printIssue;
+  const SaleCompletion(
+      this.saleId,
+      this.reference,
+      this.totalCents,
+      this.payments,
+      this.changeCents,
+      this.customer,
+      this.earnedPoints,
+      this.pointsBalance,
+      this.printIssue);
+
+  SaleCompletion withPrintIssue(String? issue) => SaleCompletion(
+      saleId,
+      reference,
+      totalCents,
+      payments,
+      changeCents,
+      customer,
+      earnedPoints,
+      pointsBalance,
+      issue);
+}
+
+class _FocusIntent extends Intent {
+  const _FocusIntent();
+}
+
+class _ScanKeyIntent extends Intent {
+  final LogicalKeyboardKey key;
+  const _ScanKeyIntent(this.key);
+}
+
 class CheckoutScreen extends StatefulWidget {
   final PosRepository repository;
   final ActiveUser user;
   final AuthService auth;
   final ReceiptService? receipts;
   final CameraBarcodeScanner? camera;
+  final String? quotationId;
+  final String? quotationReference;
+  final bool focusMode;
+  final VoidCallback? onToggleFocus;
   const CheckoutScreen(
       {super.key,
       required this.repository,
       required this.user,
       required this.auth,
       this.receipts,
-      this.camera});
+      this.camera,
+      this.quotationId,
+      this.quotationReference,
+      this.focusMode = false,
+      this.onToggleFocus});
   @override
   State<CheckoutScreen> createState() => CheckoutScreenState();
 }
@@ -99,7 +183,51 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   List<Customer> customers = [];
   bool credit = false;
   String? customerId;
+  String? walkInName;
+  String? walkInContact;
+  ManualDiscount? manualDiscount;
+  String? heldReference;
+  SaleCompletion? completion;
+  int redeemPoints = 0;
+  int rewardDiscountCents = 0;
+  int get manualDiscountCents {
+    final discount = manualDiscount;
+    if (discount == null) return 0;
+    final basis = discount.scope == 'line'
+        ? cart.lines
+            .where((l) => l.id == discount.lineKey)
+            .fold<int>(0, (sum, l) => sum + l.totalCents)
+        : cart.totalCents;
+    if (basis != discount.approvedBasisCents) return 0;
+    try {
+      return discount.effectOn(basis);
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  int get payableCents =>
+      cart.totalCents - manualDiscountCents - rewardDiscountCents;
   String? message;
+  String? cartNotice;
+  Timer? _cartNoticeTimer;
+  Timer? _lastScanTimer;
+
+  void _dismissLastScanSoon() {
+    _lastScanTimer?.cancel();
+    _lastScanTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => lastScanned = null);
+    });
+  }
+
+  void _showCartNotice(String text) {
+    _cartNoticeTimer?.cancel();
+    setState(() => cartNotice = text);
+    _cartNoticeTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) setState(() => cartNotice = null);
+    });
+  }
+
   bool busy = false;
   bool scanning = false;
   int quantityEditRevision = 0;
@@ -109,9 +237,22 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   String? lastSaleId;
   String? saleReference;
   String? scanError;
+  PosProduct? lastScanned;
+  String? lastScanStatus;
+  String? unknownCode;
+  int selectedCartIndex = 0;
+  final layoutPreference = PosLayoutPreference.instance;
+  final List<String> quotePriceChanges = [];
+  String? quotationStockIssue;
   @override
   void initState() {
     super.initState();
+    barcodeFocus.onKeyEvent = (node, event) =>
+        layoutPreference.layout == PosLayoutType.scanFirst
+            ? _scanKey(node, event)
+            : KeyEventResult.ignored;
+    layoutPreference.addListener(_layoutChanged);
+    layoutPreference.load();
     final db = widget.repository.db;
     _catalogChanges = db
         .tableUpdates(TableUpdateQuery.onAllTables([
@@ -124,20 +265,87 @@ class CheckoutScreenState extends State<CheckoutScreen> {
           db.layawayItems,
         ]))
         .listen((_) => refresh());
-    refresh();
+    refresh().then((_) => _loadQuotation());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) barcodeFocus.requestFocus();
     });
   }
 
+  Future<void> _loadQuotation() async {
+    final quoteId = widget.quotationId;
+    if (quoteId == null) return;
+    try {
+      final db = widget.repository.db;
+      final rows = await (db.select(db.quotationItems)
+            ..where((item) => item.quotationId.equals(quoteId)))
+          .get();
+      if (!mounted) return;
+      for (final row in rows) {
+        if (row.productId == null) {
+          throw StateError(
+              'Resolve ${row.productNameSnapshot} to an Inventory product before checkout.');
+        }
+        final product =
+            products.where((p) => p.id == row.productId).firstOrNull;
+        if (product == null || !product.isActive) {
+          throw StateError('${row.productNameSnapshot} is no longer sellable.');
+        }
+        final available = stockMilli[product.id] ??
+            await widget.repository.stockMilli(product.id);
+        if (!product.business.madeToOrder && available < row.quantityMilli) {
+          quotationStockIssue = 'Stock changed for ${row.productNameSnapshot}. '
+              'Quoted ${Quantity.format(row.quantityMilli)} ${row.unitSnapshot}; '
+              'available ${Quantity.format(available)}. Cancel conversion and revise the offer.';
+        }
+        if (product.priceCents != row.unitPriceCents) {
+          quotePriceChanges.add(
+              '${product.name}: quoted ${money(row.unitPriceCents)}, current ${money(product.priceCents)}');
+        }
+        final quotedProduct = PosProduct(
+            product.id,
+            row.productNameSnapshot,
+            product.barcode,
+            row.unitPriceCents,
+            product.isActive,
+            product.sku,
+            product.categoryId,
+            product.costCents,
+            product.lowStockThreshold,
+            product.business,
+            product.serialTracking,
+            product.pricingPolicy);
+        cart
+            .addSpecial(quotedProduct, row.quantityMilli,
+                mode: row.saleMode, extraCents: row.extraCents)
+            .pricedTotalCents = row.lineTotalCents;
+      }
+      setState(() {});
+    } catch (failure) {
+      if (mounted) setState(() => message = safeMessage(failure));
+    }
+  }
+
   @override
   void dispose() {
+    _cartNoticeTimer?.cancel();
+    _lastScanTimer?.cancel();
+    layoutPreference.removeListener(_layoutChanged);
     _catalogChanges?.cancel();
     barcodeController.dispose();
     cashController.dispose();
     barcodeFocus.dispose();
     listController.dispose();
     super.dispose();
+  }
+
+  void _layoutChanged() {
+    if (!mounted) return;
+    setState(() => mobileCartOpen = false);
+    if (layoutPreference.layout == PosLayoutType.scanFirst) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && layoutPreference.keepReady) barcodeFocus.requestFocus();
+      });
+    }
   }
 
   Future<void> refresh() async {
@@ -166,6 +374,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Future<void> _refreshLayerPrices() async {
+    if (widget.quotationId != null) return;
     final revision = ++pricingRevision;
     final lines = cart.lines
         .where((line) => line.product.pricingPolicy == 'layer')
@@ -204,6 +413,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     try {
       var product = await widget.repository.barcode(value);
       String? scannedSerialId;
+      String? scannedSerialLabel;
       if (product == null) {
         final serial =
             await (widget.repository.db.select(widget.repository.db.serialUnits)
@@ -215,31 +425,107 @@ class CheckoutScreenState extends State<CheckoutScreen> {
           }
           product = products.where((p) => p.id == serial.productId).firstOrNull;
           scannedSerialId = serial.id;
+          scannedSerialLabel = serial.serialNumber;
         }
       }
+      product ??= products
+          .where((p) => p.sku?.toLowerCase() == value.toLowerCase())
+          .firstOrNull;
       if (product == null) {
-        throw StateError('Barcode or serial number not found');
+        setState(() {
+          unknownCode = value;
+          lastScanStatus = 'not found';
+          scanError = 'Barcode or SKU not found';
+        });
+        return;
       }
       if (!product.business.madeToOrder && (stockMilli[product.id] ?? 0) <= 0) {
+        if (layoutPreference.layout == PosLayoutType.scanFirst) {
+          setState(() {
+            lastScanned = product;
+            lastScanStatus = 'blocked';
+          });
+        }
         throw StateError('Out of stock');
       }
-      await addToCart(product, scannedSerialId: scannedSerialId);
+      if (layoutPreference.layout == PosLayoutType.scanFirst &&
+          !layoutPreference.incrementRepeated &&
+          scannedSerialId == null &&
+          cart.lines.any((line) => line.product.id == product!.id)) {
+        setState(() {
+          lastScanned = product;
+          lastScanStatus = 'warning';
+          scanError = 'Already in cart. Edit quantity in Current Sale.';
+        });
+        return;
+      }
+      final previous = cart.lines
+          .where((line) => line.product.id == product!.id)
+          .fold<int>(0, (sum, line) => sum + line.quantityMilli);
+      await addToCart(product,
+          scannedSerialId: scannedSerialId,
+          scannedSerialLabel: scannedSerialLabel);
       if (!mounted) return;
+      final current = cart.lines
+          .where((line) => line.product.id == product!.id)
+          .fold<int>(0, (sum, line) => sum + line.quantityMilli);
+      if (current == previous) return;
       setState(() {
         barcodeController.clear();
         scanError = null;
+        unknownCode = null;
+        lastScanned = product;
+        final remaining = (stockMilli[product!.id] ?? 0) - current;
+        lastScanStatus = remaining <= product.lowStockThreshold * Quantity.scale
+            ? 'warning'
+            : 'success';
       });
-      barcodeFocus.requestFocus();
+      _dismissLastScanSoon();
+      if (layoutPreference.layout != PosLayoutType.scanFirst ||
+          layoutPreference.keepReady) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) barcodeFocus.requestFocus();
+        });
+      }
     } catch (e) {
       if (mounted && (code != null || barcodeController.text.trim() == value)) {
-        setState(() => scanError = safeMessage(e));
+        setState(() {
+          scanError = safeMessage(e);
+          lastScanStatus = 'blocked';
+        });
+        if (layoutPreference.layout == PosLayoutType.scanFirst &&
+            safeMessage(e) == 'Out of stock' &&
+            lastScanned != null) {
+          await showDialog<void>(
+              context: context,
+              builder: (dialog) => AlertDialog(
+                    title: const Text('Product unavailable'),
+                    content: Text(
+                        '${lastScanned!.name}\nNo sellable stock is currently available.'),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(dialog),
+                          child: const Text('Close'))
+                    ],
+                  ));
+        }
       }
     } finally {
       scanning = false;
+      if (layoutPreference.layout == PosLayoutType.scanFirst &&
+          layoutPreference.keepReady) {
+        _focusScanner();
+      }
     }
   }
 
-  Future<void> addToCart(PosProduct product, {String? scannedSerialId}) async {
+  Future<void> addToCart(PosProduct product,
+      {String? scannedSerialId, String? scannedSerialLabel}) async {
+    if (widget.quotationId != null) {
+      setState(() => message =
+          'This checkout is linked to a saved quotation. Cancel conversion to change the items.');
+      return;
+    }
     final config = product.business;
     final special = config.weight ||
         config.refill ||
@@ -268,7 +554,36 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       await _refreshLayerPrices();
       return;
     }
+    if (scannedSerialId != null &&
+        product.serialTracking &&
+        !config.weight &&
+        !config.refill &&
+        !config.tank &&
+        !config.batch &&
+        !config.madeToOrder &&
+        config.unit == SaleUnit.piece) {
+      if (cart.lines.any((line) => line.serialIds.contains(scannedSerialId))) {
+        setState(() => scanError = 'Serial is already in cart');
+        return;
+      }
+      final inCart = cart.lines
+          .where((line) => line.product.id == product.id)
+          .fold<int>(0, (sum, line) => sum + line.quantityMilli);
+      if ((stockMilli[product.id] ?? 0) < inCart + Quantity.scale) {
+        setState(() => scanError = 'No sellable stock is currently available');
+        return;
+      }
+      setState(() {
+        cart.addSpecial(product, Quantity.scale, serialIds: [scannedSerialId]);
+        serialLabels[scannedSerialId] = scannedSerialLabel ?? scannedSerialId;
+      });
+      await _refreshLayerPrices();
+      return;
+    }
     final quantity = TextEditingController(text: '1');
+    final serialSearch = TextEditingController();
+    final serialFocus = FocusNode();
+    String? serialWarning;
     String mode = config.tank
         ? 'exchange'
         : config.refill
@@ -292,12 +607,32 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       if (b.expiryDate == null) return -1;
       return a.expiryDate!.compareTo(b.expiryDate!);
     });
+    String batchDescription(ProductLot batch) {
+      final expiry = batch.expiryDate;
+      final date = expiry == null
+          ? ''
+          : ' · expires ${expiry.year}-${expiry.month.toString().padLeft(2, '0')}-${expiry.day.toString().padLeft(2, '0')}';
+      return '${batch.batchNumber} · ${Quantity.format(batch.quantityMilli)} available$date';
+    }
+
     String? batchId = eligible.isEmpty ? null : eligible.first.id;
     final availableSerials = product.serialTracking
-        ? await widget.repository.availableSerials(product.id)
+        ? (await widget.repository.availableSerials(product.id))
+            .where((serial) =>
+                !cart.lines.any((line) => line.serialIds.contains(serial.id)))
+            .toList()
         : <SerialUnit>[];
     final selectedSerialIds = <String>{};
-    if (scannedSerialId != null) selectedSerialIds.add(scannedSerialId);
+    if (scannedSerialId != null) {
+      if (cart.lines.any((line) => line.serialIds.contains(scannedSerialId))) {
+        quantity.dispose();
+        serialSearch.dispose();
+        serialFocus.dispose();
+        setState(() => scanError = 'Serial is already in cart');
+        return;
+      }
+      selectedSerialIds.add(scannedSerialId);
+    }
     for (final serial in availableSerials) {
       serialLabels[serial.id] = serial.serialNumber;
     }
@@ -306,6 +641,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     }
     if (!mounted) {
       quantity.dispose();
+      serialSearch.dispose();
+      serialFocus.dispose();
       return;
     }
     final selection = await showDialog<(int, String, String?, List<String>)>(
@@ -314,12 +651,13 @@ class CheckoutScreenState extends State<CheckoutScreen> {
           builder: (context, update) => AlertDialog(
                 title: Text(product.name),
                 content: SizedBox(
-                    width: 350,
+                    width: 470,
                     child: ListView(shrinkWrap: true, children: [
                       Text(
                           '${money(product.priceCents)} per ${config.unit.label}'),
                       TextField(
                           controller: quantity,
+                          onChanged: (_) => update(() {}),
                           keyboardType: const TextInputType.numberWithOptions(
                               decimal: true),
                           decoration: InputDecoration(
@@ -354,33 +692,122 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                                 : Icons.radio_button_unchecked),
                             onTap: () => update(() => mode = 'deposit')),
                       ],
-                      if (config.batch)
+                      if (config.batch && eligible.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: Text('No available batch for this product.'),
+                        ),
+                      if (config.batch && eligible.length == 1)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Batch'),
+                          subtitle: Text(batchDescription(eligible.first)),
+                        ),
+                      if (config.batch && eligible.length > 1)
                         DropdownButtonFormField<String>(
                             initialValue: batchId,
-                            decoration:
-                                const InputDecoration(labelText: 'Batch'),
+                            isExpanded: true,
+                            decoration: const InputDecoration(
+                                labelText: 'Batch',
+                                contentPadding: EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 16)),
                             items: eligible
                                 .map((b) => DropdownMenuItem<String>(
                                       value: b.id,
-                                      child: Text(
-                                          '${b.batchNumber} · ${Quantity.format(b.quantityMilli)} available'
-                                          '${b.expiryDate == null ? '' : ' · expires ${b.expiryDate!.year}-${b.expiryDate!.month.toString().padLeft(2, '0')}-${b.expiryDate!.day.toString().padLeft(2, '0')}'}'),
+                                      child: Text(batchDescription(b),
+                                          overflow: TextOverflow.ellipsis),
                                     ))
                                 .toList(),
                             onChanged: (v) => update(() => batchId = v)),
                       if (product.serialTracking) ...[
-                        Text('${selectedSerialIds.length} serials selected'),
-                        for (final serial in availableSerials)
+                        const SizedBox(height: 12),
+                        Text(
+                            'Selected serials: ${selectedSerialIds.length} / ${(Quantity.tryParse(quantity.text, fractional: false) ?? 0) ~/ Quantity.scale}'),
+                        if (selectedSerialIds.length >
+                            ((Quantity.tryParse(quantity.text,
+                                        fractional: false) ??
+                                    0) ~/
+                                Quantity.scale))
+                          const Text(
+                              'Deselect serials before reducing quantity.'),
+                        if (selectedSerialIds.length <
+                            ((Quantity.tryParse(quantity.text,
+                                        fractional: false) ??
+                                    0) ~/
+                                Quantity.scale))
+                          Text(
+                              'Select ${((Quantity.tryParse(quantity.text, fractional: false) ?? 0) ~/ Quantity.scale) - selectedSerialIds.length} more serial(s) to add to cart.'),
+                        const SizedBox(height: 8),
+                        TextField(
+                          key: const Key('serial-search-input'),
+                          controller: serialSearch,
+                          focusNode: serialFocus,
+                          autofocus: true,
+                          decoration: const InputDecoration(
+                              labelText: 'Search or scan serial',
+                              border: OutlineInputBorder()),
+                          onChanged: (_) => update(() => serialWarning = null),
+                          onSubmitted: (raw) {
+                            final serialText = raw.trim();
+                            final matches = availableSerials.where((s) =>
+                                s.serialNumber.toLowerCase() ==
+                                serialText.toLowerCase());
+                            final limit = (Quantity.tryParse(quantity.text,
+                                        fractional: false) ??
+                                    0) ~/
+                                Quantity.scale;
+                            update(() {
+                              if (serialText.isEmpty) return;
+                              if (matches.isEmpty) {
+                                serialWarning =
+                                    'Serial not available for this product.';
+                              } else if (selectedSerialIds
+                                  .contains(matches.first.id)) {
+                                serialWarning = 'Serial already selected.';
+                              } else if (selectedSerialIds.length >= limit) {
+                                serialWarning = 'Maximum serials selected.';
+                              } else {
+                                selectedSerialIds.add(matches.first.id);
+                                serialSearch.clear();
+                                serialWarning = null;
+                              }
+                            });
+                            serialFocus.requestFocus();
+                          },
+                        ),
+                        if (serialWarning != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Text(serialWarning!,
+                                style: TextStyle(
+                                    color:
+                                        Theme.of(context).colorScheme.error)),
+                          ),
+                        const SizedBox(height: 8),
+                        for (final serial in availableSerials.where((s) => s
+                            .serialNumber
+                            .toLowerCase()
+                            .contains(serialSearch.text.trim().toLowerCase())))
                           CheckboxListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
                               title: Text(serial.serialNumber),
                               value: selectedSerialIds.contains(serial.id),
-                              onChanged: (value) => update(() {
-                                    if (value == true) {
-                                      selectedSerialIds.add(serial.id);
-                                    } else {
-                                      selectedSerialIds.remove(serial.id);
-                                    }
-                                  })),
+                              onChanged: !selectedSerialIds
+                                          .contains(serial.id) &&
+                                      selectedSerialIds.length >=
+                                          ((Quantity.tryParse(quantity.text,
+                                                      fractional: false) ??
+                                                  0) ~/
+                                              Quantity.scale)
+                                  ? null
+                                  : (value) => update(() {
+                                        if (value == true) {
+                                          selectedSerialIds.add(serial.id);
+                                        } else {
+                                          selectedSerialIds.remove(serial.id);
+                                        }
+                                      })),
                       ],
                       if (config.madeToOrder)
                         const Text(
@@ -391,29 +818,59 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                       onPressed: () => Navigator.pop(context),
                       child: const Text('Cancel')),
                   FilledButton(
-                      onPressed: () {
-                        final milli = Quantity.tryParse(quantity.text,
-                            fractional: config.fractional);
-                        if (milli == null ||
-                            (config.batch && batchId == null) ||
-                            (product.serialTracking &&
-                                selectedSerialIds.length !=
-                                    milli ~/ Quantity.scale)) {
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                              content: Text(
-                                  'Enter a valid quantity, batch, and serial selection')));
-                          return;
-                        }
-                        Navigator.pop(context,
-                            (milli, mode, batchId, selectedSerialIds.toList()));
-                      },
+                      onPressed: (Quantity.tryParse(quantity.text,
+                                      fractional: config.fractional) ==
+                                  null ||
+                              (config.batch && batchId == null) ||
+                              (product.serialTracking &&
+                                  selectedSerialIds.length !=
+                                      ((Quantity.tryParse(quantity.text,
+                                                  fractional: false) ??
+                                              0) ~/
+                                          Quantity.scale)))
+                          ? null
+                          : () {
+                              final milli = Quantity.tryParse(quantity.text,
+                                  fractional: config.fractional);
+                              if (milli == null ||
+                                  (config.batch && batchId == null) ||
+                                  (product.serialTracking &&
+                                      selectedSerialIds.length !=
+                                          milli ~/ Quantity.scale)) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                        content: Text(
+                                            'Enter a valid quantity, batch, and serial selection')));
+                                return;
+                              }
+                              Navigator.pop(context, (
+                                milli,
+                                mode,
+                                batchId,
+                                selectedSerialIds.toList()
+                              ));
+                            },
                       child: const Text('Add to cart')),
                 ],
               )),
     );
     await waitForDialogExit();
     quantity.dispose();
+    serialSearch.dispose();
+    serialFocus.dispose();
     if (selection == null || !mounted) return;
+    final alreadyInCart = cart.lines
+        .where((line) => line.product.id == product.id)
+        .fold<int>(0, (sum, line) => sum + line.quantityMilli);
+    final available = stockMilli[product.id];
+    if (!config.madeToOrder &&
+        available != null &&
+        alreadyInCart + selection.$1 > available) {
+      setState(() => message =
+          'Only ${Quantity.format(available)} ${config.unit.label} available.');
+      _focusScanner();
+      return;
+    }
     setState(() {
       cart.addSpecial(product, selection.$1,
           mode: selection.$2,
@@ -452,29 +909,54 @@ class CheckoutScreenState extends State<CheckoutScreen> {
 
   Future<void> checkout() async {
     if (busy || pricingPending) return;
+    final issue = _cartIssue() ?? quotationStockIssue;
+    if (issue != null) {
+      setState(() => message = issue);
+      return;
+    }
     final validation = credit
         ? (tryParseMoney(cashController.text) == null ||
                 tryParseMoney(cashController.text)! < 0 ||
-                tryParseMoney(cashController.text)! >= cart.totalCents
+                tryParseMoney(cashController.text)! >= payableCents
             ? 'Enter cash paid below the sale total'
             : customerId == null
                 ? 'Select a customer'
                 : null)
-        : cashValidationMessage(cashController.text, cart.totalCents);
+        : cashValidationMessage(cashController.text, payableCents);
     if (cart.isEmpty || cart.totalCents <= 0 || validation != null) {
       setState(
           () => message = validation ?? 'Add a product with a positive total');
       return;
     }
-    final cashCents = tryParseMoney(cashController.text)!;
+    final cashCents = tryParseMoney(cashController.text) ?? 0;
+    final wasCredit = credit;
+    final selectedCustomerId = customerId;
+    final customerLabel = customers
+            .where((c) => c.id == selectedCustomerId)
+            .firstOrNull
+            ?.name ??
+        (walkInName?.isNotEmpty == true
+            ? '${walkInName!}${walkInContact?.isNotEmpty == true ? '\n$walkInContact' : ''}'
+            : walkInContact?.isNotEmpty == true
+                ? walkInContact!
+                : 'Anonymous walk-in');
     setState(() {
       busy = true;
       message = null;
     });
     try {
       final result = credit
-          ? await sales.checkoutCredit(cart, customerId!, cashCents)
-          : await sales.checkout(cart, cashCents);
+          ? await sales.checkoutCredit(cart, customerId!, cashCents,
+              manualDiscount: manualDiscount, heldReference: heldReference)
+          : await sales.checkout(cart, cashCents,
+              quotationId: widget.quotationId,
+              customerId: customerId,
+              redeemPoints: redeemPoints,
+              rewardDiscountCents: rewardDiscountCents,
+              manualDiscount: manualDiscount,
+              walkInName: walkInName,
+              walkInContact: walkInContact,
+              heldReference: heldReference);
       lastSaleId = result.saleId;
       final completedSale =
           await (widget.repository.db.select(widget.repository.db.sales)
@@ -490,22 +972,50 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       if (mounted) {
         setState(() {
           message = completionMessage;
-          cashController.clear();
-          customerId = null;
-          credit = false;
         });
-        barcodeFocus.requestFocus();
-        if (listController.hasClients) listController.jumpTo(0);
       }
       final hardware = await widget.receipts?.afterCommittedCashSale(
           result.saleId,
-          openDrawer: !credit || cashCents > 0);
+          openDrawer: !wasCredit || cashCents > 0);
       if (mounted && hardware != null) {
         setState(() => message = '$completionMessage'
             '${hardware.printerAttempted && !hardware.printed ? ' Receipt could not be printed.' : ''}'
             '${hardware.drawerAttempted && !hardware.drawerOpened ? ' Cash drawer could not be opened.' : ''}');
       }
       await refresh();
+      if (mounted && widget.quotationId == null) {
+        final reward = await widget.repository.db.customSelect(
+            'SELECT earned_points FROM sale_loyalty WHERE sale_id=?',
+            variables: [Variable.withString(result.saleId)]).getSingleOrNull();
+        final balance = selectedCustomerId == null
+            ? null
+            : await LoyaltyRepository(widget.repository.db)
+                .balance(selectedCustomerId);
+        if (mounted) {
+          setState(() {
+            completion = SaleCompletion(
+                result.saleId,
+                completedSale.receiptNumber ?? 'Legacy sale',
+                result.totalCents,
+                [
+                  ('Cash', cashCents),
+                  if (wasCredit) ('Credit', result.totalCents - cashCents)
+                ],
+                result.changeCents,
+                customerLabel,
+                reward?.read<int>('earned_points') ?? 0,
+                balance,
+                hardware != null &&
+                        hardware.printerAttempted &&
+                        !hardware.printed
+                    ? 'Sale completed. Receipt printing failed.'
+                    : null);
+          });
+        }
+      }
+      if (mounted && widget.quotationId != null) {
+        Navigator.of(context).pop(result.saleId);
+      }
     } catch (e) {
       if (mounted) setState(() => message = safeMessage(e));
     } finally {
@@ -516,29 +1026,120 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 850;
+    final scanFirst = layoutPreference.layout == PosLayoutType.scanFirst;
     return Scaffold(
-      body: AbsorbPointer(
-        absorbing: busy,
-        child: LayoutBuilder(builder: (context, constraints) {
-          if (constraints.maxWidth < 850) {
-            return mobileCartOpen
-                ? _salePanel(context, constraints.maxHeight)
-                : _catalogPanel(context, constraints.maxWidth);
-          }
-          return Row(key: const Key('desktop-pos-two-pane'), children: [
-            Expanded(
-                flex: 55,
-                child: _catalogPanel(context, constraints.maxWidth * .55)),
-            const VerticalDivider(width: 1),
-            Expanded(
-                flex: 45,
-                child: Material(
-                    color: Theme.of(context).colorScheme.surfaceContainerLow,
-                    child: _salePanel(context, constraints.maxHeight))),
-          ]);
-        }),
+      bottomNavigationBar: completion == null &&
+              layoutPreference.showShortcutBarFor(layoutPreference.layout)
+          ? _shortcutBar(context)
+          : null,
+      appBar: widget.quotationId == null
+          ? null
+          : AppBar(
+              title: Text(
+                  'Converting quotation ${widget.quotationReference ?? ''}'),
+              bottom: quotePriceChanges.isEmpty && quotationStockIssue == null
+                  ? null
+                  : PreferredSize(
+                      preferredSize: const Size.fromHeight(46),
+                      child: Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                              quotationStockIssue ??
+                                  'Quoted price retained · ${quotePriceChanges.join('; ')}',
+                              style: Theme.of(context).textTheme.bodySmall)))),
+      body: Shortcuts(
+        shortcuts: const {
+          SingleActivator(LogicalKeyboardKey.f6): _HoldIntent(),
+          SingleActivator(LogicalKeyboardKey.f7): _HeldSalesIntent(),
+          SingleActivator(LogicalKeyboardKey.f4): _LookupIntent(),
+          SingleActivator(LogicalKeyboardKey.f11): _FocusIntent(),
+          SingleActivator(LogicalKeyboardKey.f2): _CustomerIntent(),
+          SingleActivator(LogicalKeyboardKey.f10): _PayIntent(),
+          SingleActivator(LogicalKeyboardKey.f1):
+              _ScanKeyIntent(LogicalKeyboardKey.f1),
+          SingleActivator(LogicalKeyboardKey.f3):
+              _ScanKeyIntent(LogicalKeyboardKey.f3),
+          SingleActivator(LogicalKeyboardKey.f5):
+              _ScanKeyIntent(LogicalKeyboardKey.f5),
+          SingleActivator(LogicalKeyboardKey.f8):
+              _ScanKeyIntent(LogicalKeyboardKey.f8),
+          SingleActivator(LogicalKeyboardKey.escape):
+              _ScanKeyIntent(LogicalKeyboardKey.escape),
+          SingleActivator(LogicalKeyboardKey.arrowUp):
+              _ScanKeyIntent(LogicalKeyboardKey.arrowUp),
+          SingleActivator(LogicalKeyboardKey.arrowDown):
+              _ScanKeyIntent(LogicalKeyboardKey.arrowDown),
+          SingleActivator(LogicalKeyboardKey.delete):
+              _ScanKeyIntent(LogicalKeyboardKey.delete),
+        },
+        child: Actions(
+            actions: {
+              _HoldIntent: CallbackAction<_HoldIntent>(onInvoke: (_) {
+                _holdSale();
+                return null;
+              }),
+              _HeldSalesIntent: CallbackAction<_HeldSalesIntent>(onInvoke: (_) {
+                _heldSales();
+                return null;
+              }),
+              _FocusIntent: CallbackAction<_FocusIntent>(onInvoke: (_) {
+                widget.onToggleFocus?.call();
+                return null;
+              }),
+              _ScanKeyIntent:
+                  CallbackAction<_ScanKeyIntent>(onInvoke: (intent) {
+                _handleScanKey(intent.key);
+                return null;
+              }),
+              _LookupIntent: CallbackAction<_LookupIntent>(onInvoke: (_) {
+                if (!scanFirst || layoutPreference.allowLookup) {
+                  _openProductLookup();
+                }
+                return null;
+              }),
+              _CustomerIntent: CallbackAction<_CustomerIntent>(onInvoke: (_) {
+                _chooseCustomer();
+                return null;
+              }),
+              _PayIntent: CallbackAction<_PayIntent>(onInvoke: (_) {
+                _scanMoreActions();
+                return null;
+              }),
+            },
+            child: AbsorbPointer(
+                absorbing: busy,
+                child: LayoutBuilder(builder: (context, constraints) {
+                  if (completion != null) return _completionScreen(context);
+                  if (scanFirst) return _scanWorkspace(context);
+                  if (constraints.maxWidth < 850) {
+                    return mobileCartOpen
+                        ? _salePanel(context, constraints.maxHeight)
+                        : scanFirst
+                            ? _scanWorkspace(context)
+                            : _catalogPanel(context, constraints.maxWidth);
+                  }
+                  return Row(key: const Key('desktop-pos-two-pane'), children: [
+                    Expanded(
+                        flex: 55,
+                        child: scanFirst
+                            ? _scanWorkspace(context)
+                            : _catalogPanel(
+                                context, constraints.maxWidth * .55)),
+                    const VerticalDivider(width: 1),
+                    Expanded(
+                        flex: 45,
+                        child: Material(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerLow,
+                            child: _salePanel(context, constraints.maxHeight))),
+                  ]);
+                }))),
       ),
-      floatingActionButton: compact && !mobileCartOpen
+      floatingActionButton: completion == null &&
+              compact &&
+              !scanFirst &&
+              !mobileCartOpen
           ? FloatingActionButton.extended(
               key: const Key('mobile-cart-toggle'),
               onPressed: () => setState(() => mobileCartOpen = !mobileCartOpen),
@@ -550,6 +1151,1237 @@ class CheckoutScreenState extends State<CheckoutScreen> {
             )
           : null,
     );
+  }
+
+  void _focusScanner() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) barcodeFocus.requestFocus();
+    });
+  }
+
+  Widget _completionScreen(BuildContext context) {
+    final done = completion!;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Icon(Icons.check_circle,
+                  size: 50, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(height: 12),
+              Text('SALE COMPLETE',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineMedium),
+              const SizedBox(height: 20),
+              ListTile(
+                  title: const Text('Receipt'), subtitle: Text(done.reference)),
+              ListTile(
+                  title: const Text('Total'),
+                  trailing: Text(money(done.totalCents))),
+              for (final payment in done.payments)
+                ListTile(
+                    title: Text(payment.$1), trailing: Text(money(payment.$2))),
+              if (done.changeCents > 0)
+                ListTile(
+                    title: const Text('Change'),
+                    trailing: Text(money(done.changeCents))),
+              ListTile(
+                  title: const Text('Customer'), subtitle: Text(done.customer)),
+              if (done.pointsBalance != null)
+                ListTile(
+                    title: const Text('Rewards'),
+                    subtitle: Text(
+                        '+${done.earnedPoints} pts earned · Balance ${done.pointsBalance} pts')),
+              if (done.printIssue != null)
+                Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(done.printIssue!,
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.error))),
+              const SizedBox(height: 12),
+              Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                        onPressed: widget.receipts == null
+                            ? null
+                            : () async {
+                                final ok =
+                                    await widget.receipts!.reprint(done.saleId);
+                                if (mounted) {
+                                  setState(() => completion = done.withPrintIssue(ok
+                                      ? null
+                                      : 'Sale completed. Receipt printing failed.'));
+                                }
+                              },
+                        icon: const Icon(Icons.print_outlined),
+                        label: Text(done.printIssue == null
+                            ? 'Reprint'
+                            : 'Retry print')),
+                    FilledButton(
+                        onPressed: _newSale, child: const Text('New sale')),
+                  ]),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _newSale() {
+    setState(() {
+      cart.clear();
+      completion = null;
+      customerId = null;
+      walkInName = null;
+      walkInContact = null;
+      manualDiscount = null;
+      heldReference = null;
+      redeemPoints = 0;
+      rewardDiscountCents = 0;
+      credit = false;
+      cashController.clear();
+      barcodeController.clear();
+      message = null;
+      scanError = null;
+      unknownCode = null;
+      lastSaleId = null;
+      saleReference = null;
+      selectedCartIndex = 0;
+    });
+    _focusScanner();
+  }
+
+  Future<void> _holdSale() async {
+    if (completion != null || busy) return;
+    if (!widget.user.can(PosPermission.holdSale)) return;
+    if (cart.isEmpty) {
+      setState(() => message = 'Add an item before holding a sale');
+      return;
+    }
+    final issue = _cartIssue();
+    if (issue != null) {
+      setState(() => message = issue);
+      return;
+    }
+    final labelInput = TextEditingController(
+        text: walkInName ??
+            customers.where((c) => c.id == customerId).firstOrNull?.name ??
+            '');
+    try {
+      final label = await showDialog<String>(
+          context: context,
+          builder: (dialog) => AlertDialog(
+                title: const Text('Hold sale'),
+                content: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Text(
+                      'Held sales do not reserve inventory. Stock is checked again when resumed.'),
+                  TextField(
+                      key: const Key('held-sale-label'),
+                      controller: labelInput,
+                      decoration:
+                          const InputDecoration(labelText: 'Label (optional)')),
+                ]),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dialog),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(dialog, labelInput.text),
+                      child: const Text('Hold sale')),
+                ],
+              ));
+      if (label == null || !mounted) return;
+      final held = await HeldSaleRepository(widget.repository.db).hold(
+          widget.user, cart,
+          label: label,
+          customerId: customerId,
+          walkInName: walkInName,
+          walkInContact: walkInContact,
+          discount: manualDiscount,
+          redeemPoints: redeemPoints,
+          quotationId: widget.quotationId);
+      if (!mounted) return;
+      _newSale();
+      setState(
+          () => message = '${held.reference} held. Stock is not reserved.');
+    } catch (error) {
+      if (mounted) setState(() => message = safeMessage(error));
+    } finally {
+      await waitForDialogExit();
+      labelInput.dispose();
+    }
+  }
+
+  Future<void> _heldSales() async {
+    if (completion != null || busy) return;
+    if (!widget.user.can(PosPermission.resumeSale)) return;
+    final repository = HeldSaleRepository(widget.repository.db);
+    final held = await repository.all(widget.user);
+    final users =
+        await widget.repository.db.select(widget.repository.db.users).get();
+    if (!mounted) return;
+    await showDialog<void>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+              title: const Text('Held sales'),
+              content: SizedBox(
+                  width: 620,
+                  height: 420,
+                  child: held.isEmpty
+                      ? const Center(child: Text('No held sales.'))
+                      : ListView(children: [
+                          for (final entry in held)
+                            Builder(builder: (_) {
+                              final draft = HeldSaleSnapshot.fromRow(entry);
+                              final customer = customers
+                                  .where((c) => c.id == draft.customerId)
+                                  .firstOrNull;
+                              final holder = users
+                                  .where((u) => u.id == entry.heldBy)
+                                  .firstOrNull;
+                              return ListTile(
+                                title: Text(
+                                    '${entry.reference} · ${entry.label ?? customer?.name ?? draft.walkInName ?? 'Walk-in'}'),
+                                subtitle: Text(
+                                    '${entry.heldAt.toLocal()} · ${draft.lines.length} lines · ${money(draft.subtotalCents)} · ${holder?.name ?? 'Historical user'}'),
+                                trailing: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      TextButton(
+                                          onPressed: () async {
+                                            Navigator.pop(dialog);
+                                            await _resumeHeld(entry, draft);
+                                          },
+                                          child: const Text('Resume')),
+                                      IconButton(
+                                          tooltip: 'Discard ${entry.reference}',
+                                          onPressed: () async {
+                                            Navigator.pop(dialog);
+                                            final confirmed =
+                                                await showDialog<bool>(
+                                                    context: context,
+                                                    builder: (confirm) =>
+                                                        AlertDialog(
+                                                          title: Text(
+                                                              'Discard ${entry.reference}?'),
+                                                          content: const Text(
+                                                              'This removes the held draft. Inventory is unchanged.'),
+                                                          actions: [
+                                                            TextButton(
+                                                                onPressed: () =>
+                                                                    Navigator.pop(
+                                                                        confirm,
+                                                                        false),
+                                                                child: const Text(
+                                                                    'Cancel')),
+                                                            FilledButton(
+                                                                onPressed: () =>
+                                                                    Navigator.pop(
+                                                                        confirm,
+                                                                        true),
+                                                                child: const Text(
+                                                                    'Discard')),
+                                                          ],
+                                                        ));
+                                            if (confirmed == true) {
+                                              await repository.remove(
+                                                  widget.user, entry.id,
+                                                  discard: true);
+                                              if (mounted) {
+                                                setState(() => message =
+                                                    '${entry.reference} discarded.');
+                                              }
+                                            }
+                                          },
+                                          icon:
+                                              const Icon(Icons.delete_outline)),
+                                    ]),
+                              );
+                            }),
+                        ])),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(dialog),
+                    child: const Text('Close'))
+              ],
+            ));
+    _focusScanner();
+  }
+
+  Future<void> _resumeHeld(HeldSale held, HeldSaleSnapshot draft) async {
+    if (!cart.isEmpty) {
+      setState(() =>
+          message = 'Hold or clear the current sale before resuming another.');
+      return;
+    }
+    if (draft.quotationId != widget.quotationId) {
+      setState(() => message =
+          'Open the matching quotation checkout to resume this held sale.');
+      return;
+    }
+    await refresh();
+    final problems = <String>[];
+    final restored = <CartLine>[];
+    final byProduct = <String, int>{};
+    var priceChanged = false;
+    for (final data in draft.lines) {
+      final id = data['productId'] as String;
+      final product =
+          products.where((p) => p.id == id && p.isActive).firstOrNull;
+      if (product == null) {
+        problems.add('Product ${data['productId']} is no longer active.');
+        continue;
+      }
+      final milli = data['quantityMilli'] as int;
+      byProduct.update(id, (old) => old + milli, ifAbsent: () => milli);
+      if (product.priceCents != data['unitPriceCents']) priceChanged = true;
+      final serials = (data['serialIds'] as List).cast<String>();
+      if (serials.isNotEmpty) {
+        final available = await widget.repository.availableSerials(id);
+        if (serials.any((s) => !available.any((a) => a.id == s))) {
+          problems.add('${product.name}: selected serial is unavailable.');
+        }
+      }
+      final batchId = data['batchId'] as String?;
+      if (batchId != null) {
+        final batches = await widget.repository.batches(id);
+        final today = DateTime.now();
+        final startOfDay = DateTime(today.year, today.month, today.day);
+        if (!batches.any((b) =>
+            b.id == batchId &&
+            b.quantityMilli >= milli &&
+            (b.expiryDate == null || !b.expiryDate!.isBefore(startOfDay)))) {
+          problems.add('${product.name}: batch is unavailable.');
+        }
+      }
+      restored.add(CartLine(product, milli,
+          id: data['id'] as String,
+          mode: data['mode'] as String,
+          batchId: batchId,
+          serialIds: serials,
+          extraCents: data['extraCents'] as int));
+    }
+    for (final entry in byProduct.entries) {
+      final product = products.where((p) => p.id == entry.key).firstOrNull;
+      if (product != null &&
+          !product.business.madeToOrder &&
+          (stockMilli[entry.key] ?? 0) < entry.value) {
+        problems.add('${product.name}: some items are no longer available.');
+      }
+    }
+    if (draft.customerId != null &&
+        !customers.any((c) => c.id == draft.customerId)) {
+      problems.add('Registered customer is no longer active.');
+    }
+    if (draft.discount != null) {
+      final approver =
+          await widget.auth.repository.user(draft.discount!.authorizedBy);
+      if (approver == null ||
+          !approver.isActive ||
+          !(await widget.auth.repository.requireActive(approver.id))
+              .can(PosPermission.approveDiscount)) {
+        problems.add('Discount manager is no longer active.');
+      }
+    }
+    var resumedRewardDiscount = 0;
+    if (draft.redeemPoints > 0 && draft.customerId != null) {
+      final loyalty = LoyaltyRepository(widget.repository.db);
+      final rule = await loyalty.settings();
+      if (!rule.enabled ||
+          draft.redeemPoints % rule.redeemPoints != 0 ||
+          await loyalty.balance(draft.customerId!) < draft.redeemPoints) {
+        problems.add('Rewards balance changed; choose redemption again.');
+      } else {
+        resumedRewardDiscount =
+            draft.redeemPoints ~/ rule.redeemPoints * rule.redeemValueCents;
+      }
+    }
+    if (problems.isNotEmpty) {
+      if (!mounted) return;
+      await showDialog<void>(
+          context: context,
+          builder: (dialog) => AlertDialog(
+                title: const Text('Some items are no longer available'),
+                content: Text(problems.join('\n')),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dialog),
+                      child: const Text('Close'))
+                ],
+              ));
+      return;
+    }
+    await HeldSaleRepository(widget.repository.db).remove(widget.user, held.id);
+    if (!mounted) return;
+    setState(() {
+      for (final line in restored) {
+        cart.restoreLine(line);
+      }
+      customerId = draft.customerId;
+      walkInName = draft.walkInName;
+      walkInContact = draft.walkInContact;
+      manualDiscount = priceChanged ? null : draft.discount;
+      redeemPoints = draft.redeemPoints;
+      rewardDiscountCents = resumedRewardDiscount;
+      heldReference = held.reference;
+      message = priceChanged
+          ? 'Prices changed while held. Current prices apply; reauthorize any discount.'
+          : '${held.reference} resumed. Stock was rechecked.';
+    });
+    await _refreshLayerPrices();
+    if (mounted && cart.totalCents != draft.subtotalCents) {
+      setState(() {
+        manualDiscount = null;
+        message =
+            'Prices changed while held. Current prices apply; reauthorize any discount.';
+      });
+    }
+  }
+
+  CartLine? get _selectedLine => cart.lines.isEmpty
+      ? null
+      : cart.lines[selectedCartIndex.clamp(0, cart.lines.length - 1)];
+
+  Future<void> _editSelectedQuantity() async {
+    final line = _selectedLine;
+    if (line == null ||
+        line.mode != 'ordinary' ||
+        line.product.serialTracking ||
+        widget.quotationId != null) {
+      return;
+    }
+    final controller =
+        TextEditingController(text: Quantity.format(line.quantityMilli));
+    final value = await showDialog<String>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+              title: Text('Quantity: ${line.product.name}'),
+              content: TextField(
+                controller: controller,
+                autofocus: true,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                onSubmitted: (value) => Navigator.pop(dialog, value),
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(dialog),
+                    child: const Text('Cancel')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(dialog, controller.text),
+                    child: const Text('Apply')),
+              ],
+            ));
+    if (value != null && mounted) {
+      final milli = Quantity.tryParse(value,
+          fractional: line.product.business.fractional);
+      if (milli == null) {
+        _showCartNotice('Enter a valid quantity.');
+      } else {
+        _changeQuantity(line, milli);
+      }
+    }
+    await waitForDialogExit();
+    controller.dispose();
+    _focusScanner();
+  }
+
+  Future<void> _scanPayment() async {
+    if (cart.isEmpty || pricingPending || _cartIssue() != null) return;
+    await showDialog<void>(
+        context: context,
+        builder: (dialog) => StatefulBuilder(builder: (context, update) {
+              final cash = tryParseMoney(cashController.text);
+              final issue = credit
+                  ? cash == null || cash < 0 || cash >= payableCents
+                      ? 'Enter cash paid below the sale total'
+                      : customerId == null
+                          ? 'Select a customer for credit'
+                          : null
+                  : cashValidationMessage(cashController.text, payableCents);
+              return AlertDialog(
+                title: Text('Payment: ${money(payableCents)}'),
+                content: SizedBox(
+                  width: 400,
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    if (widget.user.can(PosPermission.customerCredit) &&
+                        customerId != null)
+                      SwitchListTile(
+                          title: const Text('Credit / Utang'),
+                          value: credit,
+                          onChanged: (value) => update(() {
+                                credit = value;
+                                if (value) {
+                                  redeemPoints = 0;
+                                  rewardDiscountCents = 0;
+                                }
+                                cashController.text = value ? '0' : '';
+                              })),
+                    if (customerId != null && !credit)
+                      TextButton.icon(
+                        onPressed: () async {
+                          await _redeemRewards();
+                          if (dialog.mounted) update(() {});
+                        },
+                        icon: const Icon(Icons.stars_outlined),
+                        label: Text(redeemPoints == 0
+                            ? 'Redeem rewards'
+                            : '$redeemPoints pts · -${money(rewardDiscountCents)}'),
+                      ),
+                    TextField(
+                      key: const Key('scan-payment-cash'),
+                      controller: cashController,
+                      autofocus: true,
+                      keyboardType:
+                          const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                          labelText: credit ? 'Cash paid now' : 'Cash tendered',
+                          errorText:
+                              cashController.text.isEmpty ? null : issue),
+                      onChanged: (_) => update(() {}),
+                      onSubmitted: (_) async {
+                        if (issue == null) {
+                          Navigator.pop(dialog);
+                          await checkout();
+                        }
+                      },
+                    ),
+                    if (cash != null && issue == null && !credit)
+                      Text('Change ${money(cash - payableCents)}'),
+                  ]),
+                ),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(dialog),
+                      child: const Text('Cancel')),
+                  FilledButton(
+                      onPressed: issue == null
+                          ? () async {
+                              Navigator.pop(dialog);
+                              await checkout();
+                            }
+                          : null,
+                      child: const Text('Complete payment')),
+                ],
+              );
+            }));
+    _focusScanner();
+  }
+
+  Future<void> _scanHelp() async {
+    final profile = PosShortcutProfile.forLayout(layoutPreference.layout);
+    await showDialog<void>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+              title: const Text('Keyboard shortcuts'),
+              content: SizedBox(
+                width: 520,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _helpSection('Sale', [
+                        const ('F2', 'Customer'),
+                        ('F3', profile.scannerLabel),
+                        if (profile.hasLookup && layoutPreference.allowLookup)
+                          const ('F4', 'Product lookup'),
+                        const ('F6', 'Hold sale'),
+                        const ('F7', 'Held sales'),
+                        const ('F8', 'Pay'),
+                      ]),
+                      if (profile.hasCartNavigation)
+                        _helpSection('Cart', const [
+                          ('\u2191 \u2193', 'Select item'),
+                          ('F5', 'Edit quantity'),
+                          ('+ -', 'Change ordinary quantity'),
+                          ('Delete', 'Remove item')
+                        ]),
+                      _helpSection('Workspace', [
+                        if (profile.hasMore) const ('F10', 'More actions'),
+                        const ('F11', 'Focus mode'),
+                      ]),
+                      _helpSection(
+                          'General', const [('Esc', 'Close / cancel')]),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(dialog),
+                    child: const Text('Close'))
+              ],
+            ));
+    _focusScanner();
+  }
+
+  Widget _helpSection(String title, List<(String, String)> commands) => Padding(
+        padding: const EdgeInsets.only(bottom: 16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title.toUpperCase(),
+              style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          for (final command in commands)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(children: [
+                SizedBox(
+                    width: 86,
+                    child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _keycap(command.$1))),
+                Expanded(child: Text(command.$2)),
+              ]),
+            ),
+        ]),
+      );
+
+  Widget _keycap(String label) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
+          border:
+              Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(label, style: Theme.of(context).textTheme.labelMedium),
+      );
+
+  Widget _shortcutBar(BuildContext context) {
+    final profile = PosShortcutProfile.forLayout(layoutPreference.layout);
+    final selected = profile.hasCartNavigation && _selectedLine != null;
+    final canPay = !cart.isEmpty && !pricingPending && _cartIssue() == null;
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: SafeArea(
+          top: false,
+          child: LayoutBuilder(builder: (context, box) {
+            final narrow = box.maxWidth < 960;
+            Widget item(String key, String label, VoidCallback? action,
+                    {bool pay = false}) =>
+                TextButton(
+                  onPressed: action,
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(48, 40),
+                    foregroundColor: pay && action != null
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    _keycap(key),
+                    const SizedBox(width: 4),
+                    Text(label),
+                  ]),
+                );
+            return Wrap(
+              key: const Key('pos-shortcut-bar'),
+              alignment: WrapAlignment.center,
+              spacing: 2,
+              children: [
+                item('F2', 'Customer', _chooseCustomer),
+                item('F3', profile.scannerLabel, _focusScanner),
+                if (profile.hasLookup)
+                  item('F4', 'Lookup',
+                      layoutPreference.allowLookup ? _openProductLookup : null),
+                item(
+                    'F6',
+                    'Hold',
+                    cart.isEmpty || !widget.user.can(PosPermission.holdSale)
+                        ? null
+                        : _holdSale),
+                item(
+                    'F7',
+                    'Held',
+                    widget.user.can(PosPermission.resumeSale)
+                        ? _heldSales
+                        : null),
+                item('F8', 'Pay', canPay ? _scanPayment : null, pay: true),
+                item('F1', 'Help', _scanHelp),
+                item('F11', widget.focusMode ? 'Exit focus' : 'Focus',
+                    widget.onToggleFocus),
+                if (profile.hasMore && !narrow)
+                  item('F10', 'More', _scanMoreActions),
+                if (profile.hasCartNavigation && !narrow) ...[
+                  item('F5', 'Qty', selected ? _editSelectedQuantity : null),
+                  if (selected) ...[
+                    item(
+                        'Del',
+                        'Remove',
+                        selected && widget.quotationId == null
+                            ? () => _handleScanKey(LogicalKeyboardKey.delete)
+                            : null),
+                    item(
+                        '+/-',
+                        'Qty',
+                        selected &&
+                                _selectedLine!.mode == 'ordinary' &&
+                                !_selectedLine!.product.serialTracking &&
+                                !_selectedLine!.product.business.weight &&
+                                widget.quotationId == null
+                            ? _editSelectedQuantity
+                            : null),
+                    item(
+                        '\u2191\u2193',
+                        'Select',
+                        cart.isEmpty
+                            ? null
+                            : () =>
+                                _handleScanKey(LogicalKeyboardKey.arrowDown)),
+                  ],
+                ],
+              ],
+            );
+          })),
+    );
+  }
+
+  Future<void> _scanMoreActions() async {
+    await showDialog<void>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+              title: const Text('More actions'),
+              content: Column(mainAxisSize: MainAxisSize.min, children: [
+                ListTile(
+                    title: const Text('Manual discount'),
+                    enabled: !cart.isEmpty,
+                    onTap: () {
+                      Navigator.pop(dialog);
+                      _requestManualDiscount();
+                    }),
+                ListTile(
+                    title: const Text('Clear cart'),
+                    enabled:
+                        cart.lines.isNotEmpty && widget.quotationId == null,
+                    onTap: () async {
+                      Navigator.pop(dialog);
+                      final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (confirm) => AlertDialog(
+                                title: const Text('Clear cart?'),
+                                content: const Text(
+                                    'Remove every item from this sale?'),
+                                actions: [
+                                  TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(confirm, false),
+                                      child: const Text('Cancel')),
+                                  FilledButton(
+                                      onPressed: () =>
+                                          Navigator.pop(confirm, true),
+                                      child: const Text('Clear cart')),
+                                ],
+                              ));
+                      if (confirmed == true && mounted) {
+                        setState(() {
+                          cart.clear();
+                          selectedCartIndex = 0;
+                        });
+                      }
+                    }),
+              ]),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(dialog),
+                    child: const Text('Close'))
+              ],
+            ));
+    _focusScanner();
+  }
+
+  KeyEventResult _scanKey(FocusNode node, KeyEvent event) =>
+      event is KeyDownEvent
+          ? _handleScanKey(event.logicalKey)
+          : KeyEventResult.ignored;
+
+  KeyEventResult _handleScanKey(LogicalKeyboardKey key) {
+    if (key == LogicalKeyboardKey.f6) {
+      _holdSale();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.f7) {
+      _heldSales();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.f1) {
+      _scanHelp();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.f3) {
+      _focusScanner();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.f5) {
+      _editSelectedQuantity();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.f8) {
+      _scanPayment();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.f10) {
+      _scanMoreActions();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.escape && unknownCode != null) {
+      setState(() {
+        unknownCode = null;
+        scanError = null;
+      });
+      return KeyEventResult.handled;
+    }
+    if (barcodeFocus.hasFocus && barcodeController.text.isNotEmpty) {
+      return KeyEventResult.ignored;
+    }
+    if (key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.arrowUp) {
+      if (cart.isEmpty) return KeyEventResult.ignored;
+      setState(() => selectedCartIndex =
+          (selectedCartIndex + (key == LogicalKeyboardKey.arrowDown ? 1 : -1))
+              .clamp(0, cart.lines.length - 1));
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.delete &&
+        _selectedLine != null &&
+        widget.quotationId == null) {
+      setState(() => cart.remove(_selectedLine!.id));
+      _refreshLayerPrices();
+      return KeyEventResult.handled;
+    }
+    if ((key == LogicalKeyboardKey.add ||
+            key == LogicalKeyboardKey.numpadAdd ||
+            key == LogicalKeyboardKey.minus ||
+            key == LogicalKeyboardKey.numpadSubtract) &&
+        _selectedLine != null &&
+        _selectedLine!.mode == 'ordinary' &&
+        !_selectedLine!.product.serialTracking &&
+        !_selectedLine!.product.business.weight &&
+        widget.quotationId == null) {
+      final delta =
+          key == LogicalKeyboardKey.add || key == LogicalKeyboardKey.numpadAdd
+              ? Quantity.scale
+              : -Quantity.scale;
+      if (_selectedLine!.quantityMilli + delta > 0) {
+        _changeQuantity(_selectedLine!, _selectedLine!.quantityMilli + delta);
+      }
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  Widget _scanWorkspace(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final customer = customers.where((c) => c.id == customerId).firstOrNull;
+    final lines = cart.lines;
+    final currentQuantity = lastScanned == null
+        ? 0
+        : lines
+            .where((l) => l.product.id == lastScanned!.id)
+            .fold<int>(0, (sum, line) => sum + line.quantityMilli);
+    final remaining = lastScanned == null
+        ? 0
+        : ((stockMilli[lastScanned!.id] ?? 0) - currentQuantity)
+            .clamp(0, 999999999);
+    return Focus(
+      onKeyEvent: _scanKey,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(children: [
+          Row(children: [
+            OutlinedButton.icon(
+              key: const Key('customer-selector'),
+              onPressed: _chooseCustomer,
+              icon: const Icon(Icons.person_outline),
+              label: Text(
+                  'Customer · ${customer?.name ?? walkInName ?? 'Walk-in customer'}  F2',
+                  overflow: TextOverflow.ellipsis),
+            ),
+            const Spacer(),
+            if (widget.onToggleFocus != null)
+              TextButton.icon(
+                onPressed: widget.onToggleFocus,
+                icon: const Icon(Icons.fullscreen, size: 18),
+                label: Text(widget.focusMode ? 'Exit focus' : 'Focus mode'),
+              ),
+            IconButton(
+                tooltip: 'More actions F10',
+                onPressed: _scanMoreActions,
+                icon: const Icon(Icons.more_horiz)),
+            IconButton(
+                tooltip: 'Shortcuts F1',
+                onPressed: _scanHelp,
+                icon: const Icon(Icons.keyboard_outlined)),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+                child: TextField(
+              key: const Key('scan-first-input'),
+              controller: barcodeController,
+              focusNode: barcodeFocus,
+              autofocus: true,
+              textInputAction: TextInputAction.done,
+              decoration: InputDecoration(
+                labelText: 'Scan barcode / SKU / serial',
+                helperText: 'Ready for scanning · F3 focuses scanner',
+                prefixIcon: const Icon(Icons.qr_code_scanner),
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                    tooltip: 'Add scanned item',
+                    onPressed: lookup,
+                    icon: const Icon(Icons.keyboard_return)),
+              ),
+              onSubmitted: (_) => lookup(),
+            )),
+            if (layoutPreference.allowLookup) ...[
+              const SizedBox(width: 8),
+              OutlinedButton(
+                key: const Key('scan-product-lookup'),
+                onPressed: _openProductLookup,
+                child: const Text('Lookup  F4'),
+              ),
+            ]
+          ]),
+          if (unknownCode != null)
+            _unknownBarcodePanel(context)
+          else if (scanError != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(scanError!, style: TextStyle(color: scheme.error)),
+            ),
+          if (lastScanned != null && layoutPreference.showLastScanned)
+            Container(
+              key: const Key('last-scanned-card'),
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              color: lastScanStatus == 'blocked'
+                  ? scheme.errorContainer
+                  : scheme.primaryContainer,
+              child: Text(lastScanStatus == 'blocked'
+                  ? 'Product unavailable · ${lastScanned!.name} · No sellable stock is currently available.'
+                  : '${lastScanned!.name} added · Qty in cart: ${Quantity.format(currentQuantity)} · ${money(lastScanned!.priceCents)} each${lastScanStatus == 'warning' ? ' · Low stock: ${Quantity.format(remaining)} remaining' : ''}'),
+            ),
+          if (cartNotice != null)
+            Container(
+              key: const Key('current-sale-notice'),
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              color: scheme.tertiaryContainer,
+              child: Text(cartNotice!,
+                  style: TextStyle(color: scheme.onTertiaryContainer)),
+            ),
+          if (message != null) _messageBanner(context),
+          const SizedBox(height: 8),
+          Expanded(
+              child: Card(
+            margin: EdgeInsets.zero,
+            clipBehavior: Clip.antiAlias,
+            child: Column(children: [
+              Container(
+                color: scheme.surfaceContainerHigh,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Row(children: [
+                  const SizedBox(width: 28, child: Text('#')),
+                  const Expanded(flex: 5, child: Text('ITEM')),
+                  const SizedBox(width: 132, child: Text('QTY')),
+                  const SizedBox(
+                      width: 90,
+                      child: Text('UNIT PRICE', textAlign: TextAlign.end)),
+                  const SizedBox(
+                      width: 110,
+                      child: Text('TOTAL', textAlign: TextAlign.end)),
+                  const SizedBox(width: 42),
+                ]),
+              ),
+              Expanded(
+                  child: lines.isEmpty
+                      ? Center(
+                          child:
+                              Column(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(Icons.qr_code_scanner,
+                              size: 42, color: scheme.onSurfaceVariant),
+                          const SizedBox(height: 12),
+                          Text('Ready to scan',
+                              style: Theme.of(context).textTheme.titleMedium),
+                          const SizedBox(height: 4),
+                          const Text(
+                              'Scan a barcode or press F4 to search products.'),
+                          const SizedBox(height: 12),
+                          Text(
+                              'F3 Scan   ·   F4 Lookup   ·   F2 Customer   ·   F8 Pay',
+                              style: Theme.of(context).textTheme.bodySmall),
+                        ]))
+                      : ListView.builder(
+                          key: const Key('scan-cart-items'),
+                          itemCount: lines.length,
+                          itemBuilder: (context, index) {
+                            final line = lines[index];
+                            final detail = [
+                              saleModeLabel(line.mode),
+                              if (line.batchId != null)
+                                'Batch ${batchLabels[line.batchId] ?? line.batchId}',
+                              for (final id in line.serialIds)
+                                'Serial ${serialLabels[id] ?? id}'
+                            ].where((s) => s.isNotEmpty).join(' · ');
+                            final canStep = line.mode == 'ordinary' &&
+                                !line.product.serialTracking &&
+                                !line.product.business.weight &&
+                                widget.quotationId == null;
+                            return InkWell(
+                              onTap: () =>
+                                  setState(() => selectedCartIndex = index),
+                              child: Container(
+                                key: ValueKey('scan-line-${line.id}'),
+                                color: index == selectedCartIndex
+                                    ? scheme.primaryContainer
+                                        .withValues(alpha: .35)
+                                    : null,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 6),
+                                constraints:
+                                    const BoxConstraints(minHeight: 60),
+                                child: Row(children: [
+                                  SizedBox(
+                                      width: 28,
+                                      child: Text(index == selectedCartIndex
+                                          ? '›'
+                                          : '${index + 1}')),
+                                  Expanded(
+                                      flex: 5,
+                                      child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(line.product.name,
+                                                maxLines: 1,
+                                                overflow:
+                                                    TextOverflow.ellipsis),
+                                            Text(
+                                                detail.isEmpty
+                                                    ? (line.product.sku ??
+                                                        line.product.barcode ??
+                                                        '')
+                                                    : detail,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .bodySmall),
+                                          ])),
+                                  SizedBox(
+                                      width: 132,
+                                      child: Row(children: [
+                                        if (canStep)
+                                          IconButton(
+                                              tooltip: 'Decrease quantity',
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed: line.quantityMilli >
+                                                      Quantity.scale
+                                                  ? () => _changeQuantity(
+                                                      line,
+                                                      line.quantityMilli -
+                                                          Quantity.scale)
+                                                  : null,
+                                              icon: const Icon(Icons.remove,
+                                                  size: 18)),
+                                        Expanded(
+                                            child: TextButton(
+                                          style: TextButton.styleFrom(
+                                              minimumSize: const Size(32, 40),
+                                              padding: EdgeInsets.zero),
+                                          onPressed: () {
+                                            setState(() =>
+                                                selectedCartIndex = index);
+                                            _editSelectedQuantity();
+                                          },
+                                          child: Text(
+                                              '${Quantity.format(line.quantityMilli)}${line.product.business.weight || line.product.serialTracking ? ' ${line.product.business.unit.label}' : ''}',
+                                              maxLines: 1),
+                                        )),
+                                        if (canStep)
+                                          IconButton(
+                                              tooltip: 'Increase quantity',
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              onPressed: () => _changeQuantity(
+                                                  line,
+                                                  line.quantityMilli +
+                                                      Quantity.scale),
+                                              icon: const Icon(Icons.add,
+                                                  size: 18)),
+                                      ])),
+                                  SizedBox(
+                                      width: 90,
+                                      child: Text(
+                                          money(line.product.priceCents),
+                                          textAlign: TextAlign.end,
+                                          style: const TextStyle(fontFeatures: [
+                                            FontFeature.tabularFigures()
+                                          ]))),
+                                  SizedBox(
+                                      width: 110,
+                                      child: Text(money(line.totalCents),
+                                          textAlign: TextAlign.end,
+                                          style: const TextStyle(fontFeatures: [
+                                            FontFeature.tabularFigures()
+                                          ]))),
+                                  SizedBox(
+                                      width: 42,
+                                      child: IconButton(
+                                        tooltip: 'Remove item',
+                                        icon: const Icon(Icons.close, size: 18),
+                                        onPressed: widget.quotationId == null
+                                            ? () {
+                                                setState(
+                                                    () => cart.remove(line.id));
+                                                _refreshLayerPrices();
+                                              }
+                                            : null,
+                                      )),
+                                ]),
+                              ),
+                            );
+                          },
+                        )),
+            ]),
+          )),
+          const SizedBox(height: 8),
+          Container(
+              key: const Key('scan-checkout-footer'),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerLow,
+                border: Border.all(color: scheme.outlineVariant),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(children: [
+                Text(
+                    '${lines.length} lines · ${lines.fold<int>(0, (sum, line) => sum + line.quantity)} items'),
+                const Spacer(),
+                OutlinedButton(
+                  onPressed:
+                      lines.isEmpty || !widget.user.can(PosPermission.holdSale)
+                          ? null
+                          : _holdSale,
+                  child: const Text('Hold  F6'),
+                ),
+                const SizedBox(width: 16),
+                if (manualDiscount != null)
+                  Text('Discount -${money(manualDiscountCents)}  '),
+                Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                  Text('TOTAL', style: Theme.of(context).textTheme.labelMedium),
+                  Text(money(payableCents),
+                      style: Theme.of(context)
+                          .textTheme
+                          .headlineSmall
+                          ?.copyWith(fontFeatures: const [
+                        FontFeature.tabularFigures()
+                      ])),
+                ]),
+                const SizedBox(width: 16),
+                FilledButton(
+                  key: const Key('pay-button'),
+                  onPressed:
+                      lines.isEmpty || pricingPending || _cartIssue() != null
+                          ? null
+                          : _scanPayment,
+                  child: Text('Pay ${money(payableCents)}  F8'),
+                ),
+              ])),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _openProductLookup() async {
+    final search = TextEditingController();
+    try {
+      await showDialog<void>(
+          context: context,
+          builder: (dialogContext) =>
+              StatefulBuilder(builder: (context, update) {
+                final query = search.text.toLowerCase().trim();
+                final matches = products
+                    .where((p) =>
+                        p.isActive &&
+                        (p.name.toLowerCase().contains(query) ||
+                            (p.sku?.toLowerCase().contains(query) ?? false) ||
+                            (p.barcode?.toLowerCase().contains(query) ??
+                                false)))
+                    .take(50)
+                    .toList();
+                return AlertDialog(
+                    title: const Text('Product lookup'),
+                    content: SizedBox(
+                        width: 440,
+                        height: 420,
+                        child: Column(children: [
+                          TextField(
+                              key: const Key('scan-product-search'),
+                              controller: search,
+                              autofocus: true,
+                              decoration: const InputDecoration(
+                                  labelText: 'Name, SKU, or barcode',
+                                  prefixIcon: Icon(Icons.search)),
+                              onChanged: (_) => update(() {})),
+                          Expanded(
+                              child: ListView.builder(
+                                  itemCount: matches.length,
+                                  itemBuilder: (_, index) {
+                                    final item = matches[index];
+                                    return ListTile(
+                                        title: Text(item.name),
+                                        subtitle: Text(
+                                            '${item.sku ?? ''}  ${item.barcode ?? ''}'),
+                                        trailing: Text(money(item.priceCents)),
+                                        onTap: () async {
+                                          Navigator.of(dialogContext).pop();
+                                          if (!item.business.madeToOrder &&
+                                              (stockMilli[item.id] ?? 0) <= 0) {
+                                            setState(() {
+                                              lastScanned = item;
+                                              lastScanStatus = 'blocked';
+                                              scanError =
+                                                  'No sellable stock available';
+                                            });
+                                          } else {
+                                            await addToCart(item);
+                                            if (mounted) {
+                                              setState(() {
+                                                unknownCode = null;
+                                                scanError = null;
+                                                lastScanned = item;
+                                                lastScanStatus = 'success';
+                                              });
+                                            }
+                                          }
+                                          if (mounted &&
+                                              layoutPreference.keepReady) {
+                                            barcodeFocus.requestFocus();
+                                          }
+                                        });
+                                  })),
+                        ])),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(dialogContext),
+                          child: const Text('Close'))
+                    ]);
+              }));
+    } finally {
+      await waitForDialogExit();
+      search.dispose();
+      if (mounted && layoutPreference.keepReady) barcodeFocus.requestFocus();
+    }
   }
 
   Widget _catalogPanel(BuildContext context, double width) {
@@ -605,7 +2437,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     return Padding(
       padding: const EdgeInsets.all(12),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (message != null) _messageBanner(context),
+        if (unknownCode != null) _unknownBarcodePanel(context),
         if (width >= 640)
           Row(children: [
             Expanded(child: searchFields[0]),
@@ -675,6 +2507,42 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       ]),
     );
   }
+
+  Widget _unknownBarcodePanel(BuildContext context) => Card(
+        key: const Key('unknown-barcode-panel'),
+        color: Theme.of(context).colorScheme.errorContainer,
+        child: ListTile(
+          dense: true,
+          title: Text('Barcode not found: $unknownCode'),
+          subtitle: const Text('Search products or check the scanned code.'),
+          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+            TextButton(
+                onPressed: _openProductLookup,
+                child: const Text('Search products')),
+            if (widget.user.can(PosPermission.manageCatalog))
+              TextButton(
+                  onPressed: () async {
+                    final scanned = unknownCode;
+                    setState(() => unknownCode = null);
+                    await Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => ProductScreen(
+                            repository: widget.repository,
+                            auth: widget.auth,
+                            createOnOpen: true,
+                            initialBarcode: scanned)));
+                    await refresh();
+                    _focusScanner();
+                  },
+                  child: const Text('Create product')),
+            TextButton(
+                onPressed: () => setState(() {
+                      unknownCode = null;
+                      scanError = null;
+                    }),
+                child: const Text('Dismiss')),
+          ]),
+        ),
+      );
 
   Widget _messageBanner(BuildContext context) {
     final success = message!.startsWith('Sale ') ||
@@ -831,7 +2699,10 @@ class CheckoutScreenState extends State<CheckoutScreen> {
 
   Future<void> _chooseCustomer() async {
     String query = '';
-    await showModalBottomSheet<void>(
+    final summaries =
+        await DirectoryRepository(widget.repository.db).customerSummaries();
+    if (!mounted) return;
+    final choice = await showModalBottomSheet<String>(
         context: context,
         isScrollControlled: true,
         builder: (context) => StatefulBuilder(
@@ -850,35 +2721,369 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                                 TextField(
                                     autofocus: true,
                                     decoration: const InputDecoration(
-                                        labelText: 'Search customers',
+                                        labelText:
+                                            'Search name or contact number',
                                         prefixIcon: Icon(Icons.search)),
                                     onChanged: (value) => update(() =>
                                         query = value.toLowerCase().trim())),
                                 Expanded(
                                     child: ListView(children: [
                                   ListTile(
-                                      title: const Text('Walk-in customer'),
-                                      onTap: () {
-                                        setState(() {
-                                          customerId = null;
-                                          credit = false;
-                                          cashController.clear();
-                                        });
-                                        Navigator.pop(context);
-                                      }),
+                                      title: const Text('Walk-in details'),
+                                      subtitle: const Text(
+                                          'Optional name and contact; no customer account'),
+                                      onTap: () =>
+                                          Navigator.pop(context, '__walkin__')),
+                                  ListTile(
+                                      title: const Text('Anonymous walk-in'),
+                                      onTap: () => Navigator.pop(
+                                          context, '__anonymous__')),
+                                  ListTile(
+                                      title: const Text('+ New Customer'),
+                                      subtitle: const Text(
+                                          'Create a registered customer'),
+                                      onTap: () =>
+                                          Navigator.pop(context, '__create__')),
                                   for (final customer in customers.where((c) =>
-                                      c.name.toLowerCase().contains(query)))
+                                      c.name.toLowerCase().contains(query) ||
+                                      (c.phone?.toLowerCase().contains(query) ??
+                                          false)))
                                     ListTile(
                                         title: Text(customer.name),
-                                        onTap: () {
-                                          setState(
-                                              () => customerId = customer.id);
-                                          Navigator.pop(context);
-                                        }),
+                                        subtitle: Text(
+                                            '${customer.phone ?? 'No contact'} · ${summaries[customer.id]?.group ?? 'Retail'} · ${summaries[customer.id]?.points ?? 0} pts'),
+                                        onTap: () => Navigator.pop(
+                                            context, customer.id)),
                                 ])),
                               ]))),
                 )));
+    if (choice == '__walkin__' || choice == '__create__') {
+      await _customerIdentityDialog(create: choice == '__create__');
+    } else if (choice != null) {
+      setState(() {
+        customerId = choice == '__anonymous__' ? null : choice;
+        walkInName = null;
+        walkInContact = null;
+        redeemPoints = 0;
+        rewardDiscountCents = 0;
+        credit = false;
+        cashController.clear();
+      });
+    }
     if (mounted) barcodeFocus.requestFocus();
+  }
+
+  Future<void> _customerIdentityDialog({required bool create}) async {
+    final name = TextEditingController(text: create ? '' : walkInName ?? '');
+    final phone =
+        TextEditingController(text: create ? '' : walkInContact ?? '');
+    try {
+      final accepted = await showDialog<bool>(
+          context: context,
+          builder: (dialog) => StatefulBuilder(
+              builder: (context, update) => AlertDialog(
+                    title: Text(create ? 'New Customer' : 'Walk-in details'),
+                    content: SizedBox(
+                        width: 390,
+                        child:
+                            Column(mainAxisSize: MainAxisSize.min, children: [
+                          TextField(
+                              key: const Key('quick-customer-name'),
+                              controller: name,
+                              decoration: InputDecoration(
+                                  labelText: create
+                                      ? 'Name *'
+                                      : 'Customer name (optional)'),
+                              onChanged: (_) => update(() {})),
+                          TextField(
+                              key: const Key('quick-customer-contact'),
+                              controller: phone,
+                              decoration: const InputDecoration(
+                                  labelText: 'Contact number (optional)')),
+                        ])),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(dialog, false),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: create && name.text.trim().isEmpty
+                              ? null
+                              : () => Navigator.pop(dialog, true),
+                          child:
+                              Text(create ? 'Create customer' : 'Use walk-in')),
+                    ],
+                  )));
+      if (accepted != true || !mounted) return;
+      if (create) {
+        final customer = await DirectoryRepository(widget.repository.db)
+            .quickCreateCustomer(widget.user,
+                name: name.text, phone: phone.text);
+        await refresh();
+        if (!mounted) return;
+        setState(() {
+          customerId = customer.id;
+          walkInName = null;
+          walkInContact = null;
+          redeemPoints = 0;
+          rewardDiscountCents = 0;
+        });
+      } else {
+        setState(() {
+          customerId = null;
+          walkInName = name.text.trim().isEmpty ? null : name.text.trim();
+          walkInContact = phone.text.trim().isEmpty ? null : phone.text.trim();
+          redeemPoints = 0;
+          rewardDiscountCents = 0;
+          credit = false;
+          cashController.clear();
+        });
+      }
+    } catch (error) {
+      if (mounted) setState(() => message = safeMessage(error));
+    } finally {
+      await waitForDialogExit();
+      name.dispose();
+      phone.dispose();
+    }
+  }
+
+  Future<void> _requestManualDiscount() async {
+    if (cart.isEmpty || completion != null) return;
+    final managers = <User>[];
+    for (final row in await widget.repository.db
+        .select(widget.repository.db.users)
+        .get()) {
+      if (row.isActive &&
+          (await widget.auth.repository.requireActive(row.id))
+              .can(PosPermission.approveDiscount)) {
+        managers.add(row);
+      }
+    }
+    if (!mounted || managers.isEmpty) return;
+    String scope = 'order';
+    String kind = 'fixed';
+    String? lineKey = cart.lines.first.id;
+    String reason = 'Price match';
+    String managerId = managers.first.id;
+    String? error;
+    String? valueError;
+    String? notesError;
+    var authorizing = false;
+    final value = TextEditingController();
+    final notes = TextEditingController();
+    final password = TextEditingController();
+    try {
+      final approved = await showDialog<ManualDiscount>(
+          context: context,
+          builder: (dialog) => StatefulBuilder(
+              builder: (context, update) => AlertDialog(
+                    title: const Text('Manager-approved discount'),
+                    content: SizedBox(
+                        width: 420,
+                        child: SingleChildScrollView(
+                            child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                              DropdownButtonFormField<String>(
+                                  initialValue: scope,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Apply to'),
+                                  items: const [
+                                    DropdownMenuItem(
+                                        value: 'order',
+                                        child: Text('Whole sale')),
+                                    DropdownMenuItem(
+                                        value: 'line', child: Text('One line')),
+                                  ],
+                                  onChanged: (v) =>
+                                      update(() => scope = v ?? scope)),
+                              const SizedBox(height: 12),
+                              if (scope == 'line')
+                                DropdownButtonFormField<String>(
+                                    initialValue: lineKey,
+                                    decoration: const InputDecoration(
+                                        labelText: 'Line'),
+                                    items: [
+                                      for (final line in cart.lines)
+                                        DropdownMenuItem(
+                                            value: line.id,
+                                            child: Text(
+                                                '${line.product.name} · ${money(line.totalCents)}'))
+                                    ],
+                                    onChanged: (v) =>
+                                        update(() => lineKey = v)),
+                              if (scope == 'line') const SizedBox(height: 12),
+                              DropdownButtonFormField<String>(
+                                  initialValue: kind,
+                                  decoration:
+                                      const InputDecoration(labelText: 'Type'),
+                                  items: const [
+                                    DropdownMenuItem(
+                                        value: 'fixed',
+                                        child: Text('Fixed amount')),
+                                    DropdownMenuItem(
+                                        value: 'percent',
+                                        child: Text('Percentage')),
+                                  ],
+                                  onChanged: (v) => update(() {
+                                        kind = v ?? kind;
+                                        valueError = null;
+                                      })),
+                              const SizedBox(height: 12),
+                              TextField(
+                                  key: const Key('manual-discount-value'),
+                                  controller: value,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                          decimal: true),
+                                  decoration: InputDecoration(
+                                      errorText: valueError,
+                                      labelText: kind == 'fixed'
+                                          ? 'Amount (pesos)'
+                                          : 'Percentage (0–100)')),
+                              const SizedBox(height: 12),
+                              DropdownButtonFormField<String>(
+                                  initialValue: reason,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Reason'),
+                                  items: [
+                                    for (final r in const [
+                                      'Price match',
+                                      'Manager courtesy',
+                                      'Damaged packaging',
+                                      'Employee discount',
+                                      'Manual correction',
+                                      'Other'
+                                    ])
+                                      DropdownMenuItem(value: r, child: Text(r))
+                                  ],
+                                  onChanged: (v) =>
+                                      update(() => reason = v ?? reason)),
+                              const SizedBox(height: 12),
+                              if (reason == 'Other')
+                                TextField(
+                                    controller: notes,
+                                    decoration: InputDecoration(
+                                        labelText: 'Notes *',
+                                        errorText: notesError)),
+                              if (reason == 'Other') const SizedBox(height: 12),
+                              DropdownButtonFormField<String>(
+                                  initialValue: managerId,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Authorizing manager'),
+                                  items: [
+                                    for (final manager in managers)
+                                      DropdownMenuItem(
+                                          value: manager.id,
+                                          child: Text(manager.name))
+                                  ],
+                                  onChanged: (v) =>
+                                      update(() => managerId = v ?? managerId)),
+                              const SizedBox(height: 12),
+                              TextField(
+                                  key: const Key('manual-discount-password'),
+                                  controller: password,
+                                  obscureText: true,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Manager password')),
+                              if (error != null)
+                                Text(error!,
+                                    style: TextStyle(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .error)),
+                            ]))),
+                    actions: [
+                      TextButton(
+                          onPressed:
+                              authorizing ? null : () => Navigator.pop(dialog),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: authorizing
+                              ? null
+                              : () async {
+                                  update(() {
+                                    authorizing = true;
+                                    error = null;
+                                    valueError = null;
+                                    notesError = null;
+                                  });
+                                  try {
+                                    final amount = kind == 'fixed'
+                                        ? tryParseMoney(value.text)
+                                        : int.tryParse(value.text.trim());
+                                    if (amount == null ||
+                                        amount < 0 ||
+                                        (kind == 'percent' && amount > 100)) {
+                                      update(() => valueError = kind ==
+                                              'percent'
+                                          ? 'Percentage must be between 0 and 100.'
+                                          : 'Enter a valid amount.');
+                                      return;
+                                    }
+                                    if (reason == 'Other' &&
+                                        notes.text.trim().isEmpty) {
+                                      update(() => notesError =
+                                          'Notes are required for Other.');
+                                      return;
+                                    }
+                                    final basis = scope == 'line'
+                                        ? cart.lines
+                                            .where((l) => l.id == lineKey)
+                                            .fold<int>(0,
+                                                (sum, l) => sum + l.totalCents)
+                                        : cart.totalCents;
+                                    final manager = await widget.auth
+                                        .authorizeDiscount(
+                                            managerId, password.text);
+                                    final discount = ManualDiscount(
+                                        scope: scope,
+                                        kind: kind,
+                                        lineKey:
+                                            scope == 'line' ? lineKey : null,
+                                        value: amount,
+                                        reason: reason,
+                                        notes: notes.text,
+                                        requestedBy: widget.user.id,
+                                        authorizedBy: manager.id,
+                                        authorizedAt: DateTime.now(),
+                                        approvedBasisCents: basis);
+                                    final effect = discount.effectOn(basis);
+                                    if (effect >
+                                        cart.totalCents - rewardDiscountCents) {
+                                      throw StateError(
+                                          'Discount exceeds the payable total');
+                                    }
+                                    if (dialog.mounted) {
+                                      Navigator.pop(dialog, discount);
+                                    }
+                                  } catch (failure) {
+                                    if (dialog.mounted) {
+                                      update(
+                                          () => error = safeMessage(failure));
+                                    }
+                                  } finally {
+                                    if (dialog.mounted) {
+                                      update(() => authorizing = false);
+                                    }
+                                  }
+                                },
+                          child: const Text('Authorize')),
+                    ],
+                  )));
+      if (approved != null && mounted) {
+        setState(() {
+          manualDiscount = approved;
+          cashController.clear();
+        });
+      }
+    } finally {
+      await waitForDialogExit();
+      value.dispose();
+      notes.dispose();
+      password.dispose();
+    }
   }
 
   Widget _salePanel(BuildContext context, double height) {
@@ -886,12 +3091,12 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     final customer = customers.where((c) => c.id == customerId).firstOrNull;
     final cashCents = tryParseMoney(cashController.text);
     final cashError = credit
-        ? cashCents == null || cashCents < 0 || cashCents >= cart.totalCents
+        ? cashCents == null || cashCents < 0 || cashCents >= payableCents
             ? 'Enter cash paid below the sale total'
             : customerId == null
                 ? 'Select a customer for credit'
                 : null
-        : cashValidationMessage(cashController.text, cart.totalCents);
+        : cashValidationMessage(cashController.text, payableCents);
     final cartIssue = _cartIssue();
     final ready = !busy &&
         !pricingPending &&
@@ -927,17 +3132,55 @@ class CheckoutScreenState extends State<CheckoutScreen> {
               label: Row(children: [
                 Expanded(
                     child: Text(
-                        'Customer  ·  ${customer?.name ?? 'Walk-in customer'}',
+                        'Customer  ·  ${customer?.name ?? walkInName ?? 'Walk-in customer'}',
                         overflow: TextOverflow.ellipsis)),
                 const Text('Change'),
               ]),
             ),
+            Wrap(spacing: 8, children: [
+              TextButton.icon(
+                  onPressed:
+                      cart.isEmpty || !widget.user.can(PosPermission.holdSale)
+                          ? null
+                          : _holdSale,
+                  icon: const Icon(Icons.pause_circle_outline, size: 18),
+                  label: const Text('Hold sale · F6')),
+              TextButton.icon(
+                  onPressed: widget.user.can(PosPermission.resumeSale)
+                      ? _heldSales
+                      : null,
+                  icon: const Icon(Icons.history, size: 18),
+                  label: const Text('Held sales · F7')),
+            ]),
+            if (cartNotice != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Semantics(
+                  liveRegion: true,
+                  child: Container(
+                    key: const Key('current-sale-notice'),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: scheme.tertiaryContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(cartNotice!,
+                        style: TextStyle(color: scheme.onTertiaryContainer)),
+                  ),
+                ),
+              ),
+            if (message != null) _messageBanner(context),
             if (customer != null && !credit)
               Padding(
                   padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                      'Customer is linked when Credit / Utang is used. Cash sales remain walk-in.',
-                      style: Theme.of(context).textTheme.bodySmall)),
+                  child: FutureBuilder<int>(
+                      future: LoyaltyRepository(widget.repository.db)
+                          .balance(customer.id),
+                      builder: (context, snapshot) => Text(
+                          snapshot.hasData
+                              ? '${snapshot.data} pts available'
+                              : 'Customer linked to this sale',
+                          style: Theme.of(context).textTheme.bodySmall))),
             const SizedBox(height: 8),
             Expanded(
                 child: cart.isEmpty
@@ -964,7 +3207,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                 Text(cartIssue, style: TextStyle(color: scheme.error)),
               const SizedBox(height: 8),
               ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: height * .43),
+                  constraints: BoxConstraints(maxHeight: height * .48),
                   child: SingleChildScrollView(
                       child: _paymentPanel(context, cashCents, cashError))),
               const SizedBox(height: 8),
@@ -979,14 +3222,27 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                       : busy
                           ? 'Completing…'
                           : credit
-                              ? 'Complete payment · ${money(cart.totalCents)}'
-                              : 'Pay ${money(cart.totalCents)}')),
+                              ? 'Complete payment · ${money(payableCents)}'
+                              : 'Pay ${money(payableCents)}')),
             ),
           ],
         ));
   }
 
   String? _cartIssue() {
+    if (payableCents < 0) {
+      return 'Discounts exceed the sale total.';
+    }
+    if (manualDiscount != null) {
+      final basis = manualDiscount!.scope == 'line'
+          ? cart.lines
+              .where((l) => l.id == manualDiscount!.lineKey)
+              .fold<int>(0, (sum, l) => sum + l.totalCents)
+          : cart.totalCents;
+      if (basis != manualDiscount!.approvedBasisCents) {
+        return 'Sale changed. Remove or reauthorize the manual discount.';
+      }
+    }
     for (final line in cart.lines) {
       if (line.product.serialTracking &&
           line.serialIds.length * Quantity.scale != line.quantityMilli) {
@@ -1009,31 +3265,131 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       return 'Select a serial for each unit before changing quantity.';
     }
     final available = stockMilli[line.product.id];
+    final otherQuantity = cart.lines
+        .where((other) =>
+            other.product.id == line.product.id && other.id != line.id)
+        .fold<int>(0, (sum, other) => sum + other.quantityMilli);
     if (!line.product.business.madeToOrder &&
         available != null &&
-        milli > available) {
+        milli + otherQuantity > available) {
       return 'Only ${Quantity.format(available)} ${line.product.business.unit.label} available.';
     }
     return null;
   }
 
   void _changeQuantity(CartLine line, int milli) {
+    if (widget.quotationId != null) {
+      _showCartNotice('The accepted quotation quantity is fixed.');
+      return;
+    }
     final issue = _quantityIssue(line, milli);
     if (issue != null) {
-      setState(() {
-        message = issue;
-        quantityEditRevision++;
-      });
+      _showCartNotice(issue);
+      setState(() => quantityEditRevision++);
       return;
     }
     setState(() {
-      cart.setQuantityMilli(line.product.id, milli);
+      cart.setQuantityMilli(line.id, milli);
       message = null;
     });
     _refreshLayerPrices();
   }
 
+  Future<void> _configureQuotedAllocation(CartLine line) async {
+    final product = line.product;
+    final serials = product.serialTracking
+        ? await widget.repository.availableSerials(product.id)
+        : <SerialUnit>[];
+    final batches = product.business.batch
+        ? await widget.repository.batches(product.id)
+        : <ProductLot>[];
+    final needed = line.quantityMilli ~/ Quantity.scale;
+    if (product.serialTracking && serials.length < needed) {
+      if (mounted) {
+        setState(() => message =
+            '$needed units were quoted, but only ${serials.length} sellable serialized units are currently available for ${product.name}.');
+      }
+      return;
+    }
+    final chosen = line.serialIds.toSet();
+    String? batchId = line.batchId;
+    if (!mounted) return;
+    final accepted = await showDialog<bool>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+            builder: (context, update) => AlertDialog(
+                    title: Text('Allocate ${product.name}'),
+                    content: SizedBox(
+                        width: 420,
+                        height: 330,
+                        child: ListView(children: [
+                          Text(
+                              'Quoted quantity: ${Quantity.format(line.quantityMilli)} ${product.business.unit.label}'),
+                          if (product.business.batch)
+                            DropdownButtonFormField<String>(
+                                initialValue: batchId,
+                                decoration: const InputDecoration(
+                                    labelText: 'Eligible batch'),
+                                items: [
+                                  for (final batch in batches.where((b) =>
+                                      b.quantityMilli >= line.quantityMilli))
+                                    DropdownMenuItem(
+                                        value: batch.id,
+                                        child: Text(batch.batchNumber))
+                                ],
+                                onChanged: (value) =>
+                                    update(() => batchId = value)),
+                          if (product.serialTracking)
+                            for (final serial in serials)
+                              CheckboxListTile(
+                                  title: Text(serial.serialNumber),
+                                  value: chosen.contains(serial.id),
+                                  onChanged: (value) => update(() {
+                                        if (value == true) {
+                                          chosen.add(serial.id);
+                                        } else {
+                                          chosen.remove(serial.id);
+                                        }
+                                      })),
+                        ])),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () => Navigator.pop(context, true),
+                          child: const Text('Apply')),
+                    ])));
+    if (accepted != true || !mounted) return;
+    if (product.serialTracking && chosen.length != needed) {
+      setState(() =>
+          message = 'Select exactly $needed serials for ${product.name}.');
+      return;
+    }
+    if (product.business.batch && batchId == null) {
+      setState(() => message = 'Choose an eligible batch for ${product.name}.');
+      return;
+    }
+    final quotedTotal = line.totalCents;
+    setState(() {
+      line.batchId = batchId;
+      line.serialIds = chosen.toList();
+      line.pricedTotalCents = quotedTotal;
+      for (final serial in serials) {
+        serialLabels[serial.id] = serial.serialNumber;
+      }
+      for (final batch in batches) {
+        batchLabels[batch.id] = batch.batchNumber;
+      }
+      message = null;
+    });
+  }
+
   Widget _cartLine(BuildContext context, CartLine line) {
+    final canDecrease = widget.quotationId == null &&
+        _quantityIssue(line, line.quantityMilli - Quantity.scale) == null;
+    final canIncrease = widget.quotationId == null &&
+        _quantityIssue(line, line.quantityMilli + Quantity.scale) == null;
     final mode = saleModeLabel(line.mode);
     final serials = line.serialIds
         .map((id) => serialLabels[id])
@@ -1055,13 +3411,21 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                 Expanded(
                     child: Text(line.product.name,
                         style: Theme.of(context).textTheme.titleSmall)),
+                if (widget.quotationId != null &&
+                    (line.product.serialTracking ||
+                        line.product.business.batch))
+                  TextButton(
+                      onPressed: () => _configureQuotedAllocation(line),
+                      child: const Text('Allocate')),
                 IconButton(
                     tooltip: 'Remove ${line.product.name}',
                     visualDensity: VisualDensity.compact,
-                    onPressed: () {
-                      setState(() => cart.remove(line.product.id));
-                      _refreshLayerPrices();
-                    },
+                    onPressed: widget.quotationId != null
+                        ? null
+                        : () {
+                            setState(() => cart.remove(line.id));
+                            _refreshLayerPrices();
+                          },
                     icon: const Icon(Icons.close, size: 18)),
               ]),
               Text(
@@ -1076,9 +3440,12 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                     style: Theme.of(context).textTheme.bodySmall),
               Row(children: [
                 IconButton(
-                    tooltip: 'Decrease ${line.product.name} quantity',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: line.quantityMilli <= Quantity.scale
+                    tooltip: canDecrease
+                        ? 'Decrease quantity'
+                        : 'Minimum quantity or serial selection reached',
+                    constraints:
+                        const BoxConstraints(minWidth: 40, minHeight: 40),
+                    onPressed: !canDecrease
                         ? null
                         : () => _changeQuantity(
                             line, line.quantityMilli - Quantity.scale),
@@ -1087,7 +3454,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                     width: 52,
                     child: TextFormField(
                       key: ValueKey(
-                          'quantity-${line.product.id}-${line.quantityMilli}-$quantityEditRevision'),
+                          'quantity-${line.id}-${line.quantityMilli}-$quantityEditRevision'),
                       initialValue: Quantity.format(line.quantityMilli),
                       textAlign: TextAlign.center,
                       keyboardType:
@@ -1097,10 +3464,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                         final milli = Quantity.tryParse(value,
                             fractional: line.product.business.fractional);
                         if (milli == null) {
-                          setState(() {
-                            message = 'Enter a valid quantity';
-                            quantityEditRevision++;
-                          });
+                          _showCartNotice('Enter a valid quantity.');
+                          setState(() => quantityEditRevision++);
                           return;
                         }
                         _changeQuantity(line, milli);
@@ -1108,10 +3473,15 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                       },
                     )),
                 IconButton(
-                    tooltip: 'Increase ${line.product.name} quantity',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => _changeQuantity(
-                        line, line.quantityMilli + Quantity.scale),
+                    tooltip: canIncrease
+                        ? 'Increase quantity'
+                        : 'Maximum quantity or serial selection reached',
+                    constraints:
+                        const BoxConstraints(minWidth: 40, minHeight: 40),
+                    onPressed: canIncrease
+                        ? () => _changeQuantity(
+                            line, line.quantityMilli + Quantity.scale)
+                        : null,
                     icon: const Icon(Icons.add_circle_outline)),
                 Text(line.product.business.unit.label),
                 const Spacer(),
@@ -1124,24 +3494,119 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     ]);
   }
 
+  Future<void> _redeemRewards() async {
+    if (customerId == null) return;
+    final loyalty = LoyaltyRepository(widget.repository.db);
+    final rule = await loyalty.settings();
+    final available = await loyalty.balance(customerId!);
+    if (!mounted) return;
+    if (!rule.enabled) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Rewards are disabled')));
+      return;
+    }
+    final input = TextEditingController(text: '$redeemPoints');
+    try {
+      final selected = await showDialog<int>(
+          context: context,
+          builder: (dialogContext) =>
+              StatefulBuilder(builder: (context, update) {
+                final previewPoints = int.tryParse(input.text) ?? 0;
+                final previewDiscount = previewPoints > 0 &&
+                        previewPoints % rule.redeemPoints == 0
+                    ? previewPoints ~/ rule.redeemPoints * rule.redeemValueCents
+                    : 0;
+                return AlertDialog(
+                    title: const Text('Redeem points'),
+                    content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Available: $available pts'),
+                          Text(
+                              '${rule.redeemPoints} pts = ${money(rule.redeemValueCents)}'),
+                          TextField(
+                              controller: input,
+                              keyboardType: TextInputType.number,
+                              onChanged: (_) => update(() {}),
+                              decoration: const InputDecoration(
+                                  labelText: 'Points to redeem')),
+                          Text(
+                              'Equivalent discount: ${money(previewDiscount)}'),
+                          Text(
+                              'Remaining points: ${available - previewPoints}'),
+                        ]),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(dialogContext),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () {
+                            final points = int.tryParse(input.text);
+                            if (points == null ||
+                                points < 0 ||
+                                points > available ||
+                                points % rule.redeemPoints != 0 ||
+                                points ~/
+                                        rule.redeemPoints *
+                                        rule.redeemValueCents >=
+                                    cart.totalCents - manualDiscountCents) {
+                              ScaffoldMessenger.of(dialogContext).showSnackBar(
+                                  const SnackBar(
+                                      content: Text(
+                                          'Enter valid points within the sale total')));
+                              return;
+                            }
+                            Navigator.pop(dialogContext, points);
+                          },
+                          child: const Text('Apply'))
+                    ]);
+              }));
+      if (selected == null || !mounted) return;
+      setState(() {
+        redeemPoints = selected;
+        rewardDiscountCents =
+            selected ~/ rule.redeemPoints * rule.redeemValueCents;
+      });
+    } finally {
+      input.dispose();
+    }
+  }
+
   Widget _paymentPanel(
       BuildContext context, int? cashCents, String? cashError) {
     final scheme = Theme.of(context).colorScheme;
-    final canCredit =
-        customerId != null && widget.user.can(PosPermission.customerCredit);
+    final canCredit = widget.quotationId == null &&
+        customerId != null &&
+        widget.user.can(PosPermission.customerCredit);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(),
       _amountRow(context, 'Subtotal', cart.subtotalCents),
-      Tooltip(
-          message: 'Discounts are not configured for checkout',
-          child: Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                  onPressed: null,
-                  icon: const Icon(Icons.local_offer_outlined),
-                  label: const Text('+ Add discount')))),
+      if (customerId != null && !credit)
+        TextButton.icon(
+            onPressed: _redeemRewards,
+            icon: const Icon(Icons.stars_outlined),
+            label: Text(redeemPoints == 0
+                ? 'Redeem rewards'
+                : 'Rewards: -${money(rewardDiscountCents)} ($redeemPoints pts)')),
+      Row(children: [
+        Expanded(
+            child: TextButton.icon(
+                onPressed: cart.isEmpty ? null : _requestManualDiscount,
+                icon: const Icon(Icons.local_offer_outlined),
+                label: Text(manualDiscount == null
+                    ? '+ Add discount'
+                    : 'Manual discount · ${manualDiscount!.reason}'))),
+        if (manualDiscount != null)
+          IconButton(
+              tooltip: 'Remove manual discount',
+              onPressed: () => setState(() => manualDiscount = null),
+              icon: const Icon(Icons.close)),
+      ]),
+      if (manualDiscount != null)
+        _amountRow(context, 'Manual discount', -manualDiscountCents),
       const Divider(),
-      _amountRow(context, 'TOTAL', cart.totalCents, prominent: true),
+      _amountRow(context, 'TOTAL', payableCents, prominent: true),
       const SizedBox(height: 10),
       Text('Payment method', style: Theme.of(context).textTheme.titleSmall),
       const SizedBox(height: 6),
@@ -1163,6 +3628,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                 onSelected: canCredit
                     ? (_) => setState(() {
                           credit = true;
+                          redeemPoints = 0;
+                          rewardDiscountCents = 0;
                           cashController.text = '0';
                         })
                     : null)),
@@ -1187,23 +3654,23 @@ class CheckoutScreenState extends State<CheckoutScreen> {
         const SizedBox(height: 6),
         Wrap(spacing: 6, children: [
           for (final (label, cents) in [
-            ('Exact', cart.totalCents),
+            ('Exact', payableCents),
             ('₱100', 10000),
             ('₱500', 50000),
             ('₱1,000', 100000),
           ])
             OutlinedButton(
-                onPressed: cents < cart.totalCents
+                onPressed: cents < payableCents
                     ? null
                     : () => setState(
                         () => cashController.text = formatPesoInput(cents)),
                 child: Text(label)),
         ]),
         if (cashError == null && cashCents != null)
-          _amountRow(context, 'Change', cashCents - cart.totalCents),
+          _amountRow(context, 'Change', cashCents - payableCents),
       ] else if (cashError == null && cashCents != null) ...[
         _amountRow(context, 'Cash', cashCents),
-        _amountRow(context, 'Credit', cart.totalCents - cashCents),
+        _amountRow(context, 'Credit', payableCents - cashCents),
         _amountRow(context, 'Remaining', 0),
       ],
     ]);
@@ -1230,10 +3697,14 @@ class CheckoutScreenState extends State<CheckoutScreen> {
 class _OpeningBatchEditor {
   final quantity = TextEditingController();
   final number = TextEditingController();
+  final cost = TextEditingController();
+  final price = TextEditingController();
   DateTime? expiry;
   void dispose() {
     quantity.dispose();
     number.dispose();
+    cost.dispose();
+    price.dispose();
   }
 }
 
@@ -1241,16 +3712,20 @@ class ProductScreen extends StatefulWidget {
   final PosRepository repository;
   final AuthService auth;
   final ValueChanged<String>? onReceiveStock;
+  final ValueChanged<String>? onCreatePurchaseOrder;
   final ValueChanged<String>? onCreated;
   final bool createOnOpen;
   final String initialFilter;
+  final String? initialBarcode;
   const ProductScreen(
       {super.key,
       required this.repository,
       required this.auth,
       this.onReceiveStock,
+      this.onCreatePurchaseOrder,
       this.onCreated,
       this.createOnOpen = false,
+      this.initialBarcode,
       this.initialFilter = 'All'});
   @override
   State<ProductScreen> createState() => _ProductScreenState();
@@ -1262,6 +3737,8 @@ class _ProductScreenState extends State<ProductScreen> {
   List<Category> categories = [];
   Map<String, List<InventoryLayer>> activeLayers = {};
   Map<String, (int physical, int reserved)> stockLevels = {};
+  Map<String, InventoryPlanningRow> planning = {};
+  Map<String, InventoryProductHealth> inventoryHealth = {};
   String? error;
   String search = '';
   late String filter = widget.initialFilter;
@@ -1281,12 +3758,19 @@ class _ProductScreenState extends State<ProductScreen> {
     final categoryRows = await widget.repository.categories();
     final layerRows = await widget.repository.activeLayersByProduct();
     final levels = await widget.repository.stockLevels();
+    final health = await InventoryHealthRepository(widget.repository.db).load();
+    final plans = {
+      for (final entry in health.products.entries)
+        entry.key: entry.value.planning
+    };
     if (mounted) {
       setState(() {
         products = rows;
         categories = categoryRows;
         activeLayers = layerRows;
         stockLevels = levels;
+        planning = plans;
+        inventoryHealth = health.products;
       });
     }
   }
@@ -1311,27 +3795,32 @@ class _ProductScreenState extends State<ProductScreen> {
       (activeLayers[product.id] ?? []).map((l) => l.unitCostCents),
       product.costCents);
 
-  String _sellingRange(PosProduct product) => product.pricingPolicy == 'layer'
-      ? _range(
-          (activeLayers[product.id] ?? [])
-              .map((l) => l.unitSellingPriceCents ?? product.priceCents),
-          product.priceCents)
-      : money(product.priceCents);
+  String _sellingRange(PosProduct product) {
+    if (product.pricingPolicy != 'layer') return money(product.priceCents);
+    final prices = (activeLayers[product.id] ?? [])
+        .map((l) => l.unitSellingPriceCents)
+        .whereType<int>()
+        .toList();
+    return prices.isEmpty ? 'No priced stock' : _range(prices, 0);
+  }
 
   Future<void> edit([PosProduct? product]) async {
     var saved = false;
     final name = TextEditingController(text: product?.name);
     final sku = TextEditingController(text: product?.sku);
-    final barcode = TextEditingController(text: product?.barcode);
+    final barcode =
+        TextEditingController(text: product?.barcode ?? widget.initialBarcode);
     final price = TextEditingController(
         text: product == null
             ? ''
             : '${product.priceCents ~/ 100}.${(product.priceCents % 100).toString().padLeft(2, '0')}');
     final cost = TextEditingController(
         text: product == null
-            ? '0'
+            ? ''
             : '${product.costCents ~/ 100}.${(product.costCents % 100).toString().padLeft(2, '0')}');
-    final stock = TextEditingController(text: '0');
+    final stock = TextEditingController();
+    final openingCost = TextEditingController();
+    final openingPrice = TextEditingController();
     final serialInput = TextEditingController();
     final openingSerials = <String>[];
     String? serialError;
@@ -1339,11 +3828,11 @@ class _ProductScreenState extends State<ProductScreen> {
         TextEditingController(text: '${product?.lowStockThreshold ?? 5}');
     final containerPrice = TextEditingController(
         text: product == null
-            ? '0'
+            ? '0.00'
             : formatPesoInput(product.business.containerPriceCents));
     final deposit = TextEditingController(
         text: product == null
-            ? '0'
+            ? '0.00'
             : formatPesoInput(product.business.depositCents));
     final batchNumber = TextEditingController();
     final extraOpeningBatches = <_OpeningBatchEditor>[];
@@ -1365,6 +3854,9 @@ class _ProductScreenState extends State<ProductScreen> {
     String? categoryId = product?.categoryId;
     bool active = product?.isActive ?? true;
     String? formError;
+    String? stockError;
+    String? openingCostError;
+    String? sellingPriceError;
     bool changed = false;
     Future<void> addOpeningSerials(String value, StateSetter update) async {
       final entries = value
@@ -1374,14 +3866,6 @@ class _ProductScreenState extends State<ProductScreen> {
           .toList();
       if (entries.isEmpty) {
         update(() => serialError = 'Enter a serial number.');
-        return;
-      }
-      final required = Quantity.tryParse(stock.text, fractional: false);
-      if (required != null &&
-          required > 0 &&
-          openingSerials.length + entries.length > required ~/ Quantity.scale) {
-        update(() => serialError =
-            'Only ${required ~/ Quantity.scale} serial numbers are required.');
         return;
       }
       final existing = StockReceivingRepository(widget.repository.db);
@@ -1408,6 +3892,8 @@ class _ProductScreenState extends State<ProductScreen> {
       price,
       cost,
       stock,
+      openingCost,
+      openingPrice,
       threshold,
       containerPrice,
       deposit,
@@ -1531,8 +4017,9 @@ class _ProductScreenState extends State<ProductScreen> {
             builder: (context, update) => Dialog(
                 insetPadding: const EdgeInsets.all(16),
                 child: SizedBox(
-                    width: 1080,
-                    height: MediaQuery.sizeOf(context).height - 32,
+                    width: 1240,
+                    height: (MediaQuery.sizeOf(context).height - 48)
+                        .clamp(0.0, 800.0),
                     child: Column(children: [
                       Padding(
                         padding: const EdgeInsets.fromLTRB(24, 18, 16, 12),
@@ -1551,7 +4038,7 @@ class _ProductScreenState extends State<ProductScreen> {
                                       .textTheme
                                       .headlineSmall),
                               const Text(
-                                  'Product details, pricing, and stock setup'),
+                                  'Product details, behavior, pricing, and inventory setup'),
                             ],
                           )),
                           IconButton(
@@ -1568,604 +4055,1109 @@ class _ProductScreenState extends State<ProductScreen> {
                       ),
                       const Divider(height: 1),
                       Expanded(
-                          child: ListView(
-                              padding:
-                                  const EdgeInsets.fromLTRB(20, 20, 20, 144),
+                          child: LayoutBuilder(builder: (context, constraints) {
+                        final desktop = constraints.maxWidth >= 900;
+                        final left = SingleChildScrollView(
+                          key: const ValueKey('product-editor-left'),
+                          padding: const EdgeInsets.fromLTRB(12, 12, 8, 20),
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                            if (formError != null)
-                              Text(formError!,
-                                  style: TextStyle(
-                                      color:
-                                          Theme.of(context).colorScheme.error)),
-                            Wrap(spacing: 16, runSpacing: 16, children: [
-                              SizedBox(
-                                  width: MediaQuery.sizeOf(context).width < 700
-                                      ? MediaQuery.sizeOf(context).width - 80
-                                      : 490,
-                                  child: Card(
-                                      child: Padding(
-                                          padding: const EdgeInsets.all(20),
-                                          child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text('GENERAL',
-                                                    style: Theme.of(context)
-                                                        .textTheme
-                                                        .titleMedium),
-                                                TextField(
-                                                    controller: name,
-                                                    decoration:
-                                                        const InputDecoration(
-                                                            labelText: 'Name')),
-                                                const SizedBox(height: 12),
-                                                Row(children: [
-                                                  Expanded(
-                                                      child: TextField(
-                                                          controller: sku,
-                                                          decoration:
-                                                              const InputDecoration(
-                                                                  labelText:
-                                                                      'SKU'))),
-                                                  const SizedBox(width: 12),
-                                                  Expanded(
-                                                      child: TextField(
-                                                          controller: barcode,
-                                                          decoration:
-                                                              const InputDecoration(
-                                                                  labelText:
-                                                                      'Barcode')))
-                                                ]),
-                                                const SizedBox(height: 12),
-                                                DropdownButtonFormField<
-                                                        String?>(
-                                                    key: ValueKey(categoryId),
-                                                    initialValue: categoryId,
-                                                    decoration:
-                                                        const InputDecoration(
-                                                            labelText:
-                                                                'Category'),
-                                                    items: [
-                                                      const DropdownMenuItem<
-                                                              String?>(
-                                                          value: null,
-                                                          child: Text('None')),
-                                                      ...categories.map((c) =>
-                                                          DropdownMenuItem<
-                                                                  String?>(
-                                                              value: c.id,
-                                                              child:
-                                                                  Text(c.name)))
-                                                    ],
-                                                    onChanged: (v) =>
-                                                        update(() {
-                                                          categoryId = v;
-                                                          changed = true;
-                                                        })),
-                                                Align(
-                                                    alignment:
-                                                        Alignment.centerLeft,
-                                                    child: TextButton.icon(
-                                                        onPressed: () =>
-                                                            createCategory(
-                                                                context,
-                                                                update),
-                                                        icon: const Icon(
-                                                            Icons.add),
-                                                        label: const Text(
-                                                            'Create new category'))),
-                                              ])))),
-                              SizedBox(
-                                  width: MediaQuery.sizeOf(context).width < 700
-                                      ? MediaQuery.sizeOf(context).width - 80
-                                      : 490,
-                                  child: Card(
-                                      child: Padding(
-                                          padding: const EdgeInsets.all(20),
-                                          child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Text('PRICING',
-                                                    style: Theme.of(context)
-                                                        .textTheme
-                                                        .titleMedium),
-                                                TextField(
-                                                    controller: price,
-                                                    decoration:
-                                                        const InputDecoration(
-                                                            labelText:
-                                                                'Current selling price (pesos)'),
-                                                    keyboardType:
-                                                        TextInputType.number),
-                                                const SizedBox(height: 12),
-                                                TextField(
-                                                    controller: cost,
-                                                    onChanged: (_) =>
-                                                        update(() {}),
-                                                    decoration: const InputDecoration(
-                                                        labelText:
-                                                            'Current purchase cost (pesos)',
-                                                        helperText:
-                                                            'Reference cost for opening stock and future receiving. Actual supplier costs are preserved per stock layer.',
-                                                        helperMaxLines: 3),
-                                                    keyboardType:
-                                                        TextInputType.number),
-                                                const SizedBox(height: 20),
-                                                DropdownButtonFormField<String>(
-                                                    initialValue: pricingPolicy,
-                                                    isExpanded: true,
-                                                    decoration:
-                                                        const InputDecoration(
-                                                            labelText:
-                                                                'Selling price policy'),
-                                                    items: const [
-                                                      DropdownMenuItem(
-                                                          value: 'current',
-                                                          child: Text(
-                                                              'Use current product selling price')),
-                                                      DropdownMenuItem(
-                                                          value: 'layer',
-                                                          child: Text(
-                                                              'Use receiving-layer selling price')),
-                                                    ],
-                                                    onChanged: (value) =>
-                                                        update(() {
-                                                          pricingPolicy =
-                                                              value ??
-                                                                  'current';
-                                                          changed = true;
-                                                        })),
-                                                const SizedBox(height: 8),
-                                                Text(pricingPolicy == 'layer'
-                                                    ? 'Each received layer can keep its own selling price. FIFO or selected serial determines the price.'
-                                                    : 'Sales use this product price. Received stock keeps its actual purchase cost.'),
-                                              ])))),
-                            ]),
-                            const SizedBox(height: 24),
-                            Text('INVENTORY',
-                                style: Theme.of(context).textTheme.titleMedium),
-                            if (product == null && !made) ...[
-                              const SizedBox(height: 12),
-                              Text('Stock setup',
-                                  style:
-                                      Theme.of(context).textTheme.titleMedium),
-                              const Text(
-                                  'Choose how this product\'s inventory should begin.'),
-                              const SizedBox(height: 8),
-                              for (final choice
-                                  in <(String, String, String, IconData)>[
-                                (
-                                  'zero',
-                                  'Create with zero stock',
-                                  'Add inventory later.',
-                                  Icons.inventory_2_outlined
-                                ),
-                                (
-                                  'opening',
-                                  'I already have stock on hand',
-                                  'Inventory you already owned before setting up this POS.',
-                                  Icons.warehouse_outlined
-                                ),
-                                if (widget.onReceiveStock != null)
-                                  (
-                                    'receive',
-                                    'Receive stock from a supplier now',
-                                    'Record a supplier delivery now.',
-                                    Icons.local_shipping_outlined
-                                  ),
-                              ])
-                                Card(
-                                  child: ListTile(
-                                    dense: true,
-                                    visualDensity: VisualDensity.compact,
-                                    selected: stockSetup == choice.$1,
-                                    leading: Icon(stockSetup == choice.$1
-                                        ? Icons.radio_button_checked
-                                        : Icons.radio_button_unchecked),
-                                    onTap: () => update(() {
-                                      stockSetup = choice.$1;
-                                      changed = true;
-                                    }),
-                                    title: Text(choice.$2),
-                                    subtitle: Text(choice.$3),
-                                    trailing: Icon(choice.$4),
-                                  ),
-                                ),
-                              if (stockSetup == 'opening') ...[
-                                const SizedBox(height: 12),
-                                const Text('Existing inventory',
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.w600)),
-                              ],
-                              if (stockSetup == 'opening' && !batch)
-                                TextField(
-                                    controller: stock,
-                                    decoration: const InputDecoration(
-                                        labelText: 'Opening quantity',
-                                        helperText:
-                                            'Use for inventory you already owned before setting up this POS.'),
-                                    keyboardType: TextInputType.number,
-                                    onChanged: (_) => update(() {})),
-                              if (stockSetup == 'opening' && batch) ...[
-                                Text('Existing inventory batches',
-                                    style:
-                                        Theme.of(context).textTheme.titleSmall),
-                                TextField(
-                                    controller: stock,
-                                    decoration: const InputDecoration(
-                                        labelText: 'Batch 1 quantity'),
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                            decimal: true)),
-                                TextField(
-                                    controller: batchNumber,
-                                    decoration: const InputDecoration(
-                                        labelText: 'Batch 1 lot number')),
-                                ExpiryDateField(
-                                    value: expiryDate,
-                                    onChanged: (date) =>
-                                        update(() => expiryDate = date)),
-                                for (var index = 0;
-                                    index < extraOpeningBatches.length;
-                                    index++)
-                                  Card(
-                                      child: Padding(
-                                          padding: const EdgeInsets.all(12),
-                                          child: Column(children: [
-                                            Row(children: [
-                                              Expanded(
-                                                  child: Text(
-                                                      'Batch ${index + 2}')),
-                                              IconButton(
-                                                  icon: const Icon(Icons.close),
-                                                  onPressed: () => update(() {
-                                                        extraOpeningBatches
-                                                            .removeAt(index)
-                                                            .dispose();
-                                                        changed = true;
-                                                      }))
-                                            ]),
-                                            TextField(
-                                                controller:
-                                                    extraOpeningBatches[index]
-                                                        .quantity,
-                                                decoration:
-                                                    const InputDecoration(
-                                                        labelText: 'Quantity'),
-                                                keyboardType:
-                                                    const TextInputType
-                                                        .numberWithOptions(
-                                                        decimal: true)),
-                                            TextField(
-                                                controller:
-                                                    extraOpeningBatches[index]
-                                                        .number,
-                                                decoration:
-                                                    const InputDecoration(
-                                                        labelText:
-                                                            'Batch / lot')),
-                                            ExpiryDateField(
-                                                value:
-                                                    extraOpeningBatches[index]
-                                                        .expiry,
-                                                onChanged: (date) => update(
-                                                    () => extraOpeningBatches[
-                                                            index]
-                                                        .expiry = date)),
-                                          ]))),
-                                TextButton.icon(
-                                    onPressed: () => update(() {
-                                          extraOpeningBatches
-                                              .add(_OpeningBatchEditor());
-                                          changed = true;
-                                        }),
-                                    icon: const Icon(Icons.add),
-                                    label: const Text('Add opening batch')),
-                              ],
-                              if (stockSetup == 'opening')
-                                Text(
-                                    'Opening layer cost: ${money(tryParseMoney(cost.text) ?? 0)} per ${unit.label}. Used as the opening cost for this existing stock.'),
-                              if (stockSetup == 'opening' &&
-                                  serialTracking) ...[
-                                Text(
-                                    'Serial numbers · ${(Quantity.tryParse(stock.text, fractional: false) ?? 0) ~/ Quantity.scale} required · ${openingSerials.length} entered',
-                                    style:
-                                        Theme.of(context).textTheme.titleSmall),
-                                const Text(
-                                    'Enter the serial numbers already physically on hand.'),
-                                TextField(
-                                  controller: serialInput,
-                                  decoration: const InputDecoration(
-                                      labelText: 'Scan or enter serial number',
-                                      hintText: 'Press Enter to add'),
-                                  onSubmitted: (value) =>
-                                      addOpeningSerials(value, update),
-                                ),
-                                Align(
-                                    alignment: Alignment.centerRight,
-                                    child: TextButton(
-                                        onPressed: () => addOpeningSerials(
-                                            serialInput.text, update),
-                                        child: const Text('Add serial'))),
-                                if (serialError != null)
-                                  Text(serialError!,
+                                if (formError != null)
+                                  Text(formError!,
                                       style: TextStyle(
                                           color: Theme.of(context)
                                               .colorScheme
                                               .error)),
-                                for (final serial in openingSerials)
-                                  ListTile(
-                                    dense: true,
-                                    title: Text(serial),
-                                    trailing: IconButton(
-                                        icon: const Icon(Icons.close, size: 18),
-                                        onPressed: () => update(() =>
-                                            openingSerials.remove(serial))),
-                                  ),
-                                if (openingSerials.isNotEmpty)
-                                  Align(
-                                      alignment: Alignment.centerRight,
-                                      child: TextButton(
-                                          onPressed: () =>
-                                              update(openingSerials.clear),
-                                          child: const Text('Clear all'))),
-                              ],
-                            ],
-                            const SizedBox(height: 16),
-                            TextField(
-                                controller: threshold,
-                                decoration: const InputDecoration(
-                                    labelText: 'Low-stock alert threshold',
-                                    helperText:
-                                        'Show an alert when available stock reaches this quantity.'),
-                                keyboardType: TextInputType.number),
-                            const SizedBox(height: 16),
-                            ExpansionTile(
-                                title: Row(children: [
-                                  const Expanded(
-                                      child: Text('Unit & selling method')),
-                                  Text(
-                                      '${unit.label}${weight ? ' · Weight' : ''}',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall),
+                                Wrap(spacing: 16, runSpacing: 16, children: [
+                                  SizedBox(
+                                      width: double.infinity,
+                                      child: Card(
+                                          child: Padding(
+                                              padding: const EdgeInsets.all(20),
+                                              child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text('PRODUCT',
+                                                        style: Theme.of(context)
+                                                            .textTheme
+                                                            .titleMedium),
+                                                    TextField(
+                                                        controller: name,
+                                                        decoration:
+                                                            const InputDecoration(
+                                                                labelText:
+                                                                    'Product name *')),
+                                                    const SizedBox(height: 12),
+                                                    Row(children: [
+                                                      Expanded(
+                                                          child: TextField(
+                                                              controller: sku,
+                                                              decoration:
+                                                                  const InputDecoration(
+                                                                      labelText:
+                                                                          'SKU'))),
+                                                      const SizedBox(width: 12),
+                                                      Expanded(
+                                                          child: TextField(
+                                                              controller:
+                                                                  barcode,
+                                                              decoration:
+                                                                  const InputDecoration(
+                                                                      labelText:
+                                                                          'Barcode')))
+                                                    ]),
+                                                    const SizedBox(height: 12),
+                                                    DropdownButtonFormField<
+                                                            String?>(
+                                                        key: ValueKey(
+                                                            categoryId),
+                                                        initialValue:
+                                                            categoryId,
+                                                        decoration:
+                                                            const InputDecoration(
+                                                                labelText:
+                                                                    'Category'),
+                                                        items: [
+                                                          const DropdownMenuItem<
+                                                                  String?>(
+                                                              value: null,
+                                                              child:
+                                                                  Text('None')),
+                                                          ...categories.map((c) =>
+                                                              DropdownMenuItem<
+                                                                      String?>(
+                                                                  value: c.id,
+                                                                  child: Text(
+                                                                      c.name)))
+                                                        ],
+                                                        onChanged: (v) =>
+                                                            update(() {
+                                                              categoryId = v;
+                                                              changed = true;
+                                                            })),
+                                                    Align(
+                                                        alignment: Alignment
+                                                            .centerLeft,
+                                                        child: TextButton.icon(
+                                                            onPressed: () =>
+                                                                createCategory(
+                                                                    context,
+                                                                    update),
+                                                            icon: const Icon(
+                                                                Icons.add),
+                                                            label: const Text(
+                                                                'Create new category'))),
+                                                    DropdownButtonFormField<
+                                                            SaleUnit>(
+                                                        key: ValueKey(unit),
+                                                        initialValue: unit,
+                                                        decoration: const InputDecoration(
+                                                            labelText: 'Unit'),
+                                                        items: SaleUnit.values
+                                                            .where((u) =>
+                                                                available[BusinessFeature.unitOfMeasureVariety] ==
+                                                                    true ||
+                                                                u ==
+                                                                    SaleUnit
+                                                                        .piece ||
+                                                                u == unit ||
+                                                                (available[BusinessFeature.weightBasedPricing] ==
+                                                                        true &&
+                                                                    (u == SaleUnit.kilogram ||
+                                                                        u ==
+                                                                            SaleUnit
+                                                                                .gram)))
+                                                            .where((u) =>
+                                                                serialTracking
+                                                                    ? !u
+                                                                        .fractional
+                                                                    : weight
+                                                                        ? u == SaleUnit.kilogram ||
+                                                                            u ==
+                                                                                SaleUnit
+                                                                                    .gram
+                                                                        : (refill ||
+                                                                                tank)
+                                                                            ? !u
+                                                                                .fractional
+                                                                            : true)
+                                                            .map((u) => DropdownMenuItem(
+                                                                value: u,
+                                                                child: Text(
+                                                                    u.label)))
+                                                            .toList(),
+                                                        onChanged: available[BusinessFeature.unitOfMeasureVariety] ==
+                                                                    true ||
+                                                                available[BusinessFeature.weightBasedPricing] == true
+                                                            ? (v) => update(() {
+                                                                  unit =
+                                                                      v ?? unit;
+                                                                  changed =
+                                                                      true;
+                                                                })
+                                                            : null),
+                                                  ])))),
                                 ]),
-                                children: [
-                                  if (available[
-                                          BusinessFeature.weightBasedPricing] ==
-                                      true)
-                                    SwitchListTile(
-                                        title: const Text('Sold by weight'),
-                                        value: weight,
-                                        onChanged: (v) => update(() {
-                                              changed = true;
-                                              weight = v;
-                                              if (v) {
-                                                unit = SaleUnit.kilogram;
-                                                refill = false;
-                                                tank = false;
-                                              }
-                                            })),
-                                  if (available[BusinessFeature
-                                              .unitOfMeasureVariety] ==
-                                          true ||
-                                      (available[BusinessFeature
-                                                  .weightBasedPricing] ==
-                                              true &&
-                                          weight))
-                                    DropdownButtonFormField<SaleUnit>(
-                                        initialValue: unit,
-                                        decoration: const InputDecoration(
-                                            labelText: 'Unit / price basis',
-                                            helperText:
-                                                'Price is charged per selected unit.'),
-                                        items: SaleUnit.values
-                                            .where((u) => serialTracking
-                                                ? !u.fractional
-                                                : weight
-                                                    ? u == SaleUnit.kilogram ||
-                                                        u == SaleUnit.gram
-                                                    : (refill || tank)
-                                                        ? !u.fractional
-                                                        : true)
-                                            .map((u) => DropdownMenuItem(
-                                                value: u, child: Text(u.label)))
-                                            .toList(),
-                                        onChanged: (v) => update(() {
-                                              unit = v ?? unit;
-                                              changed = true;
-                                            })),
-                                  if (available[BusinessFeature
-                                          .madeToOrderTracking] ==
-                                      true)
-                                    SwitchListTile(
-                                        title: const Text('Made to order'),
-                                        subtitle: made
-                                            ? const Text(
-                                                'This item may be sold before fulfillment is completed.')
-                                            : null,
-                                        value: made,
-                                        onChanged: (v) => update(() {
-                                              changed = true;
-                                              made = v;
-                                              if (v) {
-                                                batch = false;
-                                                refill = false;
-                                                tank = false;
-                                                stock.text = '0';
-                                              }
-                                            })),
-                                ]),
-                            ExpansionTile(
-                                title: Row(children: [
-                                  const Expanded(
-                                      child: Text('Tracking options')),
-                                  Text(
-                                      serialTracking
-                                          ? 'Serialized'
-                                          : batch
-                                              ? 'Batch'
-                                              : 'None',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall),
-                                ]),
-                                children: [
-                                  SwitchListTile(
-                                      title: const Text(
-                                          'Individual serial numbers'),
-                                      subtitle: serialTracking
-                                          ? const Text(
-                                              'Every opening or received unit needs its own serial number.')
-                                          : null,
-                                      value: serialTracking,
-                                      onChanged: (v) => update(() {
-                                            changed = true;
-                                            serialTracking = v;
-                                            if (v) {
-                                              if (unit.fractional) {
-                                                unit = SaleUnit.piece;
-                                              }
-                                              weight = false;
-                                              made = false;
-                                            }
-                                          })),
-                                  if (serialTracking && unit.fractional)
-                                    Text(
-                                        'Serial-tracked products require a whole-unit sale unit.',
+                                Card(
+                                    child: Padding(
+                                        padding: const EdgeInsets.all(16),
+                                        child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text('STARTING INVENTORY',
+                                                  style: Theme.of(context)
+                                                      .textTheme
+                                                      .titleMedium),
+                                              if (product == null && !made) ...[
+                                                const SizedBox(height: 12),
+                                                for (final choice in <(
+                                                  String,
+                                                  String,
+                                                  String,
+                                                  IconData
+                                                )>[
+                                                  (
+                                                    'zero',
+                                                    'No stock yet',
+                                                    'Add inventory later.',
+                                                    Icons.inventory_2_outlined
+                                                  ),
+                                                  (
+                                                    'opening',
+                                                    'I already have stock',
+                                                    'Record stock already owned.',
+                                                    Icons.warehouse_outlined
+                                                  ),
+                                                  if (widget.onReceiveStock !=
+                                                      null)
+                                                    (
+                                                      'receive',
+                                                      'Receive from supplier',
+                                                      'Continue to Receiving.',
+                                                      Icons
+                                                          .local_shipping_outlined
+                                                    ),
+                                                ])
+                                                  ListTile(
+                                                    dense: true,
+                                                    visualDensity:
+                                                        VisualDensity.compact,
+                                                    selected: false,
+                                                    shape:
+                                                        RoundedRectangleBorder(
+                                                            borderRadius:
+                                                                BorderRadius
+                                                                    .circular(
+                                                                        8)),
+                                                    tileColor: stockSetup ==
+                                                            choice.$1
+                                                        ? Theme.of(context)
+                                                            .colorScheme
+                                                            .primaryContainer
+                                                            .withValues(
+                                                                alpha: 0.28)
+                                                        : null,
+                                                    leading: Icon(stockSetup ==
+                                                            choice.$1
+                                                        ? Icons
+                                                            .radio_button_checked
+                                                        : Icons
+                                                            .radio_button_unchecked),
+                                                    onTap: () => update(() {
+                                                      stockSetup = choice.$1;
+                                                      stockError = null;
+                                                      openingCostError = null;
+                                                      sellingPriceError = null;
+                                                      changed = true;
+                                                    }),
+                                                    title: Text(choice.$2),
+                                                    subtitle: Text(choice.$3),
+                                                  ),
+                                              ],
+                                            ]))),
+                                SizedBox(
+                                    width: double.infinity,
+                                    child: Card(
+                                        child: Padding(
+                                            padding: const EdgeInsets.all(20),
+                                            child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text('PRICING',
+                                                      style: Theme.of(context)
+                                                          .textTheme
+                                                          .titleMedium),
+                                                  DropdownButtonFormField<
+                                                          String>(
+                                                      initialValue:
+                                                          pricingPolicy,
+                                                      isExpanded: true,
+                                                      decoration:
+                                                          const InputDecoration(
+                                                              labelText:
+                                                                  'How should this product be priced?'),
+                                                      items: [
+                                                        const DropdownMenuItem(
+                                                            value: 'current',
+                                                            child: Text(
+                                                                'Use one product price')),
+                                                        DropdownMenuItem(
+                                                            value: 'layer',
+                                                            enabled: !(refill ||
+                                                                tank ||
+                                                                made),
+                                                            child: const Text(
+                                                                'Price each stock layer separately')),
+                                                      ],
+                                                      onChanged: (value) =>
+                                                          update(() {
+                                                            pricingPolicy =
+                                                                value ??
+                                                                    'current';
+                                                            sellingPriceError =
+                                                                null;
+                                                            changed = true;
+                                                          })),
+                                                  const SizedBox(height: 12),
+                                                  if (pricingPolicy ==
+                                                          'current' &&
+                                                      (product != null ||
+                                                          stockSetup !=
+                                                              'opening' ||
+                                                          batch ||
+                                                          serialTracking))
+                                                    TextField(
+                                                        key: const ValueKey(
+                                                            'product-selling-price'),
+                                                        controller: price,
+                                                        decoration: InputDecoration(
+                                                            labelText:
+                                                                'Selling price *',
+                                                            prefixText: '₱ ',
+                                                            suffixText:
+                                                                '/ ${unit.label}',
+                                                            errorText:
+                                                                sellingPriceError),
+                                                        keyboardType:
+                                                            TextInputType
+                                                                .number),
+                                                  const SizedBox(height: 8),
+                                                  Row(children: [
+                                                    Expanded(
+                                                        child: Text(pricingPolicy ==
+                                                                'layer'
+                                                            ? 'Enter a selling price when stock is added.'
+                                                            : 'One selling price applies to available stock.')),
+                                                    Tooltip(
+                                                        message: pricingPolicy ==
+                                                                'layer'
+                                                            ? 'Each opening or received stock layer keeps its own cost and selling price.'
+                                                            : 'Supplier purchase costs remain on inventory layers; the product price controls sales.',
+                                                        child: const Icon(
+                                                            Icons.help_outline,
+                                                            size: 18)),
+                                                  ]),
+                                                  if (refill || tank || made)
+                                                    const Text(
+                                                        'This selling method uses one product price.'),
+                                                ])))),
+                                if (product == null && !made) ...[
+                                  if (stockSetup == 'opening') ...[
+                                    const SizedBox(height: 12),
+                                    const Text('Existing inventory',
                                         style: TextStyle(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .error)),
-                                  if (available[BusinessFeature
-                                          .expiryBatchTracking] ==
-                                      true)
-                                    SwitchListTile(
-                                        title: const Text('Batch / expiry'),
-                                        subtitle: batch
-                                            ? const Text(
-                                                'Batch numbers and expiry dates are recorded when stock is received.')
-                                            : null,
-                                        value: batch,
-                                        onChanged: (v) => update(() {
-                                              changed = true;
-                                              batch = v;
-                                              if (v) made = false;
-                                            })),
-                                  if (batch &&
-                                      !(product == null &&
-                                          stockSetup == 'opening') &&
-                                      (product == null ||
-                                          (!product.business.batch &&
-                                              existingStock > 0))) ...[
+                                            fontWeight: FontWeight.w600)),
+                                  ],
+                                  if (stockSetup == 'opening' &&
+                                      !batch &&
+                                      !serialTracking)
                                     TextField(
-                                        controller: batchNumber,
-                                        decoration: const InputDecoration(
-                                            labelText:
-                                                'Batch number for stock already on hand')),
-                                    ExpiryDateField(
-                                        value: expiryDate,
-                                        onChanged: (date) => update(() {
-                                              expiryDate = date;
-                                              changed = true;
-                                            })),
+                                        controller: stock,
+                                        decoration: InputDecoration(
+                                            labelText: 'Opening quantity *',
+                                            suffixText: unit.label,
+                                            errorText: stockError,
+                                            helperText:
+                                                'Use for inventory you already owned before setting up this POS.'),
+                                        keyboardType:
+                                            TextInputType.numberWithOptions(
+                                                decimal:
+                                                    unit.fractional || weight),
+                                        onChanged: (_) =>
+                                            update(() => stockError = null)),
+                                  if (stockSetup == 'opening' && batch) ...[
+                                    Text('OPENING BATCHES',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleSmall),
+                                    const SizedBox(height: 8),
+                                    SingleChildScrollView(
+                                      scrollDirection: Axis.horizontal,
+                                      child: SizedBox(
+                                        width: pricingPolicy == 'layer'
+                                            ? 860
+                                            : 730,
+                                        child: Table(
+                                          defaultVerticalAlignment:
+                                              TableCellVerticalAlignment.middle,
+                                          columnWidths: {
+                                            0: const FixedColumnWidth(170),
+                                            1: const FixedColumnWidth(100),
+                                            2: const FixedColumnWidth(125),
+                                            if (pricingPolicy == 'layer')
+                                              3: const FixedColumnWidth(125),
+                                            pricingPolicy == 'layer' ? 4 : 3:
+                                                const FixedColumnWidth(245),
+                                            pricingPolicy == 'layer' ? 5 : 4:
+                                                const FixedColumnWidth(55),
+                                          },
+                                          children: [
+                                            TableRow(children: [
+                                              const Text('Batch / Lot'),
+                                              const Text('Qty'),
+                                              const Text('Cost'),
+                                              if (pricingPolicy == 'layer')
+                                                const Text('Selling'),
+                                              const Text('Expiry'),
+                                              const SizedBox.shrink(),
+                                            ]),
+                                            TableRow(children: [
+                                              TextField(
+                                                  controller: batchNumber,
+                                                  decoration:
+                                                      const InputDecoration(
+                                                          labelText:
+                                                              'Batch / lot *')),
+                                              TextField(
+                                                  controller: stock,
+                                                  decoration: InputDecoration(
+                                                      labelText: 'Qty *',
+                                                      errorText: stockError),
+                                                  keyboardType:
+                                                      const TextInputType
+                                                          .numberWithOptions(
+                                                          decimal: true),
+                                                  onChanged: (_) =>
+                                                      update(() {})),
+                                              TextField(
+                                                  controller: openingCost,
+                                                  decoration: InputDecoration(
+                                                      labelText: 'Cost *',
+                                                      errorText:
+                                                          openingCostError),
+                                                  keyboardType:
+                                                      TextInputType.number),
+                                              if (pricingPolicy == 'layer')
+                                                TextField(
+                                                    controller: openingPrice,
+                                                    decoration: InputDecoration(
+                                                        labelText: 'Selling *',
+                                                        errorText:
+                                                            sellingPriceError),
+                                                    keyboardType:
+                                                        TextInputType.number),
+                                              ExpiryDateField(
+                                                  value: expiryDate,
+                                                  onChanged: (date) => update(
+                                                      () => expiryDate = date)),
+                                              const SizedBox.shrink(),
+                                            ]),
+                                            for (var index = 0;
+                                                index <
+                                                    extraOpeningBatches.length;
+                                                index++)
+                                              TableRow(children: [
+                                                TextField(
+                                                    controller:
+                                                        extraOpeningBatches[
+                                                                index]
+                                                            .number,
+                                                    decoration:
+                                                        const InputDecoration(
+                                                            labelText:
+                                                                'Batch / lot *')),
+                                                TextField(
+                                                    controller:
+                                                        extraOpeningBatches[
+                                                                index]
+                                                            .quantity,
+                                                    decoration:
+                                                        const InputDecoration(
+                                                            labelText: 'Qty *'),
+                                                    keyboardType:
+                                                        const TextInputType
+                                                            .numberWithOptions(
+                                                            decimal: true),
+                                                    onChanged: (_) =>
+                                                        update(() {})),
+                                                TextField(
+                                                    controller:
+                                                        extraOpeningBatches[
+                                                                index]
+                                                            .cost,
+                                                    decoration:
+                                                        const InputDecoration(
+                                                            labelText:
+                                                                'Cost *'),
+                                                    keyboardType:
+                                                        TextInputType.number),
+                                                if (pricingPolicy == 'layer')
+                                                  TextField(
+                                                      controller:
+                                                          extraOpeningBatches[
+                                                                  index]
+                                                              .price,
+                                                      decoration:
+                                                          const InputDecoration(
+                                                              labelText:
+                                                                  'Selling *'),
+                                                      keyboardType:
+                                                          TextInputType.number),
+                                                ExpiryDateField(
+                                                    value: extraOpeningBatches[
+                                                            index]
+                                                        .expiry,
+                                                    onChanged: (date) => update(
+                                                        () =>
+                                                            extraOpeningBatches[
+                                                                        index]
+                                                                    .expiry =
+                                                                date)),
+                                                IconButton(
+                                                    tooltip: 'Remove batch',
+                                                    icon:
+                                                        const Icon(Icons.close),
+                                                    onPressed: () => update(() {
+                                                          extraOpeningBatches
+                                                              .removeAt(index)
+                                                              .dispose();
+                                                          changed = true;
+                                                        })),
+                                              ]),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    TextButton.icon(
+                                      onPressed: () => update(() {
+                                        extraOpeningBatches
+                                            .add(_OpeningBatchEditor());
+                                        changed = true;
+                                      }),
+                                      icon: const Icon(Icons.add),
+                                      label: const Text('Add batch'),
+                                    ),
+                                    Text(
+                                        'Total opening quantity: ${Quantity.format((Quantity.tryParse(stock.text, fractional: unit.fractional || weight) ?? 0) + extraOpeningBatches.fold<int>(0, (sum, row) => sum + (Quantity.tryParse(row.quantity.text, fractional: unit.fractional || weight) ?? 0)))} ${unit.label}'),
                                   ],
-                                ]),
-                            ExpansionTile(
-                                title: Row(children: [
-                                  const Expanded(
-                                      child: Text('Special selling options')),
-                                  Text(
-                                      made
-                                          ? 'MTO'
-                                          : refill
-                                              ? 'Refill'
-                                              : tank
-                                                  ? 'LPG'
-                                                  : 'None',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall),
-                                ]),
-                                children: [
-                                  if (available[BusinessFeature
-                                          .containerRefillPricing] ==
-                                      true) ...[
-                                    SwitchListTile(
-                                        title: const Text(
-                                            'Water refill / container'),
-                                        subtitle: refill
-                                            ? const Text(
-                                                'Container pricing is applied during checkout.')
-                                            : null,
-                                        value: refill,
-                                        onChanged: (v) => update(() {
-                                              refill = v;
-                                              changed = true;
-                                              if (v) {
-                                                unit = SaleUnit.bottle;
-                                                weight = false;
-                                                tank = false;
-                                                made = false;
-                                              }
-                                            })),
-                                    if (refill)
-                                      TextField(
-                                          controller: containerPrice,
-                                          decoration: const InputDecoration(
-                                              labelText:
-                                                  'Additional container price (pesos)'),
-                                          keyboardType: TextInputType.number),
+                                  if (stockSetup == 'opening' && !batch)
+                                    LayoutBuilder(builder: (context, box) {
+                                      final width = box.maxWidth >= 520
+                                          ? (box.maxWidth - 12) / 2
+                                          : box.maxWidth;
+                                      return Wrap(
+                                          spacing: 12,
+                                          runSpacing: 8,
+                                          children: [
+                                            SizedBox(
+                                                width: width,
+                                                child: TextField(
+                                                    controller: openingCost,
+                                                    decoration: InputDecoration(
+                                                        labelText:
+                                                            'Cost per unit *',
+                                                        prefixText: '₱ ',
+                                                        suffixText:
+                                                            '/ ${unit.label}',
+                                                        errorText:
+                                                            openingCostError),
+                                                    keyboardType:
+                                                        TextInputType.number)),
+                                            if (!serialTracking ||
+                                                pricingPolicy == 'layer')
+                                              SizedBox(
+                                                  width: width,
+                                                  child: TextField(
+                                                      key: const ValueKey(
+                                                          'opening-selling-price'),
+                                                      controller:
+                                                          pricingPolicy ==
+                                                                  'layer'
+                                                              ? openingPrice
+                                                              : price,
+                                                      decoration: InputDecoration(
+                                                          labelText:
+                                                              'Selling price *',
+                                                          prefixText: '₱ ',
+                                                          suffixText:
+                                                              '/ ${unit.label}',
+                                                          errorText:
+                                                              sellingPriceError),
+                                                      keyboardType:
+                                                          TextInputType
+                                                              .number)),
+                                          ]);
+                                    }),
+                                  if (stockSetup == 'opening' &&
+                                      serialTracking) ...[
+                                    Text(
+                                        'OPENING SERIALS · ${openingSerials.length} units',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .titleSmall),
+                                    const Text(
+                                        'Enter the serial numbers already physically on hand.'),
+                                    TextField(
+                                      controller: serialInput,
+                                      decoration: const InputDecoration(
+                                          labelText:
+                                              'Scan or enter serial number',
+                                          helperText:
+                                              'Paste one serial per line, then add them.'),
+                                      minLines: 1,
+                                      maxLines: 3,
+                                    ),
+                                    Align(
+                                        alignment: Alignment.centerRight,
+                                        child: Wrap(spacing: 8, children: [
+                                          TextButton(
+                                              onPressed: () =>
+                                                  addOpeningSerials(
+                                                      serialInput.text, update),
+                                              child: const Text('Add serial')),
+                                          TextButton.icon(
+                                              onPressed: () =>
+                                                  addOpeningSerials(
+                                                      serialInput.text, update),
+                                              icon: const Icon(
+                                                  Icons.content_paste),
+                                              label:
+                                                  const Text('Paste serials')),
+                                        ])),
+                                    if (serialError != null)
+                                      Text(serialError!,
+                                          style: TextStyle(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .error)),
+                                    for (final serial in openingSerials)
+                                      ListTile(
+                                        dense: true,
+                                        title: Text(serial),
+                                        trailing: IconButton(
+                                            icon: const Icon(Icons.close,
+                                                size: 18),
+                                            onPressed: () => update(() =>
+                                                openingSerials.remove(serial))),
+                                      ),
+                                    if (openingSerials.isNotEmpty)
+                                      Align(
+                                          alignment: Alignment.centerRight,
+                                          child: TextButton(
+                                              onPressed: () =>
+                                                  update(openingSerials.clear),
+                                              child: const Text('Clear all'))),
                                   ],
-                                  if (available[BusinessFeature
-                                          .tankDepositExchange] ==
-                                      true) ...[
-                                    SwitchListTile(
-                                        title: const Text(
-                                            'LPG tank exchange / deposit'),
-                                        subtitle: tank
-                                            ? const Text(
-                                                'Tank exchange and deposit are handled during checkout.')
-                                            : null,
-                                        value: tank,
-                                        onChanged: (v) => update(() {
-                                              tank = v;
-                                              changed = true;
-                                              if (v) {
-                                                unit = SaleUnit.piece;
-                                                weight = false;
-                                                refill = false;
-                                                made = false;
-                                              }
-                                            })),
-                                    if (tank)
-                                      TextField(
-                                          controller: deposit,
-                                          decoration: const InputDecoration(
-                                              labelText:
-                                                  'Deposit for no empty return (pesos)'),
-                                          keyboardType: TextInputType.number),
-                                  ],
-                                ]),
-                            ExpansionTile(
-                                title: Row(children: [
-                                  const Expanded(child: Text('Status')),
-                                  Text(active ? 'Active' : 'Inactive',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall),
-                                ]),
-                                children: [
-                                  SwitchListTile(
-                                      title: const Text('Active'),
-                                      value: active,
-                                      onChanged: (v) => update(() {
-                                            active = v;
-                                            changed = true;
-                                          })),
-                                ]),
-                          ])),
+                                ],
+                                if (product != null &&
+                                    batch &&
+                                    !product.business.batch &&
+                                    existingStock > 0)
+                                  TextField(
+                                    controller: batchNumber,
+                                    decoration: const InputDecoration(
+                                        labelText:
+                                            'Batch / lot for existing stock *',
+                                        helperText:
+                                            'Assigns a lot to stock already on hand.'),
+                                  ),
+                              ]),
+                        );
+                        final right = SingleChildScrollView(
+                          key: const ValueKey('product-editor-right'),
+                          padding: const EdgeInsets.fromLTRB(8, 12, 12, 20),
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Text('PRODUCT BEHAVIOR',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium),
+                                Card(
+                                    child: Padding(
+                                        padding: const EdgeInsets.all(12),
+                                        child: Wrap(
+                                            spacing: 16,
+                                            runSpacing: 8,
+                                            children: [
+                                              SizedBox(
+                                                  width: double.infinity,
+                                                  child: Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        Text('TRACKING',
+                                                            style: Theme.of(
+                                                                    context)
+                                                                .textTheme
+                                                                .titleSmall),
+                                                        CheckboxListTile(
+                                                            dense: true,
+                                                            visualDensity:
+                                                                VisualDensity
+                                                                    .compact,
+                                                            controlAffinity:
+                                                                ListTileControlAffinity
+                                                                    .leading,
+                                                            contentPadding:
+                                                                EdgeInsets.zero,
+                                                            title: const Text(
+                                                                'Serial numbers'),
+                                                            subtitle:
+                                                                serialTracking
+                                                                    ? const Text(
+                                                                        'Every opening or received unit needs its own serial number.')
+                                                                    : weight ||
+                                                                            made
+                                                                        ? const Text(
+                                                                            'Unavailable with weight or made-to-order.')
+                                                                        : null,
+                                                            value:
+                                                                serialTracking,
+                                                            onChanged:
+                                                                weight || made
+                                                                    ? null
+                                                                    : (v) =>
+                                                                        update(
+                                                                            () {
+                                                                          changed =
+                                                                              true;
+                                                                          serialTracking =
+                                                                              v ?? false;
+                                                                          if (v ==
+                                                                              true) {
+                                                                            if (unit.fractional) {
+                                                                              unit = SaleUnit.piece;
+                                                                            }
+                                                                            weight =
+                                                                                false;
+                                                                            made =
+                                                                                false;
+                                                                          }
+                                                                        })),
+                                                        if (serialTracking &&
+                                                            unit.fractional)
+                                                          Text(
+                                                              'Serial-tracked products require a whole-unit sale unit.',
+                                                              style: TextStyle(
+                                                                  color: Theme.of(
+                                                                          context)
+                                                                      .colorScheme
+                                                                      .error)),
+                                                        if (available[
+                                                                BusinessFeature
+                                                                    .expiryBatchTracking] ==
+                                                            true)
+                                                          CheckboxListTile(
+                                                              dense: true,
+                                                              visualDensity:
+                                                                  VisualDensity
+                                                                      .compact,
+                                                              controlAffinity:
+                                                                  ListTileControlAffinity
+                                                                      .leading,
+                                                              contentPadding:
+                                                                  EdgeInsets
+                                                                      .zero,
+                                                              title: const Text(
+                                                                  'Batch / expiry'),
+                                                              subtitle: batch
+                                                                  ? const Text(
+                                                                      'Batch numbers and expiry dates are recorded when inventory is added.')
+                                                                  : made
+                                                                      ? const Text(
+                                                                          'Unavailable with made-to-order.')
+                                                                      : null,
+                                                              value: batch,
+                                                              onChanged: made
+                                                                  ? null
+                                                                  : (v) =>
+                                                                      update(
+                                                                          () {
+                                                                        changed =
+                                                                            true;
+                                                                        batch = v ??
+                                                                            false;
+                                                                        if (v ==
+                                                                            true) {
+                                                                          made =
+                                                                              false;
+                                                                        }
+                                                                      })),
+                                                      ])),
+                                              SizedBox(
+                                                  width: double.infinity,
+                                                  child: Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        Text('SELLING METHOD',
+                                                            style: Theme.of(
+                                                                    context)
+                                                                .textTheme
+                                                                .titleSmall),
+                                                        if (available[
+                                                                BusinessFeature
+                                                                    .weightBasedPricing] ==
+                                                            true)
+                                                          CheckboxListTile(
+                                                              dense: true,
+                                                              visualDensity:
+                                                                  VisualDensity
+                                                                      .compact,
+                                                              controlAffinity:
+                                                                  ListTileControlAffinity
+                                                                      .leading,
+                                                              contentPadding:
+                                                                  EdgeInsets
+                                                                      .zero,
+                                                              title: const Text(
+                                                                  'Sold by weight'),
+                                                              subtitle:
+                                                                  serialTracking
+                                                                      ? const Text(
+                                                                          'Unavailable for serialized products.')
+                                                                      : refill ||
+                                                                              tank ||
+                                                                              made
+                                                                          ? const Text(
+                                                                              'Unavailable with refill, LPG, or made-to-order.')
+                                                                          : null,
+                                                              value: weight,
+                                                              onChanged:
+                                                                  serialTracking ||
+                                                                          refill ||
+                                                                          tank ||
+                                                                          made
+                                                                      ? null
+                                                                      : (v) =>
+                                                                          update(
+                                                                              () {
+                                                                            changed =
+                                                                                true;
+                                                                            weight =
+                                                                                v ?? false;
+                                                                            if (v ==
+                                                                                true) {
+                                                                              unit = SaleUnit.kilogram;
+                                                                              refill = false;
+                                                                              tank = false;
+                                                                            }
+                                                                          })),
+                                                        if (available[
+                                                                BusinessFeature
+                                                                    .madeToOrderTracking] ==
+                                                            true)
+                                                          CheckboxListTile(
+                                                              dense: true,
+                                                              visualDensity:
+                                                                  VisualDensity
+                                                                      .compact,
+                                                              controlAffinity:
+                                                                  ListTileControlAffinity
+                                                                      .leading,
+                                                              contentPadding:
+                                                                  EdgeInsets
+                                                                      .zero,
+                                                              title: const Text(
+                                                                  'Made to order'),
+                                                              subtitle: serialTracking ||
+                                                                      batch ||
+                                                                      weight ||
+                                                                      refill ||
+                                                                      tank
+                                                                  ? const Text(
+                                                                      'Unavailable with tracking, weight, refill, or LPG.')
+                                                                  : made
+                                                                      ? const Text(
+                                                                          'This item may be sold before fulfillment is completed.')
+                                                                      : null,
+                                                              value: made,
+                                                              onChanged: serialTracking ||
+                                                                      batch ||
+                                                                      weight ||
+                                                                      refill ||
+                                                                      tank
+                                                                  ? null
+                                                                  : (v) =>
+                                                                      update(
+                                                                          () {
+                                                                        changed =
+                                                                            true;
+                                                                        made = v ??
+                                                                            false;
+                                                                        if (v ==
+                                                                            true) {
+                                                                          pricingPolicy =
+                                                                              'current';
+                                                                          batch =
+                                                                              false;
+                                                                          refill =
+                                                                              false;
+                                                                          tank =
+                                                                              false;
+                                                                          stockSetup =
+                                                                              'zero';
+                                                                          stock
+                                                                              .clear();
+                                                                        }
+                                                                      })),
+                                                      ])),
+                                              SizedBox(
+                                                  width: double.infinity,
+                                                  child: Column(
+                                                      crossAxisAlignment:
+                                                          CrossAxisAlignment
+                                                              .start,
+                                                      children: [
+                                                        Text('SPECIAL SELLING',
+                                                            style: Theme.of(
+                                                                    context)
+                                                                .textTheme
+                                                                .titleSmall),
+                                                        if (available[
+                                                                BusinessFeature
+                                                                    .containerRefillPricing] ==
+                                                            true) ...[
+                                                          CheckboxListTile(
+                                                              dense: true,
+                                                              visualDensity:
+                                                                  VisualDensity
+                                                                      .compact,
+                                                              controlAffinity:
+                                                                  ListTileControlAffinity
+                                                                      .leading,
+                                                              contentPadding:
+                                                                  EdgeInsets
+                                                                      .zero,
+                                                              title: const Text(
+                                                                  'Refill / container'),
+                                                              subtitle: refill
+                                                                  ? const Text(
+                                                                      'Container pricing is applied during checkout.')
+                                                                  : weight ||
+                                                                          tank ||
+                                                                          made
+                                                                      ? const Text(
+                                                                          'Unavailable with weight, LPG, or made-to-order.')
+                                                                      : null,
+                                                              value: refill,
+                                                              onChanged: weight ||
+                                                                      tank ||
+                                                                      made
+                                                                  ? null
+                                                                  : (v) =>
+                                                                      update(
+                                                                          () {
+                                                                        refill =
+                                                                            v ??
+                                                                                false;
+                                                                        changed =
+                                                                            true;
+                                                                        if (v ==
+                                                                            true) {
+                                                                          unit =
+                                                                              SaleUnit.bottle;
+                                                                          pricingPolicy =
+                                                                              'current';
+                                                                          weight =
+                                                                              false;
+                                                                          tank =
+                                                                              false;
+                                                                          made =
+                                                                              false;
+                                                                        }
+                                                                      })),
+                                                        ],
+                                                        if (available[
+                                                                BusinessFeature
+                                                                    .tankDepositExchange] ==
+                                                            true) ...[
+                                                          CheckboxListTile(
+                                                              dense: true,
+                                                              visualDensity:
+                                                                  VisualDensity
+                                                                      .compact,
+                                                              controlAffinity:
+                                                                  ListTileControlAffinity
+                                                                      .leading,
+                                                              contentPadding:
+                                                                  EdgeInsets
+                                                                      .zero,
+                                                              title: const Text(
+                                                                  'LPG tank exchange / deposit'),
+                                                              subtitle: tank
+                                                                  ? const Text(
+                                                                      'Tank exchange and deposit are handled during checkout.')
+                                                                  : weight ||
+                                                                          refill ||
+                                                                          made
+                                                                      ? const Text(
+                                                                          'Unavailable with weight, refill, or made-to-order.')
+                                                                      : null,
+                                                              value: tank,
+                                                              onChanged: weight ||
+                                                                      refill ||
+                                                                      made
+                                                                  ? null
+                                                                  : (v) =>
+                                                                      update(
+                                                                          () {
+                                                                        tank = v ??
+                                                                            false;
+                                                                        changed =
+                                                                            true;
+                                                                        if (v ==
+                                                                            true) {
+                                                                          unit =
+                                                                              SaleUnit.piece;
+                                                                          pricingPolicy =
+                                                                              'current';
+                                                                          weight =
+                                                                              false;
+                                                                          refill =
+                                                                              false;
+                                                                          made =
+                                                                              false;
+                                                                        }
+                                                                      })),
+                                                        ],
+                                                      ])),
+                                            ]))),
+                                if (refill || tank)
+                                  Card(
+                                      child: Padding(
+                                          padding: const EdgeInsets.all(16),
+                                          child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                    refill
+                                                        ? 'REFILL / CONTAINER'
+                                                        : 'LPG TANK',
+                                                    style: Theme.of(context)
+                                                        .textTheme
+                                                        .titleMedium),
+                                                const SizedBox(height: 8),
+                                                TextField(
+                                                    controller: refill
+                                                        ? containerPrice
+                                                        : deposit,
+                                                    decoration: InputDecoration(
+                                                        border:
+                                                            const OutlineInputBorder(),
+                                                        labelText: refill
+                                                            ? 'Container charge'
+                                                            : 'Deposit charge',
+                                                        prefixText: '₱ '),
+                                                    keyboardType:
+                                                        TextInputType.number),
+                                              ]))),
+                                const SizedBox(height: 16),
+                                Card(
+                                    child: Padding(
+                                        padding: const EdgeInsets.all(16),
+                                        child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text('ADVANCED',
+                                                  style: Theme.of(context)
+                                                      .textTheme
+                                                      .titleMedium),
+                                              Padding(
+                                                padding:
+                                                    const EdgeInsets.all(12),
+                                                child: LayoutBuilder(
+                                                    builder: (context, box) {
+                                                  final width = box.maxWidth >=
+                                                          520
+                                                      ? (box.maxWidth - 12) / 2
+                                                      : box.maxWidth;
+                                                  return Wrap(
+                                                      spacing: 12,
+                                                      runSpacing: 12,
+                                                      children: [
+                                                        SizedBox(
+                                                            width: width,
+                                                            child: TextField(
+                                                                controller:
+                                                                    threshold,
+                                                                decoration: const InputDecoration(
+                                                                    border:
+                                                                        OutlineInputBorder(),
+                                                                    labelText:
+                                                                        'Low-stock alert threshold'),
+                                                                keyboardType:
+                                                                    TextInputType
+                                                                        .number)),
+                                                        SizedBox(
+                                                            width: width,
+                                                            child: TextField(
+                                                                controller:
+                                                                    cost,
+                                                                decoration: const InputDecoration(
+                                                                    border:
+                                                                        OutlineInputBorder(),
+                                                                    labelText:
+                                                                        'Reference purchase cost',
+                                                                    prefixText:
+                                                                        '₱ ',
+                                                                    helperText:
+                                                                        'Default only. Actual cost is recorded on each stock layer.'),
+                                                                keyboardType:
+                                                                    TextInputType
+                                                                        .number)),
+                                                      ]);
+                                                }),
+                                              ),
+                                              if (product != null)
+                                                CheckboxListTile(
+                                                    dense: true,
+                                                    controlAffinity:
+                                                        ListTileControlAffinity
+                                                            .leading,
+                                                    title: const Text('Active'),
+                                                    value: active,
+                                                    onChanged: (v) =>
+                                                        update(() {
+                                                          active = v ?? false;
+                                                          changed = true;
+                                                        })),
+                                            ]))),
+                              ]),
+                        );
+                        if (!desktop) {
+                          return SingleChildScrollView(
+                              child: Column(children: [
+                            SizedBox(height: 720, child: left),
+                            SizedBox(height: 700, child: right)
+                          ]));
+                        }
+                        return Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(flex: 64, child: left),
+                              Expanded(flex: 36, child: right),
+                            ]);
+                      })),
                       const Divider(height: 1),
                       Padding(
                           padding: const EdgeInsets.all(16),
@@ -2183,18 +5175,33 @@ class _ProductScreenState extends State<ProductScreen> {
                                 FilledButton(
                                     onPressed: () async {
                                       try {
+                                        update(() {
+                                          formError = null;
+                                          stockError = null;
+                                          openingCostError = null;
+                                          sellingPriceError = null;
+                                        });
                                         if (name.text.trim().isEmpty) {
                                           throw ArgumentError(
                                               'Name is required.');
                                         }
                                         final priceCents =
-                                            tryParseMoney(price.text);
+                                            pricingPolicy == 'layer'
+                                                ? (product?.priceCents ?? 0)
+                                                : tryParseMoney(price.text);
                                         final costCents =
-                                            tryParseMoney(cost.text);
+                                            cost.text.trim().isEmpty
+                                                ? 0
+                                                : tryParseMoney(cost.text);
                                         if (priceCents == null ||
                                             priceCents < 0) {
-                                          throw ArgumentError(
-                                              'Selling price is invalid.');
+                                          update(() => sellingPriceError = price
+                                                  .text
+                                                  .trim()
+                                                  .isEmpty
+                                              ? 'Selling price is required.'
+                                              : 'Enter a valid selling price.');
+                                          return;
                                         }
                                         if (costCents == null ||
                                             costCents < 0) {
@@ -2203,25 +5210,73 @@ class _ProductScreenState extends State<ProductScreen> {
                                         }
                                         final parsedInitialMilli = stockSetup !=
                                                     'opening' ||
-                                                stock.text.trim() == '0'
+                                                serialTracking
                                             ? 0
                                             : Quantity.tryParse(stock.text,
                                                 fractional:
                                                     unit.fractional || weight);
                                         final lowStockThreshold =
                                             int.tryParse(threshold.text.trim());
-                                        if (parsedInitialMilli == null ||
-                                            lowStockThreshold == null ||
+                                        if (stockSetup == 'opening' &&
+                                            !serialTracking &&
+                                            (parsedInitialMilli == null ||
+                                                parsedInitialMilli <= 0)) {
+                                          update(() => stockError = stock.text
+                                                  .trim()
+                                                  .isEmpty
+                                              ? batch
+                                                  ? 'Batch quantity is required.'
+                                                  : 'Opening quantity is required.'
+                                              : 'Quantity must be greater than zero.');
+                                          return;
+                                        }
+                                        if (lowStockThreshold == null ||
                                             lowStockThreshold < 0) {
                                           throw StateError(
-                                              'Enter valid price, cost, and starting stock');
+                                              'Enter a valid low-stock threshold.');
                                         }
-                                        var initialMilli = parsedInitialMilli;
+                                        var initialMilli = serialTracking &&
+                                                stockSetup == 'opening'
+                                            ? openingSerials.length *
+                                                Quantity.scale
+                                            : parsedInitialMilli!;
+                                        final openingLayerPrice =
+                                            pricingPolicy == 'layer' &&
+                                                    stockSetup == 'opening'
+                                                ? tryParseMoney(
+                                                    openingPrice.text)
+                                                : null;
+                                        final openingLayerCost = stockSetup ==
+                                                'opening'
+                                            ? tryParseMoney(openingCost.text)
+                                            : null;
+                                        if (stockSetup == 'opening' &&
+                                            (openingLayerCost == null ||
+                                                openingLayerCost < 0)) {
+                                          update(() => openingCostError =
+                                              openingCost.text.trim().isEmpty
+                                                  ? 'Opening cost is required.'
+                                                  : 'Enter a valid opening cost.');
+                                          return;
+                                        }
+                                        if (pricingPolicy == 'layer' &&
+                                            stockSetup == 'opening' &&
+                                            (openingLayerPrice == null ||
+                                                openingLayerPrice <= 0)) {
+                                          update(() => sellingPriceError = openingPrice
+                                                  .text
+                                                  .trim()
+                                                  .isEmpty
+                                              ? 'Opening selling price is required.'
+                                              : 'Opening selling price must be greater than zero.');
+                                          return;
+                                        }
                                         if (product == null &&
                                             stockSetup == 'opening' &&
+                                            serialTracking &&
                                             initialMilli <= 0) {
                                           throw StateError(
-                                              'Enter an opening quantity greater than zero.');
+                                              'Enter at least one opening serial number.');
                                         }
                                         final openingBatches = <OpeningBatch>[];
                                         if (product == null &&
@@ -2235,7 +5290,10 @@ class _ProductScreenState extends State<ProductScreen> {
                                           openingBatches.add(OpeningBatch(
                                               initialMilli,
                                               batchNumber.text.trim(),
-                                              expiryDate));
+                                              expiryDate,
+                                              unitCostCents: openingLayerCost,
+                                              unitSellingPriceCents:
+                                                  openingLayerPrice));
                                           for (final row
                                               in extraOpeningBatches) {
                                             final quantity = Quantity.tryParse(
@@ -2244,6 +5302,16 @@ class _ProductScreenState extends State<ProductScreen> {
                                                     unit.fractional || weight);
                                             if (quantity == null ||
                                                 quantity <= 0 ||
+                                                tryParseMoney(row.cost.text) ==
+                                                    null ||
+                                                (tryParseMoney(row.cost.text) ??
+                                                        -1) <
+                                                    0 ||
+                                                (pricingPolicy == 'layer' &&
+                                                    (tryParseMoney(row
+                                                                .price.text) ??
+                                                            0) <=
+                                                        0) ||
                                                 row.number.text
                                                     .trim()
                                                     .isEmpty) {
@@ -2253,7 +5321,14 @@ class _ProductScreenState extends State<ProductScreen> {
                                             openingBatches.add(OpeningBatch(
                                                 quantity,
                                                 row.number.text.trim(),
-                                                row.expiry));
+                                                row.expiry,
+                                                unitCostCents: tryParseMoney(
+                                                    row.cost.text),
+                                                unitSellingPriceCents:
+                                                    pricingPolicy == 'layer'
+                                                        ? tryParseMoney(
+                                                            row.price.text)
+                                                        : null));
                                             initialMilli += quantity;
                                           }
                                         }
@@ -2291,6 +5366,10 @@ class _ProductScreenState extends State<ProductScreen> {
                                                 serialTracking: serialTracking,
                                                 openingSerials: openingSerials,
                                                 openingBatches: openingBatches,
+                                                openingCostCents:
+                                                    openingLayerCost,
+                                                openingSellingPriceCents:
+                                                    openingLayerPrice,
                                                 business: BusinessProduct(
                                                     unit: unit,
                                                     weight: weight,
@@ -2347,6 +5426,7 @@ class _ProductScreenState extends State<ProductScreen> {
     price.dispose();
     cost.dispose();
     stock.dispose();
+    openingCost.dispose();
     threshold.dispose();
     containerPrice.dispose();
     deposit.dispose();
@@ -2450,191 +5530,554 @@ class _ProductScreenState extends State<ProductScreen> {
 
   Future<void> showProduct(PosProduct product) async {
     final categories = await widget.repository.categories();
+    final snapshot =
+        await InventoryHealthRepository(widget.repository.db).load();
+    final health = snapshot.products[product.id];
+    final plan = health?.planning;
+    final stock = await Future.wait<int>([
+      widget.repository.stockMilli(product.id),
+      widget.repository.reservedStockMilli(product.id),
+      PurchaseOrderRepository(widget.repository.db)
+          .incomingForProduct(product.id),
+    ]);
+    final physical = stock[0];
+    final reserved = stock[1];
+    final incoming = stock[2];
+    final available = physical - reserved;
+    final unit = product.business.unit.label;
     if (!mounted) return;
-    await showDialog<void>(
+    await showRecordDetailsDrawer<void>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (context) => RecordDetailsDrawer(
         title: Text(product.name),
-        content: SizedBox(
-          width: 560,
-          child: ListView(shrinkWrap: true, children: [
-            Text('SKU: ${product.sku?.isNotEmpty == true ? product.sku : '—'}'),
-            Text(
-                'Barcode: ${product.barcode?.isNotEmpty == true ? product.barcode : '—'}'),
-            Text(
-                'Category: ${categories.where((c) => c.id == product.categoryId).firstOrNull?.name ?? 'None'}'),
-            Text(
-                'Pricing policy: ${product.pricingPolicy == 'layer' ? 'Receiving-layer price' : 'Current product price'}'),
-            Text(
-                'Current selling price: ${money(product.priceCents)} / ${product.business.unit.label}'),
-            Text('Current purchase cost: ${money(product.costCents)}'),
-            Text('Active purchase cost: ${_costRange(product)}'),
-            if (product.pricingPolicy == 'layer')
-              Text('Active selling price: ${_sellingRange(product)}'),
-            FutureBuilder<int>(
-              future: widget.repository.stockMilli(product.id),
-              builder: (context, value) => Text(
-                  'Physical stock: ${value.data == null ? '…' : Quantity.format(value.data!)} ${product.business.unit.label}'),
+        width: 680,
+        subtitle: Text(
+            'SKU ${product.sku?.isNotEmpty == true ? product.sku : 'Not set'} · ${categories.where((c) => c.id == product.categoryId).firstOrNull?.name ?? 'Uncategorized'}'),
+        badges: [
+          DrawerStatusBadge(product.isActive ? 'Active' : 'Inactive',
+              color: product.isActive
+                  ? null
+                  : Theme.of(context).colorScheme.error),
+          if (physical <= 0)
+            DrawerStatusBadge('Out of stock',
+                color: Theme.of(context).colorScheme.error),
+          if (physical > 0 &&
+              physical <= product.lowStockThreshold * Quantity.scale)
+            DrawerStatusBadge('Low stock',
+                color: Theme.of(context).colorScheme.tertiary),
+          if (product.serialTracking) const DrawerStatusBadge('Serialized'),
+          if (product.business.batch) const DrawerStatusBadge('Batch tracked'),
+        ],
+        content:
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          DrawerSection(
+            title: 'Stock snapshot',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DrawerMetricGrid(metrics: [
+                  DrawerMetric(
+                      label: 'Physical',
+                      value: '${Quantity.format(physical)} $unit'),
+                  DrawerMetric(
+                      label: 'Available',
+                      value: '${Quantity.format(available)} $unit'),
+                  DrawerMetric(
+                      label: 'Reserved',
+                      value: '${Quantity.format(reserved)} $unit'),
+                  DrawerMetric(
+                      label: 'Incoming',
+                      value: '${Quantity.format(incoming)} $unit'),
+                ]),
+                const SizedBox(height: 16),
+                if (physical > 0 && reserved >= 0 && reserved <= physical)
+                  DrawerStockDonut(
+                    available: available,
+                    reserved: reserved,
+                    availableLabel: '${Quantity.format(available)} $unit',
+                    reservedLabel: '${Quantity.format(reserved)} $unit',
+                  )
+                else if (physical <= 0)
+                  const Text('No physical stock on hand.')
+                else
+                  const Text(
+                      'Stock breakdown unavailable because reserved stock exceeds physical stock.'),
+              ],
             ),
-            Text('Low-stock threshold: ${product.lowStockThreshold}'),
-            FutureBuilder<int>(
-              future: widget.repository.reservedStockMilli(product.id),
-              builder: (context, value) => Text(
-                  'Reserved: ${value.data == null ? '…' : Quantity.format(value.data!)} ${product.business.unit.label}'),
+          ),
+          DrawerSection(
+            title: 'Pricing',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                    product.pricingPolicy == 'layer'
+                        ? '${_sellingRange(product)} / $unit'
+                        : '${money(product.priceCents)} / $unit',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        color: Theme.of(context).colorScheme.primary,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 10),
+                DrawerLabelValue(
+                    label: 'Active purchase cost', value: _costRange(product)),
+                DrawerLabelValue(
+                    label: 'Reference purchase cost',
+                    value: money(product.costCents)),
+                DrawerLabelValue(
+                    label: 'Inventory cost value',
+                    value: plan == null
+                        ? 'Unavailable'
+                        : money(plan.costValueCents)),
+                DrawerLabelValue(
+                    label: 'Pricing method',
+                    value: product.pricingPolicy == 'layer'
+                        ? 'By stock layer'
+                        : 'Single product price'),
+              ],
             ),
-            FutureBuilder<List<int>>(
-              future: Future.wait([
-                widget.repository.stockMilli(product.id),
-                widget.repository.reservedStockMilli(product.id)
+          ),
+          DrawerSection(
+            title: 'Inventory health',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DrawerLabelValue(
+                    label: 'Low-stock threshold',
+                    value: '${product.lowStockThreshold} $unit'),
+                DrawerLabelValue(
+                    label: 'Reorder level',
+                    value: plan?.reorderLevelMilli == null
+                        ? 'Not set'
+                        : '${Quantity.format(plan!.reorderLevelMilli!)} $unit'),
+                DrawerLabelValue(
+                    label: 'Suggested reorder',
+                    value: plan == null
+                        ? 'Unavailable'
+                        : '${Quantity.format(plan.suggestedReorderMilli)} $unit'),
+                if (plan != null) ...[
+                  DrawerLabelValue(
+                      label: 'Target stock',
+                      value: plan.targetStockMilli == null
+                          ? 'Not set'
+                          : '${Quantity.format(plan.targetStockMilli!)} $unit'),
+                  DrawerLabelValue(
+                      label: 'Projected stock',
+                      value: '${Quantity.format(plan.projectedMilli)} $unit'),
+                  DrawerLabelValue(
+                      label: 'Last purchase cost',
+                      value: plan.lastPurchaseCostCents == null
+                          ? 'No receiving history'
+                          : money(plan.lastPurchaseCostCents!)),
+                  if (plan.previousPurchaseCostCents != null)
+                    DrawerLabelValue(
+                        label: 'Previous purchase cost',
+                        value: money(plan.previousPurchaseCostCents!)),
+                  if (plan.oldestStockAt != null)
+                    DrawerLabelValue(
+                        label: 'Oldest remaining stock',
+                        value:
+                            '${DateTime.now().difference(plan.oldestStockAt!).inDays} days'),
+                ],
+                if (health != null) ...[
+                  DrawerLabelValue(
+                      label: 'Net sold, 30 days',
+                      value: '${Quantity.format(health.netSold30Milli)} $unit'),
+                  DrawerLabelValue(
+                      label: 'Net sold, 90 days',
+                      value: '${Quantity.format(health.netSold90Milli)} $unit'),
+                  DrawerLabelValue(
+                      label: 'Last sold',
+                      value: health.lastSoldAt == null
+                          ? 'Never sold'
+                          : MaterialLocalizations.of(context)
+                              .formatMediumDate(health.lastSoldAt!)),
+                  DrawerLabelValue(
+                      label: 'Estimated stock cover', value: health.coverLabel),
+                  if (health.deadStock || health.slowMoving)
+                    DrawerStatusBadge(
+                        health.deadStock ? 'Dead stock' : 'Slow moving'),
+                  if ((health.deadStock || health.slowMoving) &&
+                      (health.lastSoldAt != null ||
+                          plan?.oldestStockAt != null))
+                    DrawerLabelValue(
+                      label: health.lastSoldAt == null
+                          ? 'Oldest stock age'
+                          : 'Days since last sale',
+                      value:
+                          '${DateTime.now().difference((health.lastSoldAt ?? plan!.oldestStockAt!)).inDays} days · threshold ${health.deadStock ? snapshot.settings.deadStockDays : snapshot.settings.slowMovingDays} days',
+                    ),
+                  if (health.newestStockAt != null)
+                    DrawerLabelValue(
+                        label: 'Newest remaining stock',
+                        value:
+                            '${DateTime.now().difference(health.newestStockAt!).inDays} days'),
+                  for (final bucket
+                      in health.aging.where((b) => b.quantityMilli > 0))
+                    DrawerLabelValue(
+                        label: bucket.label,
+                        value:
+                            '${Quantity.format(bucket.quantityMilli)} $unit'),
+                  if (product.business.batch) ...[
+                    DrawerLabelValue(
+                        label: 'Near expiry',
+                        value:
+                            '${Quantity.format(health.nearExpiryMilli)} $unit'),
+                    DrawerLabelValue(
+                        label: 'Expired',
+                        value: '${Quantity.format(health.expiredMilli)} $unit'),
+                  ],
+                ] else
+                  const Text('No sales activity available yet.'),
+              ],
+            ),
+          ),
+          DrawerSection(
+              title: 'Product information',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DrawerLabelValue(
+                      label: 'SKU',
+                      value: product.sku?.isNotEmpty == true
+                          ? product.sku!
+                          : 'Not set'),
+                  DrawerLabelValue(
+                      label: 'Barcode',
+                      value: product.barcode?.isNotEmpty == true
+                          ? product.barcode!
+                          : 'Not set'),
+                  DrawerLabelValue(
+                      label: 'Category',
+                      value: categories
+                              .where((c) => c.id == product.categoryId)
+                              .firstOrNull
+                              ?.name ??
+                          'None'),
+                  if (product.business.weight)
+                    const DrawerStatusBadge('Weight'),
+                  if (product.business.refill)
+                    const DrawerStatusBadge('Refill'),
+                  if (product.business.tank) const DrawerStatusBadge('LPG'),
+                  if (product.business.madeToOrder)
+                    const DrawerStatusBadge('Made to order'),
+                ],
+              )),
+          ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: const Text('Stock layers'),
+              children: [
+                FutureBuilder<
+                    (
+                      List<InventoryLayer>,
+                      Map<String, String>,
+                      Map<String, String?>
+                    )>(
+                  future: (() async {
+                    final layers =
+                        await widget.repository.layersForProduct(product.id);
+                    final suppliers =
+                        await widget.repository.layerSupplierNames(product.id);
+                    final references = <String, String?>{};
+                    for (final layer in layers) {
+                      references[layer.id] = await widget.repository
+                          .layerReceivingReference(layer.id);
+                    }
+                    return (layers, suppliers, references);
+                  })(),
+                  builder: (context, value) {
+                    final live = (value.data?.$1 ?? <InventoryLayer>[])
+                        .where((layer) => layer.quantityRemainingMilli > 0)
+                        .toList();
+                    return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (live.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 12),
+                              child: Text('No stock on hand.'),
+                            )
+                          else
+                            SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: DataTable(
+                                headingRowHeight: 40,
+                                dataRowMinHeight: 40,
+                                dataRowMaxHeight: 52,
+                                columnSpacing: 18,
+                                columns: [
+                                  const DataColumn(
+                                      label: Text('Layer / Batch')),
+                                  const DataColumn(label: Text('Available')),
+                                  const DataColumn(label: Text('Cost')),
+                                  if (product.pricingPolicy == 'layer')
+                                    const DataColumn(label: Text('Selling')),
+                                  const DataColumn(label: Text('Unit')),
+                                  const DataColumn(label: Text('Received')),
+                                  const DataColumn(label: Text('Expiry')),
+                                ],
+                                rows: [
+                                  for (final layer in live)
+                                    DataRow(cells: [
+                                      DataCell(Text(layer.batchNumber ??
+                                          value.data?.$3[layer.id] ??
+                                          (layer.source == 'opening'
+                                              ? 'Opening stock'
+                                              : value.data?.$2[layer.id] ??
+                                                  'Received stock'))),
+                                      DataCell(Text(
+                                          '${Quantity.format(layer.quantityRemainingMilli)} ${product.business.unit.label}')),
+                                      DataCell(Text(
+                                          '${money(layer.unitCostCents)}/${product.business.unit.label}')),
+                                      if (product.pricingPolicy == 'layer')
+                                        DataCell(Text(layer
+                                                    .unitSellingPriceCents ==
+                                                null
+                                            ? '—'
+                                            : '${money(layer.unitSellingPriceCents!)}/${product.business.unit.label}')),
+                                      DataCell(
+                                          Text(product.business.unit.label)),
+                                      DataCell(Text(MaterialLocalizations.of(
+                                              context)
+                                          .formatMediumDate(layer.receivedAt))),
+                                      DataCell(Text(layer.expiryDate == null
+                                          ? '—'
+                                          : MaterialLocalizations.of(context)
+                                              .formatMediumDate(
+                                                  layer.expiryDate!))),
+                                    ]),
+                                ],
+                              ),
+                            ),
+                        ]);
+                  },
+                )
               ]),
-              builder: (context, value) => Text(
-                  'Available: ${value.data == null ? '…' : Quantity.format(value.data![0] - value.data![1])} ${product.business.unit.label}'),
+          FutureBuilder(
+            future: widget.repository.movements(product.id),
+            builder: (context, value) => ExpansionTile(
+              title: const Text('View stock movements'),
+              children: [
+                for (final movement in value.data ?? <InventoryMovement>[])
+                  ListTile(
+                      title: Text(inventoryMovementLabel(movement.reason)),
+                      subtitle: Text(
+                          'Quantity: ${Quantity.format(movement.quantityDeltaMilli)}'))
+              ],
             ),
-            Text(product.isActive ? 'Active' : 'Inactive'),
-            Wrap(spacing: 8, children: [
-              if (product.serialTracking) const Chip(label: Text('Serialized')),
-              if (product.business.batch)
-                const Chip(label: Text('Batch / expiry')),
-              if (product.business.weight) const Chip(label: Text('Weight')),
-              if (product.business.refill) const Chip(label: Text('Refill')),
-              if (product.business.tank) const Chip(label: Text('LPG')),
-              if (product.business.madeToOrder)
-                const Chip(label: Text('Made to order')),
-            ]),
-            FutureBuilder<(List<InventoryLayer>, Map<String, String>)>(
+          ),
+          if (product.serialTracking)
+            FutureBuilder<(List<SerialUnit>, List<InventoryLayer>)>(
               future: (() async => (
+                    await widget.repository.availableSerials(product.id),
                     await widget.repository.layersForProduct(product.id),
-                    await widget.repository.layerSupplierNames(product.id)
                   ))(),
               builder: (context, value) => ExpansionTile(
-                title: const Text('View stock layers'),
+                tilePadding: EdgeInsets.zero,
+                title:
+                    Text('AVAILABLE SERIALS (${value.data?.$1.length ?? 0})'),
                 children: [
-                  for (final layer in value.data?.$1 ?? <InventoryLayer>[])
-                    ListTile(
-                      title: Text(
-                          '${Quantity.format(layer.quantityRemainingMilli)} / ${Quantity.format(layer.quantityReceivedMilli)} ${product.business.unit.label} · ${money(layer.unitCostCents)} cost'),
-                      subtitle: Text(
-                          '${value.data?.$2[layer.id] ?? layer.source} · ${layer.receivedAt}${layer.batchNumber == null ? '' : ' · ${layer.batchNumber}'}${layer.unitSellingPriceCents == null ? '' : ' · ${money(layer.unitSellingPriceCents!)} sell'}${layer.quantityRemainingMilli == 0 ? ' · Depleted' : ''}'),
-                      onTap: () async {
-                        final reference = await widget.repository
-                            .layerReceivingReference(layer.id);
-                        final serials =
-                            await widget.repository.serialsForLayer(layer.id);
-                        if (!context.mounted) return;
-                        await showDialog<void>(
-                            context: context,
-                            builder: (context) => AlertDialog(
-                                  title: const Text('Stock layer'),
-                                  content: SizedBox(
-                                      width: 480,
-                                      child:
-                                          ListView(shrinkWrap: true, children: [
-                                        Text(
-                                            'Source: ${layer.source == 'opening' ? 'Opening stock' : layer.source}'),
-                                        Text(
-                                            'Receiving: ${reference ?? 'Opening balance'}'),
-                                        Text(
-                                            'Supplier: ${value.data?.$2[layer.id] ?? 'None'}'),
-                                        Text('Received: ${layer.receivedAt}'),
-                                        Text(
-                                            'Original: ${Quantity.format(layer.quantityReceivedMilli)} ${product.business.unit.label}'),
-                                        Text(
-                                            'Remaining: ${Quantity.format(layer.quantityRemainingMilli)} ${product.business.unit.label}'),
-                                        Text(
-                                            'Purchase cost: ${money(layer.unitCostCents)}'),
-                                        if (layer.unitSellingPriceCents != null)
-                                          Text(
-                                              'Layer selling price: ${money(layer.unitSellingPriceCents!)}'),
-                                        if (layer.batchNumber != null)
-                                          Text('Batch: ${layer.batchNumber}'),
-                                        if (layer.expiryDate != null)
-                                          Text('Expiry: ${layer.expiryDate}'),
-                                        for (final serial in serials)
-                                          Text(
-                                              '${serial.serialNumber} · ${serial.status}'),
-                                      ])),
-                                  actions: [
-                                    TextButton(
-                                        onPressed: () => Navigator.pop(context),
-                                        child: const Text('Close'))
-                                  ],
-                                ));
-                      },
-                    ),
+                  if ((value.data?.$1 ?? const <SerialUnit>[]).isEmpty)
+                    const ListTile(title: Text('No available serials.'))
+                  else
+                    SizedBox(
+                        height: (value.data?.$1.length ?? 0) > 4
+                            ? 240
+                            : ((value.data?.$1.length ?? 0) * 48 + 40)
+                                .toDouble(),
+                        child: SingleChildScrollView(
+                            child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: DataTable(
+                            headingRowHeight: 40,
+                            dataRowMinHeight: 40,
+                            dataRowMaxHeight: 48,
+                            columnSpacing: 18,
+                            columns: const [
+                              DataColumn(label: Text('Serial')),
+                              DataColumn(label: Text('Status')),
+                              DataColumn(label: Text('Cost')),
+                              DataColumn(label: Text('Selling')),
+                              DataColumn(label: Text('Source')),
+                              DataColumn(label: Text('Received')),
+                            ],
+                            rows: (value.data?.$1 ?? <SerialUnit>[])
+                                .map((serial) {
+                              final layer = value.data?.$2
+                                  .where((l) => l.id == serial.inventoryLayerId)
+                                  .firstOrNull;
+                              return DataRow(cells: [
+                                DataCell(Text(serial.serialNumber)),
+                                DataCell(Text(serial.status)),
+                                DataCell(Text(layer == null
+                                    ? '—'
+                                    : money(layer.unitCostCents))),
+                                DataCell(Text(product.pricingPolicy == 'layer'
+                                    ? (layer?.unitSellingPriceCents == null
+                                        ? '—'
+                                        : money(layer!.unitSellingPriceCents!))
+                                    : money(product.priceCents))),
+                                DataCell(Text(layer?.source == 'opening'
+                                    ? 'Opening stock'
+                                    : 'Supplier receiving')),
+                                DataCell(Text(layer == null
+                                    ? '—'
+                                    : MaterialLocalizations.of(context)
+                                        .formatMediumDate(layer.receivedAt))),
+                              ]);
+                            }).toList(),
+                          ),
+                        ))),
                 ],
               ),
             ),
+          if (product.business.batch)
             FutureBuilder(
-              future: widget.repository.movements(product.id),
+              future: widget.repository.batches(product.id),
               builder: (context, value) => ExpansionTile(
-                title: const Text('View stock movements'),
+                title: const Text('View batches'),
                 children: [
-                  for (final movement in value.data ?? <InventoryMovement>[])
+                  for (final lot in value.data ?? <ProductLot>[])
                     ListTile(
-                        title: Text(inventoryMovementLabel(movement.reason)),
+                        title: Text(lot.batchNumber),
                         subtitle: Text(
-                            'Quantity: ${Quantity.format(movement.quantityDeltaMilli)}'))
+                            '${Quantity.format(lot.quantityMilli)} ${product.business.unit.label} · ${expiryStatus(lot.expiryDate, DateTime.now())}'))
                 ],
               ),
             ),
-            if (product.serialTracking)
-              FutureBuilder<(List<SerialUnit>, List<InventoryLayer>)>(
-                future: (() async => (
-                      await widget.repository.availableSerials(product.id),
-                      await widget.repository.layersForProduct(product.id)
-                    ))(),
-                builder: (context, value) => ExpansionTile(
-                  title: const Text('View available serial units'),
-                  subtitle: Text('${value.data?.$1.length ?? 0} available'),
-                  children: [
-                    for (final serial in value.data?.$1 ?? <SerialUnit>[])
-                      ListTile(
-                          title: Text(serial.serialNumber),
-                          subtitle: Text(
-                              '${serial.status} · ${switch (value.data?.$2.where((l) => l.id == serial.inventoryLayerId).firstOrNull?.source) {
-                            'opening' => 'Opening stock',
-                            'receiving' => 'Supplier receiving',
-                            _ => 'Unknown',
-                          }}'))
-                  ],
-                ),
-              ),
-            if (product.business.batch)
-              FutureBuilder(
-                future: widget.repository.batches(product.id),
-                builder: (context, value) => ExpansionTile(
-                  title: const Text('View batches'),
-                  children: [
-                    for (final lot in value.data ?? <ProductLot>[])
-                      ListTile(
-                          title: Text(lot.batchNumber),
-                          subtitle: Text(
-                              '${Quantity.format(lot.quantityMilli)} ${product.business.unit.label} · ${expiryStatus(lot.expiryDate, DateTime.now())}'))
-                  ],
-                ),
-              ),
-          ]),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close')),
-          TextButton(
+        ]),
+        primaryAction: FilledButton(
+            onPressed: () {
+              Navigator.pop(context);
+              edit(product);
+            },
+            child: const Text('Edit product')),
+        secondaryActions: [
+          OutlinedButton(
               onPressed: () {
                 Navigator.pop(context);
-                edit(product);
+                _editPlanning(product, plan);
               },
-              child: const Text('Edit product')),
+              child: const Text('Reorder settings')),
           if (widget.onReceiveStock != null && !product.business.madeToOrder)
-            FilledButton(
+            OutlinedButton(
                 onPressed: () {
                   Navigator.pop(context);
                   widget.onReceiveStock!(product.id);
                 },
                 child: const Text('Receive stock')),
+          if (widget.onCreatePurchaseOrder != null &&
+              !product.business.madeToOrder)
+            OutlinedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  widget.onCreatePurchaseOrder!(product.id);
+                },
+                child: const Text('Create Purchase Order')),
         ],
+        tertiaryAction: TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close')),
       ),
     );
+  }
+
+  Future<void> _editPlanning(
+      PosProduct product, InventoryPlanningRow? plan) async {
+    final suppliers =
+        await widget.repository.db.select(widget.repository.db.suppliers).get();
+    if (!mounted) return;
+    String? supplierId = plan?.preferredSupplierId;
+    final reorder = TextEditingController(
+        text: plan?.reorderLevelMilli == null
+            ? ''
+            : Quantity.format(plan!.reorderLevelMilli!));
+    final target = TextEditingController(
+        text: plan?.targetStockMilli == null
+            ? ''
+            : Quantity.format(plan!.targetStockMilli!));
+    String? errorText;
+    try {
+      await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => StatefulBuilder(
+              builder: (context, update) => AlertDialog(
+                    title: Text('Reorder settings · ${product.name}'),
+                    content: Column(mainAxisSize: MainAxisSize.min, children: [
+                      TextField(
+                          controller: reorder,
+                          decoration: const InputDecoration(
+                              labelText: 'Reorder level')),
+                      TextField(
+                          controller: target,
+                          decoration:
+                              const InputDecoration(labelText: 'Target stock')),
+                      DropdownButtonFormField<String?>(
+                        initialValue: suppliers.any((s) => s.id == supplierId)
+                            ? supplierId
+                            : null,
+                        decoration: const InputDecoration(
+                            labelText: 'Preferred supplier'),
+                        items: [
+                          const DropdownMenuItem<String?>(
+                              value: null, child: Text('None')),
+                          for (final supplier in suppliers
+                              .where((s) => s.isActive || s.id == supplierId))
+                            DropdownMenuItem<String?>(
+                                value: supplier.id, child: Text(supplier.name))
+                        ],
+                        onChanged: (value) => update(() => supplierId = value),
+                      ),
+                      if (errorText != null)
+                        Text(errorText!,
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.error)),
+                    ]),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: () async {
+                            final r = reorder.text.trim().isEmpty
+                                ? null
+                                : reorder.text.trim() == '0'
+                                    ? 0
+                                    : Quantity.tryParse(reorder.text,
+                                        fractional:
+                                            product.business.fractional);
+                            final t = target.text.trim().isEmpty
+                                ? null
+                                : target.text.trim() == '0'
+                                    ? 0
+                                    : Quantity.tryParse(target.text,
+                                        fractional:
+                                            product.business.fractional);
+                            if ((reorder.text.trim().isNotEmpty && r == null) ||
+                                (target.text.trim().isNotEmpty && t == null)) {
+                              update(
+                                  () => errorText = 'Enter valid quantities');
+                              return;
+                            }
+                            try {
+                              await InventoryPlanningRepository(
+                                      widget.repository.db)
+                                  .saveSettings(product.id,
+                                      reorderLevelMilli: r,
+                                      targetStockMilli: t,
+                                      preferredSupplierId: supplierId);
+                              if (context.mounted) Navigator.pop(context);
+                              await refresh();
+                            } catch (e) {
+                              update(() => errorText = safeMessage(e));
+                            }
+                          },
+                          child: const Text('Save')),
+                    ],
+                  )));
+    } finally {
+      reorder.dispose();
+      target.dispose();
+    }
   }
 
   @override
@@ -2683,6 +6126,13 @@ class _ProductScreenState extends State<ProductScreen> {
                       'Inactive',
                       'Low stock',
                       'Out of stock',
+                      'Reorder',
+                      'Incoming',
+                      'Slow moving',
+                      'Dead stock',
+                      'Never sold',
+                      'Near expiry',
+                      'Expired',
                       'Serialized',
                       'Batch tracked'
                     ])
@@ -2726,19 +6176,43 @@ class _ProductScreenState extends State<ProductScreen> {
                               (filter == 'Active' && p.isActive) ||
                               (filter == 'Inactive' && !p.isActive) ||
                               (filter == 'Out of stock' && p.isActive) ||
+                              (filter == 'Reorder' && p.isActive) ||
+                              (filter == 'Incoming' && p.isActive) ||
+                              (filter == 'Slow moving' && p.isActive) ||
+                              (filter == 'Dead stock' && p.isActive) ||
+                              (filter == 'Never sold' && p.isActive) ||
+                              (filter == 'Near expiry' && p.isActive) ||
+                              (filter == 'Expired' && p.isActive) ||
                               (filter == 'Serialized' && p.serialTracking) ||
                               (filter == 'Batch tracked' && p.business.batch) ||
                               filter == 'Low stock'))
                       .map((p) {
                     final available = (stockLevels[p.id]?.$1 ?? 0) -
                         (stockLevels[p.id]?.$2 ?? 0);
+                    final plan = planning[p.id];
+                    final health = inventoryHealth[p.id];
                     final narrow = MediaQuery.sizeOf(context).width < 700;
                     return (filter == 'Low stock' &&
                                 (available <= 0 ||
                                     available >
                                         p.lowStockThreshold *
                                             Quantity.scale)) ||
-                            (filter == 'Out of stock' && available > 0)
+                            (filter == 'Out of stock' && available > 0) ||
+                            (filter == 'Reorder' &&
+                                (plan == null || !plan.belowReorderLevel)) ||
+                            (filter == 'Incoming' &&
+                                (plan == null || plan.incomingMilli <= 0)) ||
+                            (filter == 'Slow moving' &&
+                                health?.slowMoving != true) ||
+                            (filter == 'Dead stock' &&
+                                health?.deadStock != true) ||
+                            (filter == 'Never sold' &&
+                                (health?.neverSold != true ||
+                                    available <= 0)) ||
+                            (filter == 'Near expiry' &&
+                                (health?.nearExpiryMilli ?? 0) <= 0) ||
+                            (filter == 'Expired' &&
+                                (health?.expiredMilli ?? 0) <= 0)
                         ? const SizedBox.shrink()
                         : Card(
                             child: ListTile(
@@ -2761,6 +6235,9 @@ class _ProductScreenState extends State<ProductScreen> {
                                   if (narrow)
                                     Text(
                                         '${Quantity.format(available)} ${p.business.unit.label} available'),
+                                  if (plan != null && plan.incomingMilli > 0)
+                                    Text(
+                                        '${Quantity.format(plan.incomingMilli)} ${p.business.unit.label} incoming'),
                                   const SizedBox(height: 4),
                                   Wrap(spacing: 6, runSpacing: 4, children: [
                                     if (p.serialTracking) _badge('Serialized'),
@@ -2769,6 +6246,21 @@ class _ProductScreenState extends State<ProductScreen> {
                                     if (p.business.refill) _badge('Refill'),
                                     if (p.business.tank) _badge('LPG'),
                                     if (p.business.madeToOrder) _badge('MTO'),
+                                    if (plan?.belowReorderLevel == true)
+                                      _badge(plan!.incomingCoversShortage
+                                          ? 'Incoming covers shortage'
+                                          : 'Reorder needed'),
+                                    if (health?.deadStock == true)
+                                      _badge('Dead stock')
+                                    else if (health?.slowMoving == true)
+                                      _badge('Slow moving'),
+                                    if (health?.neverSold == true &&
+                                        available > 0)
+                                      _badge('Never sold'),
+                                    if ((health?.expiredMilli ?? 0) > 0)
+                                      _badge('Expired'),
+                                    if ((health?.nearExpiryMilli ?? 0) > 0)
+                                      _badge('Near expiry'),
                                   ]),
                                 ]),
                             trailing: narrow

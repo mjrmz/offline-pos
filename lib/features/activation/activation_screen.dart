@@ -47,13 +47,15 @@ class _ActivationScreenState extends State<ActivationScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-      appBar: AppBar(title: const Text('Activate POS')),
       body: Center(
           child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 420),
               child: Padding(
                   padding: const EdgeInsets.all(24),
                   child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    Text('Activate POS',
+                        style: Theme.of(context).textTheme.headlineSmall),
+                    const SizedBox(height: 16),
                     if (widget.reason != null) Text(widget.reason!),
                     TextField(
                         controller: keyController,

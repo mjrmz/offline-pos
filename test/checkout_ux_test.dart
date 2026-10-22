@@ -98,7 +98,7 @@ void main() {
             .widget<TextButton>(
                 find.widgetWithText(TextButton, '+ Add discount'))
             .onPressed,
-        isNull);
+        isNotNull);
   });
 
   testWidgets('direct quantity and quick cash update totals and change',
@@ -156,6 +156,35 @@ void main() {
             .quantity,
         1);
     expect(find.textContaining('Only 1'), findsOneWidget);
+  });
+
+  testWidgets('quantity controls disable at limits and sale warning expires',
+      (tester) async {
+    await mount(tester, const Size(1280, 900));
+    await tester.tap(find.text('Low Stock Soap'));
+    await tester.pumpAndSettle();
+    final minus =
+        find.byTooltip('Minimum quantity or serial selection reached');
+    final plus = find.byTooltip('Maximum quantity or serial selection reached');
+    expect(
+        tester
+            .widget<IconButton>(
+                find.ancestor(of: minus, matching: find.byType(IconButton)))
+            .onPressed,
+        isNull);
+    expect(
+        tester
+            .widget<IconButton>(
+                find.ancestor(of: plus, matching: find.byType(IconButton)))
+            .onPressed,
+        isNull);
+    await tester.enterText(find.byType(TextFormField).first, '3');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    expect(find.byKey(const Key('current-sale-notice')), findsOneWidget);
+    expect(find.textContaining('Only 1'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 4));
+    expect(find.byKey(const Key('current-sale-notice')), findsNothing);
   });
 
   testWidgets('tablet and mobile expose cart without shrinking two panes',

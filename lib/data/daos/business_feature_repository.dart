@@ -26,9 +26,7 @@ class BusinessFeatureRepository {
       BusinessFeature feature, bool enabled, ActiveUser actor) async {
     await db.transaction(() async {
       final live = await AuthRepository(db).requireActive(actor.id);
-      if (live.role != UserRole.owner) {
-        throw StateError('Only the owner can change business features');
-      }
+      live.require(PosPermission.manageSettings);
       await db.into(db.businessFeatureSettings).insert(
           BusinessFeatureSettingsCompanion.insert(
               featureId: feature.name, enabled: Value(enabled)),
@@ -44,9 +42,7 @@ class BusinessFeatureRepository {
       Set<BusinessFeature> selected, ActiveUser actor) async {
     await db.transaction(() async {
       final live = await AuthRepository(db).requireActive(actor.id);
-      if (live.role != UserRole.owner) {
-        throw StateError('Only the owner can change business features');
-      }
+      live.require(PosPermission.manageSettings);
       for (final feature in selected) {
         await db.into(db.businessFeatureSettings).insert(
             BusinessFeatureSettingsCompanion.insert(

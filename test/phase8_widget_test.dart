@@ -13,12 +13,19 @@ import 'package:modern_offline_pos/features/pos_checkout/checkout_screen.dart';
 import 'package:modern_offline_pos/features/settings/business_features_screen.dart';
 
 Future<void> openProductSection(WidgetTester tester, String section) async {
+  section = switch (section) {
+    'Selling method' => 'SELLING METHOD',
+    'Tracking options' => 'TRACKING',
+    'Special selling options' => 'SPECIAL SELLING',
+    _ => section,
+  };
   await tester.scrollUntilVisible(find.text(section), 250,
       scrollable: find
           .descendant(
-              of: find.byType(Dialog), matching: find.byType(Scrollable))
+              of: find.byKey(const ValueKey('product-editor-right')),
+              matching: find.byType(Scrollable))
           .first);
-  await tester.tap(find.text(section));
+  await tester.ensureVisible(find.text(section));
   await tester.pumpAndSettle();
 }
 
@@ -92,16 +99,16 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add product').first);
     await tester.pumpAndSettle();
-    await openProductSection(tester, 'Unit & selling method');
+    await openProductSection(tester, 'Selling method');
     expect(find.text('Sold by weight'), findsOneWidget);
-    expect(find.text('Water refill / container'), findsNothing);
+    expect(find.text('Refill / container'), findsNothing);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     await features.setEnabled(
         BusinessFeature.weightBasedPricing, false, auth.current!);
     await tester.tap(find.text('Add product').first);
     await tester.pumpAndSettle();
-    await openProductSection(tester, 'Unit & selling method');
+    await openProductSection(tester, 'Selling method');
     expect(find.text('Sold by weight'), findsNothing);
   });
 
@@ -113,7 +120,7 @@ void main() {
     BusinessFeature.containerRefillPricing: (
       const BusinessProduct(
           unit: SaleUnit.bottle, refill: true, containerPriceCents: 1000),
-      'Water refill / container'
+      'Refill / container'
     ),
     BusinessFeature.tankDepositExchange: (
       const BusinessProduct(tank: true, depositCents: 50000),
@@ -125,7 +132,7 @@ void main() {
     ),
     BusinessFeature.unitOfMeasureVariety: (
       const BusinessProduct(unit: SaleUnit.meter),
-      'Unit / price basis'
+      'Unit'
     ),
     BusinessFeature.madeToOrderTracking: (
       const BusinessProduct(madeToOrder: true),
@@ -167,7 +174,7 @@ void main() {
           BusinessFeature.weightBasedPricing ||
           BusinessFeature.unitOfMeasureVariety ||
           BusinessFeature.madeToOrderTracking =>
-            'Unit & selling method',
+            'Selling method',
           BusinessFeature.expiryBatchTracking => 'Tracking options',
           _ => 'Special selling options',
         };
@@ -184,7 +191,11 @@ void main() {
       await closeEdit();
       await features.setEnabled(entry.key, false, auth.current!);
       await openEdit();
-      expect(find.text(entry.value.$2), findsNothing);
+      expect(
+          find.text(entry.value.$2),
+          entry.key == BusinessFeature.unitOfMeasureVariety
+              ? findsOneWidget
+              : findsNothing);
       await closeEdit();
       expect(await features.productConfiguration(productId, entry.key), before);
       await features.setEnabled(entry.key, true, auth.current!);
@@ -214,17 +225,20 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add product').first);
     await tester.pumpAndSettle();
-    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Rice');
     await tester.enterText(
-        find.widgetWithText(TextField, 'Current selling price (pesos)'), '50');
-    await tester.tap(find.text('Create with zero stock'));
+        find.widgetWithText(TextField, 'Product name *'), 'Rice');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Selling price *'), '50');
+    await tester.tap(find.text('No stock yet'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('I already have stock on hand').last);
+    await tester.tap(find.text('I already have stock').last);
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Opening quantity'), '10.000');
-    await openProductSection(tester, 'Unit & selling method');
-    await tester.tap(find.widgetWithText(SwitchListTile, 'Sold by weight'));
+        find.widgetWithText(TextField, 'Opening quantity *'), '10.000');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Cost per unit *'), '20');
+    await openProductSection(tester, 'Selling method');
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'Sold by weight'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Create product').last);
     await tester.pumpAndSettle();
@@ -237,7 +251,7 @@ void main() {
     await tester.tap(find.text('Edit product'));
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Current selling price (pesos)'), '55');
+        find.widgetWithText(TextField, 'Selling price *'), '55');
     await tester.tap(find.text('Save changes'));
     await tester.pumpAndSettle();
     expect((await repo.products()).single.priceCents, 5500);

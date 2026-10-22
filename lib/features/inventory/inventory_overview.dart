@@ -5,7 +5,11 @@ import '../../shared/theme/app_theme.dart';
 import '../../core/models/product.dart';
 import '../../core/models/quantity.dart';
 import '../../data/daos/pos_repository.dart';
+import '../../data/daos/purchase_order_repository.dart';
+import '../../data/daos/inventory_health_repository.dart';
 import '../../data/database.dart';
+import '../../shared/utils/money.dart';
+import '../../shared/widgets/app_workspace.dart';
 
 String inventoryMovementLabel(String reason) => switch (reason) {
       'initial_stock' => 'Opening stock',
@@ -17,6 +21,9 @@ String inventoryMovementLabel(String reason) => switch (reason) {
       'void' => 'Sale voided · stock restored',
       'refund' || 'item_refund' => 'Refund restock',
       'adjustment' => 'Stock adjustment',
+      'stock_adjustment_increase' => 'Stock adjustment increase',
+      'stock_adjustment_decrease' => 'Stock adjustment decrease',
+      'stock_count_variance' => 'Stock count variance',
       'exchange_return' => 'Empty tank returned',
       'inbound_rma' => 'Sent for supplier RMA',
       'rma_replacement' => 'RMA replacement',
@@ -66,6 +73,9 @@ class InventoryOverview extends StatefulWidget {
   final PosRepository repository;
   final ValueChanged<String>? onProducts;
   final VoidCallback? onReceive;
+  final VoidCallback? onPurchaseOrders;
+  final VoidCallback? onExpiry;
+  final bool showCosts;
   final VoidCallback onMovements;
 
   const InventoryOverview(
@@ -73,6 +83,9 @@ class InventoryOverview extends StatefulWidget {
       required this.repository,
       required this.onProducts,
       required this.onReceive,
+      this.onPurchaseOrders,
+      this.onExpiry,
+      this.showCosts = true,
       required this.onMovements});
 
   @override
@@ -85,8 +98,20 @@ class _OverviewData {
   final int? out;
   final int? expiring;
   final int? serials;
+  final int openOrders;
+  final int awaitingDelivery;
+  final int reorder;
+  final InventoryHealthSnapshot health;
   const _OverviewData(
-      this.products, this.low, this.out, this.expiring, this.serials);
+      this.products,
+      this.low,
+      this.out,
+      this.expiring,
+      this.serials,
+      this.openOrders,
+      this.awaitingDelivery,
+      this.reorder,
+      this.health);
 }
 
 class _InventoryOverviewState extends State<InventoryOverview> {
@@ -95,31 +120,15 @@ class _InventoryOverviewState extends State<InventoryOverview> {
 
   Future<_OverviewData> _loadOverview() async {
     final products = await widget.repository.products();
+    final health = await InventoryHealthRepository(widget.repository.db).load();
     Map<String, (int physical, int reserved)>? levels;
     try {
       levels = await widget.repository.stockLevels();
     } catch (_) {
       levels = null;
     }
-    final now = DateTime.now();
-    final today = DateUtils.dateOnly(now);
-    final cutoff = today.add(const Duration(days: 30));
-    int? expiring;
+    final expiring = health.nearExpiryCount;
     int? serialCount;
-    try {
-      final lots = await widget.repository.db
-          .select(widget.repository.db.productLots)
-          .get();
-      expiring = lots
-          .where((lot) =>
-              lot.quantityMilli > 0 &&
-              lot.expiryDate != null &&
-              !DateUtils.dateOnly(lot.expiryDate!).isBefore(today) &&
-              !DateUtils.dateOnly(lot.expiryDate!).isAfter(cutoff))
-          .length;
-    } catch (_) {
-      expiring = null;
-    }
     try {
       serialCount =
           (await (widget.repository.db.select(widget.repository.db.serialUnits)
@@ -142,8 +151,31 @@ class _InventoryOverviewState extends State<InventoryOverview> {
         }
       }
     }
-    return _OverviewData(products, levels == null ? null : low,
-        levels == null ? null : out, expiring, serialCount);
+    final purchaseOrders = PurchaseOrderRepository(widget.repository.db);
+    var openOrders = 0;
+    var awaitingDelivery = 0;
+    for (final order in await purchaseOrders.list()) {
+      final progress = await purchaseOrders.detail(order.id);
+      if (progress.remainingTotal > 0 &&
+          {'sent', 'partially_received'}.contains(progress.status)) {
+        openOrders++;
+        if (progress.receivedTotal == 0) awaitingDelivery++;
+      }
+    }
+    return _OverviewData(
+        products,
+        levels == null ? null : low,
+        levels == null ? null : out,
+        expiring,
+        serialCount,
+        openOrders,
+        awaitingDelivery,
+        products
+            .where((p) =>
+                p.isActive &&
+                (health.products[p.id]?.planning.belowReorderLevel ?? false))
+            .length,
+        health);
   }
 
   Future<List<InventoryMovement>> _loadActivity() =>
@@ -227,7 +259,10 @@ class _InventoryOverviewState extends State<InventoryOverview> {
                               : () => widget.onProducts!('Out of stock')),
                       _Metric('Expiring soon', '${data.expiring ?? '—'}',
                           Icons.event_outlined,
-                          width: cardWidth, detail: 'Next 30 days'),
+                          width: cardWidth,
+                          detail:
+                              'Next ${data.health.settings.nearExpiryDays} days',
+                          onTap: widget.onExpiry),
                       _Metric('Serialized units', '${data.serials ?? '—'}',
                           Icons.qr_code,
                           width: cardWidth,
@@ -235,6 +270,36 @@ class _InventoryOverviewState extends State<InventoryOverview> {
                           onTap: widget.onProducts == null
                               ? null
                               : () => widget.onProducts!('Serialized')),
+                      _Metric('Reorder needed', '${data.reorder}',
+                          Icons.shopping_cart_outlined,
+                          width: cardWidth,
+                          onTap: widget.onProducts == null
+                              ? null
+                              : () => widget.onProducts!('Reorder')),
+                      _Metric('Slow moving', '${data.health.slowCount}',
+                          Icons.hourglass_bottom_outlined,
+                          width: cardWidth,
+                          onTap: widget.onProducts == null
+                              ? null
+                              : () => widget.onProducts!('Slow moving')),
+                      _Metric('Expired batches', '${data.health.expiredCount}',
+                          Icons.warning_amber_outlined,
+                          width: cardWidth, onTap: widget.onExpiry),
+                      if (widget.showCosts)
+                        _Metric(
+                            'Dead stock value',
+                            formatPeso(data.health.deadStockValueCents),
+                            Icons.inventory_outlined,
+                            width: cardWidth,
+                            onTap: widget.onProducts == null
+                                ? null
+                                : () => widget.onProducts!('Dead stock')),
+                      _Metric('Open purchase orders', '${data.openOrders}',
+                          Icons.shopping_bag_outlined,
+                          width: cardWidth, onTap: widget.onPurchaseOrders),
+                      _Metric('Awaiting delivery', '${data.awaitingDelivery}',
+                          Icons.local_shipping_outlined,
+                          width: cardWidth, onTap: widget.onPurchaseOrders),
                     ]);
                   }),
               const SizedBox(height: 20),
@@ -270,7 +335,13 @@ class _InventoryOverviewState extends State<InventoryOverview> {
                 }
                 if (!snapshot.hasData) return const LinearProgressIndicator();
                 final data = snapshot.data!;
-                if (data.out == 0 && data.low == 0 && data.expiring == 0) {
+                if (data.out == 0 &&
+                    data.low == 0 &&
+                    data.expiring == 0 &&
+                    data.reorder == 0 &&
+                    data.health.expiredCount == 0 &&
+                    data.health.slowCount == 0 &&
+                    data.health.deadCount == 0) {
                   return const Padding(
                       padding: EdgeInsets.symmetric(vertical: 12),
                       child: Text('Inventory looks healthy.'));
@@ -278,6 +349,18 @@ class _InventoryOverviewState extends State<InventoryOverview> {
                 return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if (data.health.expiredCount > 0)
+                        TextButton.icon(
+                            onPressed: widget.onExpiry,
+                            icon: const Icon(Icons.chevron_right),
+                            label: Text(
+                                '${data.health.expiredCount} expired batches')),
+                      if (data.health.nearExpiryCount > 0)
+                        TextButton.icon(
+                            onPressed: widget.onExpiry,
+                            icon: const Icon(Icons.chevron_right),
+                            label: Text(
+                                '${data.health.nearExpiryCount} batches near expiry')),
                       if ((data.out ?? 0) > 0)
                         _attentionRow(
                             context,
@@ -288,11 +371,23 @@ class _InventoryOverviewState extends State<InventoryOverview> {
                             context,
                             '${data.low} ${data.low == 1 ? 'product' : 'products'} low on stock',
                             'Low stock'),
-                      if ((data.expiring ?? 0) > 0)
-                        Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: Text(
-                                '${data.expiring} ${data.expiring == 1 ? 'batch' : 'batches'} expiring soon')),
+                      if (data.reorder > 0)
+                        _attentionRow(
+                            context,
+                            '${data.reorder} ${data.reorder == 1 ? 'product needs' : 'products need'} reorder',
+                            'Reorder'),
+                      if (data.health.deadCount > 0)
+                        _attentionRow(
+                            context,
+                            widget.showCosts
+                                ? '${data.health.deadCount} dead-stock products · ${formatPeso(data.health.deadStockValueCents)} at cost'
+                                : '${data.health.deadCount} dead-stock products',
+                            'Dead stock'),
+                      if (data.health.slowCount > 0)
+                        _attentionRow(
+                            context,
+                            '${data.health.slowCount} slow-moving products',
+                            'Slow moving'),
                       if (data.out == null ||
                           data.low == null ||
                           data.expiring == null)
@@ -373,39 +468,13 @@ class _Metric extends StatelessWidget {
       {required this.width, this.detail, this.onTap});
 
   @override
-  Widget build(BuildContext context) => SizedBox(
+  Widget build(BuildContext context) => AppMetricTile(
+        label: label,
+        value: value,
+        icon: icon,
         width: width,
-        height: 128,
-        child: Card(
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(children: [
-                      Expanded(
-                          child: Text(label,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.labelLarge)),
-                      Icon(icon,
-                          size: 19,
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant),
-                    ]),
-                    const Spacer(),
-                    Text(value,
-                        style: Theme.of(context).textTheme.headlineMedium),
-                    if (detail != null)
-                      Text(detail!,
-                          style: Theme.of(context).textTheme.bodySmall),
-                  ]),
-            ),
-          ),
-        ),
+        detail: detail,
+        onTap: onTap,
       );
 }
 
@@ -460,7 +529,7 @@ class InventoryMovementRow extends StatelessWidget {
                 flex: 2, child: Text(inventoryMovementLabel(movement.reason))),
             if (reference != null)
               SizedBox(
-                  width: 150,
+                  width: 190,
                   child: Text(reference!,
                       maxLines: 1, overflow: TextOverflow.ellipsis)),
             SizedBox(

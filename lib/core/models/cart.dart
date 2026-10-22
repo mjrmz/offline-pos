@@ -2,6 +2,7 @@ import 'product.dart';
 import 'quantity.dart';
 
 class CartLine {
+  final String id;
   final PosProduct product;
   int quantityMilli;
   String mode;
@@ -10,18 +11,22 @@ class CartLine {
   int extraCents;
   int? pricedTotalCents;
   CartLine(this.product, this.quantityMilli,
-      {this.mode = 'ordinary',
+      {String? id,
+      this.mode = 'ordinary',
       this.batchId,
       this.extraCents = 0,
-      this.serialIds = const []});
+      this.serialIds = const []})
+      : id = id ?? product.id;
   int get quantity => quantityMilli ~/ Quantity.scale;
-  int get totalCents => pricedTotalCents ??
+  int get totalCents =>
+      pricedTotalCents ??
       Quantity.lineCents(product.priceCents, quantityMilli) +
-      extraCents * quantity;
+          extraCents * quantity;
 }
 
 class Cart {
   final Map<String, CartLine> _lines = {};
+  int _nextLineId = 0;
   List<CartLine> get lines => List.unmodifiable(_lines.values);
   bool get isEmpty => _lines.isEmpty;
   int get subtotalCents =>
@@ -40,7 +45,7 @@ class Cart {
     }
   }
 
-  void addSpecial(PosProduct product, int quantityMilli,
+  CartLine addSpecial(PosProduct product, int quantityMilli,
       {String mode = 'ordinary',
       String? batchId,
       int extraCents = 0,
@@ -51,11 +56,15 @@ class Cart {
     if (!product.business.fractional && quantityMilli % Quantity.scale != 0) {
       throw StateError('This product requires a whole quantity');
     }
-    _lines[product.id] = CartLine(product, quantityMilli,
+    final id = '${product.id}#${++_nextLineId}';
+    final line = CartLine(product, quantityMilli,
+        id: id,
         mode: mode,
         batchId: batchId,
         extraCents: extraCents,
         serialIds: List.unmodifiable(serialIds));
+    _lines[id] = line;
+    return line;
   }
 
   void setQuantity(String productId, int quantity) {
@@ -89,4 +98,15 @@ class Cart {
 
   void remove(String productId) => _lines.remove(productId);
   void clear() => _lines.clear();
+
+  void restoreLine(CartLine line) {
+    if (_lines.containsKey(line.id) || line.quantityMilli <= 0) {
+      throw StateError('Invalid held sale line');
+    }
+    _lines[line.id] = line;
+    final suffix = int.tryParse(line.id.split('#').last);
+    if (line.id.contains('#') && suffix != null && suffix > _nextLineId) {
+      _nextLineId = suffix;
+    }
+  }
 }

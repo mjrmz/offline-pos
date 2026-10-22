@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:drift/native.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/backup/backup_service.dart';
 import 'package:modern_offline_pos/backup/compliance_protection.dart';
@@ -15,6 +16,37 @@ import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/daos/stock_receiving_repository.dart';
 
 void main() {
+  test('layaway list paging applies search and status in the database',
+      () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final auth = AuthService(AuthRepository(db));
+    final id = await auth.bootstrap('Owner', 'password123', 'Q?', 'answer');
+    await auth.login(id, 'password123');
+    final customer = await DirectoryRepository(db)
+        .saveCustomer(auth.current!, name: 'Paging Customer');
+    final repo = LayawayRepository(db, PosRepository(db));
+    for (var i = 0; i < 101; i++) {
+      await db.into(db.layaways).insert(LayawaysCompanion.insert(
+            id: Value('layaway-${i.toString().padLeft(3, '0')}'),
+            reference: 'L-${i.toString().padLeft(3, '0')}',
+            customerId: customer.id,
+            createdBy: id,
+            totalCents: 10000,
+            status: Value(i == 100 ? 'completed' : 'active'),
+            createdAt: Value(DateTime(2026, 1, 1)),
+          ));
+    }
+    final first = await repo.page();
+    expect(first, hasLength(51));
+    expect(first.first.reference, 'L-100');
+    expect((await repo.page(page: 1)), hasLength(51));
+    expect((await repo.page(page: 2)), hasLength(1));
+    expect((await repo.page(search: 'L-100')), hasLength(1));
+    expect((await repo.page(status: 'completed')), hasLength(1));
+    expect((await repo.page(status: 'completed', search: 'missing')), isEmpty);
+  });
+
   test('layaway reserves stock, records deposits and completes once', () async {
     final dir = await Directory.systemTemp.createTemp('phase85-layaway-');
     final db = AppDatabase.forTesting(NativeDatabase.memory());

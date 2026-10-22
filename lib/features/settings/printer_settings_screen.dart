@@ -4,6 +4,10 @@ import '../../data/daos/printer_settings_repository.dart';
 import '../../hardware/printer/receipt_printer.dart';
 import '../../hardware/printer/device_transports.dart';
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+import '../../core/services/business_logo_store.dart';
+import '../../shared/theme/theme_mode_controller.dart';
+import '../../shared/widgets/app_workspace.dart';
 
 class PrinterSettingsScreen extends StatefulWidget {
   final PrinterSettingsStore store;
@@ -34,9 +38,13 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
   String deviceName = '';
   List<PrinterDevice> discovered = [];
   String? message;
+  File? logo;
   @override
   void initState() {
     super.initState();
+    BusinessLogoStore().load().then((file) {
+      if (mounted) setState(() => logo = file);
+    });
     widget.store.load().then((s) {
       if (!mounted) return;
       setState(() {
@@ -130,6 +138,28 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
     }
   }
 
+  Future<void> chooseLogo() async {
+    final result = await FilePicker.pickFiles(
+        type: FileType.custom, allowedExtensions: ['png', 'jpg', 'jpeg']);
+    final path = result.isEmpty ? null : result.single.path;
+    if (path == null) return;
+    try {
+      final file = await BusinessLogoStore().save(path);
+      if (mounted) AppThemeController.maybeOf(context)?.setLogoPath(file.path);
+      if (mounted) {
+        setState(() {
+          logo = file;
+          message = 'Business logo saved.';
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() =>
+            message = 'Could not save this logo. Choose a PNG or JPEG image.');
+      }
+    }
+  }
+
   Future<void> test() async {
     final settings = values();
     if (settings == null) return;
@@ -152,101 +182,143 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Printer & Receipt')),
-        body: ListView(padding: const EdgeInsets.all(16), children: [
-          const Text(
-              'ESC/POS printer. LAN uses raw TCP; USB requires a Windows printer driver; Bluetooth requires a paired Android printer.'),
-          const SizedBox(height: 16),
-          Text('Receipt identity',
-              style: Theme.of(context).textTheme.titleLarge),
-          TextField(
-              controller: storeName,
-              decoration: const InputDecoration(labelText: 'Store name')),
-          TextField(
-              controller: storeAddress,
-              decoration:
-                  const InputDecoration(labelText: 'Store address (optional)')),
-          TextField(
-              controller: storeContact,
-              decoration:
-                  const InputDecoration(labelText: 'Store contact (optional)')),
-          TextField(
-              controller: receiptHeader,
-              decoration: const InputDecoration(
-                  labelText: 'Receipt header (optional)')),
-          TextField(
-              controller: receiptFooter,
-              decoration: const InputDecoration(
-                  labelText: 'Receipt footer (optional)')),
-          const SizedBox(height: 20),
-          Text('Printer', style: Theme.of(context).textTheme.titleLarge),
-          SwitchListTile(
-              title: const Text('Enable printer'),
-              value: enabled,
-              onChanged: (v) => setState(() => enabled = v)),
-          DropdownButtonFormField<PrinterConnection>(
-              key: ValueKey(connection),
-              initialValue: connection,
-              decoration: const InputDecoration(labelText: 'Transport'),
-              items: [
-                const DropdownMenuItem(
-                    value: PrinterConnection.lan, child: Text('LAN / raw TCP')),
-                DropdownMenuItem(
-                    value: PrinterConnection.usb,
-                    child: Text(Platform.isWindows
-                        ? 'USB printer'
-                        : 'USB (unsupported here)')),
-                DropdownMenuItem(
-                    value: PrinterConnection.bluetooth,
-                    child: Text(Platform.isAndroid
-                        ? 'Bluetooth printer'
-                        : 'Bluetooth (unsupported here)')),
-              ],
-              onChanged: (value) => setState(() {
-                    connection = value ?? PrinterConnection.lan;
-                    deviceId = '';
-                    deviceName = '';
-                    discovered = [];
-                  })),
-          if (connection == PrinterConnection.lan) ...[
-            TextField(
-                controller: host,
-                decoration: const InputDecoration(
-                    labelText: 'Printer IP address or host')),
-            TextField(
-                controller: port,
-                keyboardType: TextInputType.number,
-                decoration:
-                    const InputDecoration(labelText: 'Port (usually 9100)')),
-          ] else ...[
-            Text('Selected: ${deviceName.isEmpty ? 'None' : deviceName}'),
-            OutlinedButton(
-                onPressed: discover, child: const Text('Find printers')),
-            for (final device in discovered)
-              ListTile(
-                  title: Text(device.name),
-                  subtitle: Text(device.id),
-                  onTap: () => setState(() {
-                        deviceId = device.id;
-                        deviceName = device.name;
-                        message = null;
+        body: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 860),
+            child: ListView(padding: const EdgeInsets.all(24), children: [
+              const AppPageHeader(
+                title: 'Printer & Receipt',
+                subtitle:
+                    'Configure receipt identity, printer, and cash drawer.',
+              ),
+              const Text(
+                  'ESC/POS printer. LAN uses raw TCP; USB requires a Windows printer driver; Bluetooth requires a paired Android printer.'),
+              const SizedBox(height: 24),
+              Text('Receipt identity',
+                  style: Theme.of(context).textTheme.titleLarge),
+              TextField(
+                  controller: storeName,
+                  decoration: const InputDecoration(labelText: 'Store name')),
+              const SizedBox(height: 12),
+              Text('Business branding',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Row(children: [
+                SizedBox(
+                    width: 76,
+                    height: 64,
+                    child: logo == null
+                        ? const Icon(Icons.storefront_outlined, size: 36)
+                        : Image.file(logo!,
+                            fit: BoxFit.contain,
+                            errorBuilder: (_, __, ___) => const Icon(
+                                Icons.storefront_outlined,
+                                size: 36))),
+                const SizedBox(width: 12),
+                OutlinedButton(
+                    onPressed: chooseLogo, child: const Text('Choose logo')),
+                if (logo != null)
+                  TextButton(
+                      onPressed: () async {
+                        await BusinessLogoStore().remove();
+                        if (context.mounted) {
+                          AppThemeController.maybeOf(context)
+                              ?.setLogoPath(null);
+                        }
+                        if (mounted) setState(() => logo = null);
+                      },
+                      child: const Text('Remove logo')),
+              ]),
+              TextField(
+                  controller: storeAddress,
+                  decoration: const InputDecoration(
+                      labelText: 'Store address (optional)')),
+              TextField(
+                  controller: storeContact,
+                  decoration: const InputDecoration(
+                      labelText: 'Store contact (optional)')),
+              TextField(
+                  controller: receiptHeader,
+                  decoration: const InputDecoration(
+                      labelText: 'Receipt header (optional)')),
+              TextField(
+                  controller: receiptFooter,
+                  decoration: const InputDecoration(
+                      labelText: 'Receipt footer (optional)')),
+              const SizedBox(height: 20),
+              Text('Printer', style: Theme.of(context).textTheme.titleLarge),
+              SwitchListTile(
+                  title: const Text('Enable printer'),
+                  value: enabled,
+                  onChanged: (v) => setState(() => enabled = v)),
+              DropdownButtonFormField<PrinterConnection>(
+                  key: ValueKey(connection),
+                  initialValue: connection,
+                  decoration: const InputDecoration(labelText: 'Transport'),
+                  items: [
+                    const DropdownMenuItem(
+                        value: PrinterConnection.lan,
+                        child: Text('LAN / raw TCP')),
+                    DropdownMenuItem(
+                        value: PrinterConnection.usb,
+                        child: Text(Platform.isWindows
+                            ? 'USB printer'
+                            : 'USB (unsupported here)')),
+                    DropdownMenuItem(
+                        value: PrinterConnection.bluetooth,
+                        child: Text(Platform.isAndroid
+                            ? 'Bluetooth printer'
+                            : 'Bluetooth (unsupported here)')),
+                  ],
+                  onChanged: (value) => setState(() {
+                        connection = value ?? PrinterConnection.lan;
+                        deviceId = '';
+                        deviceName = '';
+                        discovered = [];
                       })),
-          ],
-          DropdownButtonFormField<int>(
-              initialValue: width,
-              decoration: const InputDecoration(labelText: 'Paper width'),
-              items: const [
-                DropdownMenuItem(value: 58, child: Text('58 mm')),
-                DropdownMenuItem(value: 80, child: Text('80 mm'))
+              if (connection == PrinterConnection.lan) ...[
+                TextField(
+                    controller: host,
+                    decoration: const InputDecoration(
+                        labelText: 'Printer IP address or host')),
+                TextField(
+                    controller: port,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                        labelText: 'Port (usually 9100)')),
+              ] else ...[
+                Text('Selected: ${deviceName.isEmpty ? 'None' : deviceName}'),
+                OutlinedButton(
+                    onPressed: discover, child: const Text('Find printers')),
+                for (final device in discovered)
+                  ListTile(
+                      title: Text(device.name),
+                      subtitle: Text(device.id),
+                      onTap: () => setState(() {
+                            deviceId = device.id;
+                            deviceName = device.name;
+                            message = null;
+                          })),
               ],
-              onChanged: (v) => setState(() => width = v ?? 80)),
-          SwitchListTile(
-              title: const Text('Cash drawer through printer'),
-              value: drawer,
-              onChanged: (v) => setState(() => drawer = v)),
-          if (message != null) Text(message!),
-          FilledButton(onPressed: save, child: const Text('Save')),
-          OutlinedButton(onPressed: test, child: const Text('Test printer')),
-        ]),
+              DropdownButtonFormField<int>(
+                  initialValue: width,
+                  decoration: const InputDecoration(labelText: 'Paper width'),
+                  items: const [
+                    DropdownMenuItem(value: 58, child: Text('58 mm')),
+                    DropdownMenuItem(value: 80, child: Text('80 mm'))
+                  ],
+                  onChanged: (v) => setState(() => width = v ?? 80)),
+              SwitchListTile(
+                  title: const Text('Cash drawer through printer'),
+                  value: drawer,
+                  onChanged: (v) => setState(() => drawer = v)),
+              if (message != null) Text(message!),
+              FilledButton(onPressed: save, child: const Text('Save')),
+              OutlinedButton(
+                  onPressed: test, child: const Text('Test printer')),
+            ]),
+          ),
+        ),
       );
 }

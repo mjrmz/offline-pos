@@ -1,6 +1,7 @@
 import 'package:bcrypt/bcrypt.dart';
 import '../models/active_user.dart';
 import '../../data/daos/auth_repository.dart';
+import '../../data/daos/role_repository.dart';
 
 class AuthService {
   static const maxAttempts = 5;
@@ -11,11 +12,46 @@ class AuthService {
   ActiveUser? get current => _current;
   AuthService(this.repository, {DateTime Function()? clock})
       : now = clock ?? DateTime.now;
+  RoleRepository get roles => RoleRepository(repository.db);
+  Future<void> refreshCurrent() async {
+    if (_current != null) {
+      _current = await repository.requireActive(_current!.id);
+    }
+  }
+
   ActiveUser requireSession(PosPermission permission) {
     final user = _current;
     if (user == null) throw StateError('Please log in');
+    if (PermissionRegistry.byKey[permission.name]?.ownerOnly == true &&
+        user.role != UserRole.owner) {
+      throw StateError('Owner access required');
+    }
     user.require(permission);
     return user;
+  }
+
+  Future<ActiveUser> authorizeDiscount(String userId, String password) async {
+    requireSession(PosPermission.sell);
+    final row = await repository.user(userId);
+    if (row == null ||
+        !row.isActive ||
+        !(await repository.requireActive(row.id))
+            .can(PosPermission.approveDiscount) ||
+        (row.lockedUntil != null && now().isBefore(row.lockedUntil!))) {
+      await repository.audit(
+          current?.id, 'manual_discount.authorization_failed');
+      throw StateError('Manager authorization failed');
+    }
+    if (!_matches(password, row.passwordHash)) {
+      final attempts = row.failedAttempts + 1;
+      await repository.failed(row.id, attempts,
+          attempts >= maxAttempts ? now().add(lockDuration) : null);
+      await repository.audit(
+          current?.id, 'manual_discount.authorization_failed');
+      throw StateError('Manager authorization failed');
+    }
+    await repository.discountCredentialSucceeded(userId);
+    return repository.requireActive(userId);
   }
 
   String _hash(String value) =>
@@ -131,12 +167,70 @@ class AuthService {
     } else {
       _password(credential);
     }
-    await repository.requireActive(current!.id);
+    (await repository.requireActive(current!.id))
+        .require(PosPermission.manageUsers);
     return repository.createUser(
         actorId: current!.id,
         name: name.trim(),
         role: role,
         hash: _hash(credential));
+  }
+
+  Future<String> createUserWithRole(
+      String name, String roleCode, String password) async {
+    requireSession(PosPermission.manageUsers);
+    if (name.trim().isEmpty) throw StateError('Enter a name');
+    _password(password);
+    (await repository.requireActive(current!.id))
+        .require(PosPermission.manageUsers);
+    return repository.createUserWithRole(
+        actorId: current!.id,
+        name: name.trim(),
+        roleCode: roleCode,
+        hash: _hash(password));
+  }
+
+  Future<void> changeRoleTo(
+      String userId, String roleCode, String password) async {
+    requireSession(PosPermission.manageUsers);
+    if (userId == current?.id) throw StateError('Cannot change your own role');
+    if (userId == 'phase2-local-cashier') {
+      throw StateError('Historical account cannot be changed');
+    }
+    _password(password);
+    (await repository.requireActive(current!.id))
+        .require(PosPermission.manageUsers);
+    await repository.changeRoleTo(
+        current!.id, userId, roleCode, _hash(password));
+  }
+
+  Future<String> createRole(
+      String name, String description, Set<PosPermission> permissions,
+      {String? duplicatedFrom}) async {
+    requireSession(PosPermission.manageRoles);
+    if (current!.role != UserRole.owner) {
+      throw StateError('Only an Owner can manage roles');
+    }
+    return roles.create(current!.id, name, description, permissions,
+        duplicatedFrom: duplicatedFrom);
+  }
+
+  Future<void> updateRole(String code, String name, String description,
+      Set<PosPermission> permissions) async {
+    requireSession(PosPermission.manageRoles);
+    if (current!.role != UserRole.owner) {
+      throw StateError('Only an Owner can manage roles');
+    }
+    await roles.update(current!.id, code, name, description, permissions);
+    await refreshCurrent();
+  }
+
+  Future<void> deleteRole(String code) async {
+    requireSession(PosPermission.manageRoles);
+    if (current!.role != UserRole.owner) {
+      throw StateError('Only an Owner can manage roles');
+    }
+    await roles.delete(current!.id, code);
   }
 
   Future<void> setActive(String userId, bool active) async {
@@ -147,8 +241,37 @@ class AuthService {
     if (userId == 'phase2-local-cashier') {
       throw StateError('Historical account cannot be changed');
     }
-    await repository.requireActive(current!.id);
+    (await repository.requireActive(current!.id))
+        .require(PosPermission.manageUsers);
     await repository.setActive(current!.id, userId, active);
+  }
+
+  Future<void> editUser(String userId, String name) async {
+    requireSession(PosPermission.manageUsers);
+    if (name.trim().isEmpty) throw StateError('Name is required');
+    (await repository.requireActive(current!.id))
+        .require(PosPermission.manageUsers);
+    final target = await repository.user(userId);
+    if (target == null) throw StateError('User not found');
+    await repository.editUser(current!.id, userId,
+        name: name, roleCode: target.role);
+  }
+
+  Future<void> changeRole(
+      String userId, UserRole role, String credential) async {
+    requireSession(PosPermission.manageUsers);
+    if (userId == current?.id) throw StateError('Cannot change your own role');
+    if (userId == 'phase2-local-cashier') {
+      throw StateError('Historical account cannot be changed');
+    }
+    if (role == UserRole.cashier) {
+      _pin(credential);
+    } else {
+      _password(credential);
+    }
+    (await repository.requireActive(current!.id))
+        .require(PosPermission.manageUsers);
+    await repository.changeRole(current!.id, userId, role, _hash(credential));
   }
 
   Future<void> resetCredential(String userId, String credential) async {
@@ -157,13 +280,15 @@ class AuthService {
     if (row == null || row.id == 'phase2-local-cashier') {
       throw StateError('User not found');
     }
-    final role = UserRole.values.byName(row.role);
+    final role = UserRole.values.where((r) => r.name == row.role).firstOrNull ??
+        UserRole.custom;
     if (role == UserRole.cashier) {
       _pin(credential);
     } else {
       _password(credential);
     }
-    await repository.requireActive(current!.id);
+    (await repository.requireActive(current!.id))
+        .require(PosPermission.manageUsers);
     await repository.setCredential(
         current!.id, userId, role, _hash(credential));
   }

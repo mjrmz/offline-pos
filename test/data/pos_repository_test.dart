@@ -2,10 +2,14 @@ import 'dart:async';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/core/models/cart.dart';
+import 'package:modern_offline_pos/core/models/business_product.dart';
+import 'package:modern_offline_pos/core/models/business_feature.dart';
 import 'package:modern_offline_pos/core/services/sale_service.dart';
 import 'package:modern_offline_pos/core/services/auth_service.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
+import 'package:modern_offline_pos/data/daos/business_feature_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
+import 'package:modern_offline_pos/core/models/manual_discount.dart';
 import 'package:modern_offline_pos/data/database.dart';
 
 void main() {
@@ -22,10 +26,31 @@ void main() {
   });
   tearDown(() => db.close());
 
+  test('configured lines of one product persist as separate sale items',
+      () async {
+    await BusinessFeatureRepository(db)
+        .setEnabled(BusinessFeature.tankDepositExchange, true, auth.current!);
+    final id = await repo.saveProduct(
+        name: 'LPG',
+        priceCents: 10000,
+        costCents: 5000,
+        startingStock: 3,
+        business: const BusinessProduct(tank: true, depositCents: 5000));
+    final product = (await repo.products()).single;
+    final cart = Cart()
+      ..addSpecial(product, 1000, mode: 'exchange')
+      ..addSpecial(product, 1000, mode: 'deposit', extraCents: 5000);
+    final result = await SaleService(repo, auth).checkout(cart, 25000);
+    expect(result.totalCents, 25000);
+    final items = await db.select(db.saleItems).get();
+    expect(items.length, 2);
+    expect(items.map((item) => item.saleMode).toSet(), {'exchange', 'deposit'});
+    expect(await repo.stock(id), 1);
+  });
+
   test('receipts are sequential, unique and immutable after commit', () async {
     await repo.saveProduct(
-        name: 'Receipt item', priceCents: 100, costCents: 0,
-        startingStock: 3);
+        name: 'Receipt item', priceCents: 100, costCents: 0, startingStock: 3);
     final service = SaleService(repo, auth);
     final product = (await repo.products()).single;
     final first = await service.checkout(Cart()..add(product), 100);
@@ -35,11 +60,13 @@ void main() {
         {'POS-000001', 'POS-000002'});
     expect(sales.every((sale) => sale.birInvoiceNumber == null), isTrue);
     await expectLater(
-        db.customStatement("UPDATE sales SET receipt_number='POS-999999' WHERE id=?",
+        db.customStatement(
+            "UPDATE sales SET receipt_number='POS-999999' WHERE id=?",
             [first.saleId]),
         throwsA(isA<Exception>()));
     await expectLater(
-        db.customStatement("UPDATE sales SET receipt_number='POS-000001' WHERE id=?",
+        db.customStatement(
+            "UPDATE sales SET receipt_number='POS-000001' WHERE id=?",
             [second.saleId]),
         throwsA(isA<Exception>()));
   });
@@ -193,9 +220,23 @@ class _DelayedRepository extends PosRepository {
   @override
   Future<CommittedSale> completeCashSale(
       List<SaleLineRequest> items, int cashReceivedCents, String cashierId,
-      {String? quotationId, String? layawayId}) async {
+      {String? quotationId,
+      String? layawayId,
+      String? customerId,
+      int redeemPoints = 0,
+      String? walkInName,
+      String? walkInContact,
+      String? heldReference,
+      ManualDiscount? manualDiscount}) async {
     await gate.future;
     return super.completeCashSale(items, cashReceivedCents, cashierId,
-        quotationId: quotationId, layawayId: layawayId);
+        quotationId: quotationId,
+        layawayId: layawayId,
+        customerId: customerId,
+        redeemPoints: redeemPoints,
+        walkInName: walkInName,
+        walkInContact: walkInContact,
+        heldReference: heldReference,
+        manualDiscount: manualDiscount);
   }
 }

@@ -5,6 +5,37 @@ import 'package:modern_offline_pos/data/database.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'package:modern_offline_pos/backup/backup_service.dart';
 
+// The v3 schema is the common base for these upgrade fixtures. Versions 4 and
+// 5 added columns to existing tables; they did not remove the core POS tables.
+void createLegacySchema(sqlite.Database raw, int version) {
+  raw.execute(
+      'CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_category_id TEXT)');
+  raw.execute(
+      'CREATE TABLE products (id TEXT PRIMARY KEY, sku TEXT, barcode TEXT, category_id TEXT, name TEXT NOT NULL, price_cents INTEGER NOT NULL, cost_cents INTEGER, is_active INTEGER NOT NULL DEFAULT 1, low_stock_threshold INTEGER NOT NULL DEFAULT 5, created_at INTEGER NOT NULL)');
+  raw.execute(
+      'CREATE TABLE inventory (product_id TEXT PRIMARY KEY, quantity INTEGER NOT NULL DEFAULT 0)');
+  raw.execute(
+      'CREATE TABLE inventory_movements (id TEXT PRIMARY KEY, product_id TEXT NOT NULL, quantity_delta INTEGER NOT NULL, reason TEXT NOT NULL, reference_id TEXT, created_at INTEGER NOT NULL)');
+  raw.execute(
+      "CREATE TABLE sales (id TEXT PRIMARY KEY, cashier_id TEXT NOT NULL, total_cents INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'completed', created_at INTEGER NOT NULL)");
+  raw.execute(
+      'CREATE TABLE sale_items (id TEXT PRIMARY KEY, sale_id TEXT NOT NULL, product_id TEXT NOT NULL, quantity INTEGER NOT NULL, unit_price_cents INTEGER NOT NULL, line_total_cents INTEGER NOT NULL DEFAULT 0${version >= 5 ? ', product_name TEXT' : ''})');
+  raw.execute(
+      'CREATE TABLE payments (id TEXT PRIMARY KEY, sale_id TEXT NOT NULL, method TEXT NOT NULL, amount_cents INTEGER NOT NULL)');
+  raw.execute(
+      'CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT NOT NULL, pin_hash TEXT, password_hash TEXT, role TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, failed_attempts INTEGER NOT NULL DEFAULT 0, locked_until INTEGER, recovery_question TEXT, recovery_answer_hash TEXT)');
+  raw.execute(
+      'CREATE TABLE sale_reversals (id TEXT PRIMARY KEY, sale_id TEXT NOT NULL UNIQUE, actor_id TEXT NOT NULL, kind TEXT NOT NULL, amount_cents INTEGER NOT NULL${version >= 4 ? ', stock_restored INTEGER NOT NULL DEFAULT 1' : ''}, created_at INTEGER NOT NULL)');
+  raw.execute(
+      'CREATE TABLE cash_sessions (id TEXT PRIMARY KEY, opened_by_user_id TEXT NOT NULL, starting_cash_cents INTEGER NOT NULL, expected_cash_cents INTEGER, actual_cash_cents INTEGER, opened_at INTEGER NOT NULL, closed_at INTEGER)');
+  raw.execute(
+      'CREATE TABLE audit_logs (id TEXT PRIMARY KEY, user_id TEXT, action TEXT NOT NULL, details TEXT, created_at INTEGER NOT NULL)');
+  raw.execute(
+      "INSERT INTO users (id, name, role) VALUES ('u1', 'Owner', 'owner')");
+  raw.execute(
+      "INSERT INTO products (id, name, price_cents, created_at) VALUES ('p1', 'Legacy', 400, 0)");
+}
+
 void main() {
   test('v1 to v7 preserves historic sale, stock, cash session and audit',
       () async {
@@ -146,9 +177,11 @@ void main() {
     final dir = await Directory.systemTemp.createTemp('pos-migration-');
     final file = File('${dir.path}/phase4.sqlite');
     final raw = sqlite.sqlite3.open(file.path);
-    raw.execute(
-        'CREATE TABLE sales (id TEXT PRIMARY KEY, cashier_id TEXT NOT NULL, total_cents INTEGER NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL)');
+    createLegacySchema(raw, 5);
     raw.execute("INSERT INTO sales VALUES ('s1', 'u1', 1200, 'completed', 0)");
+    raw.execute(
+        "INSERT INTO sale_items (id, sale_id, product_id, quantity, unit_price_cents, line_total_cents, product_name) VALUES ('si1', 's1', 'p1', 3, 400, 1200, 'Legacy')");
+    raw.execute("INSERT INTO payments VALUES ('pay1', 's1', 'cash', 1200)");
     raw.execute('PRAGMA user_version = 5');
     raw.dispose();
     final db = AppDatabase.forTesting(NativeDatabase(file));
@@ -164,14 +197,11 @@ void main() {
     final dir = await Directory.systemTemp.createTemp('pos-migration-');
     final file = File('${dir.path}/legacy.sqlite');
     final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('CREATE TABLE sale_reversals (id TEXT PRIMARY KEY, '
-        'sale_id TEXT NOT NULL UNIQUE, actor_id TEXT NOT NULL, '
-        'kind TEXT NOT NULL, amount_cents INTEGER NOT NULL, '
-        'created_at INTEGER NOT NULL)');
+    createLegacySchema(raw, 3);
+    raw.execute("INSERT INTO sales VALUES ('s1', 'u1', 4000, 'refunded', 0)");
     raw.execute(
-        'CREATE TABLE products (id TEXT PRIMARY KEY, name TEXT NOT NULL)');
-    raw.execute(
-        'CREATE TABLE sale_items (id TEXT PRIMARY KEY, product_id TEXT NOT NULL)');
+        "INSERT INTO sale_items (id, sale_id, product_id, quantity, unit_price_cents, line_total_cents) VALUES ('si1', 's1', 'p1', 10, 400, 4000)");
+    raw.execute("INSERT INTO payments VALUES ('pay1', 's1', 'cash', 4000)");
     raw.execute("INSERT INTO sale_reversals VALUES "
         "('r1', 's1', 'u1', 'refund', 4000, 0)");
     raw.execute('PRAGMA user_version = 3');

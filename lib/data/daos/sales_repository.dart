@@ -5,6 +5,7 @@ import '../../core/models/quantity.dart';
 import 'business_feature_repository.dart';
 import 'auth_repository.dart';
 import 'customer_credit_repository.dart';
+import 'loyalty_repository.dart';
 
 class SaleSummary {
   final Sale sale;
@@ -83,7 +84,15 @@ class SalesRepository {
       WHERE LOWER(si.product_name) LIKE ? OR LOWER(COALESCE(p.sku, '')) LIKE ?
         OR LOWER(COALESCE(p.barcode, '')) LIKE ?
         OR LOWER(COALESCE(su.serial_number, '')) LIKE ?
-    ''', variables: List.generate(4, (_) => Variable.withString(term))).get();
+      UNION SELECT original_sale_id AS sale_id FROM sale_returns
+        WHERE LOWER(reference) LIKE ?
+      UNION SELECT sale_id FROM rma_cases
+        WHERE sale_id IS NOT NULL AND LOWER(reference) LIKE ?
+      UNION SELECT s.id AS sale_id FROM sales s
+        LEFT JOIN customers c ON c.id=s.customer_id
+        WHERE LOWER(COALESCE(c.phone,'')) LIKE ?
+          OR LOWER(COALESCE(s.walk_in_contact,'')) LIKE ?
+    ''', variables: List.generate(8, (_) => Variable.withString(term))).get();
     return matches.map((row) => row.read<String>('sale_id')).toSet();
   }
 
@@ -127,13 +136,18 @@ class SalesRepository {
         .get();
     final priorMilli =
         priorRows.fold<int>(0, (sum, row) => sum + row.quantityMilli);
+    final commercialPrior = await db.customSelect(
+        'SELECT COALESCE(SUM(quantity_milli),0) AS qty FROM sale_return_lines WHERE sale_item_id=?',
+        variables: [Variable.withString(item.id)]).getSingle();
+    final alreadyReversedMilli = priorMilli + commercialPrior.read<int>('qty');
     if (claim.quantityMilli <= 0 ||
-        priorMilli + claim.quantityMilli > totalMilli) {
+        alreadyReversedMilli + claim.quantityMilli > totalMilli) {
       throw StateError('Refund exceeds original item quantity');
     }
-    final itemBefore = item.lineTotalCents * priorMilli ~/ totalMilli;
-    final itemAfter =
-        item.lineTotalCents * (priorMilli + claim.quantityMilli) ~/ totalMilli;
+    final itemBefore = item.lineTotalCents * alreadyReversedMilli ~/ totalMilli;
+    final itemAfter = item.lineTotalCents *
+        (alreadyReversedMilli + claim.quantityMilli) ~/
+        totalMilli;
     final amount = itemAfter - itemBefore;
     if (amount <= 0) throw StateError('Refund amount must be positive');
     final payments = await (db.select(db.payments)
@@ -278,13 +292,14 @@ class SalesRepository {
 
   Future<List<SaleSummary>> history(ActiveUser actor) async {
     final live = await _actor(actor);
+    live.require(PosPermission.viewOwnSales);
     final rows = await (db.select(db.sales)
           ..orderBy([
             (s) =>
                 OrderingTerm(expression: s.createdAt, mode: OrderingMode.desc)
           ]))
         .get();
-    final visible = live.role == UserRole.cashier
+    final visible = !live.can(PosPermission.viewAllSales)
         ? rows.where((s) => s.cashierId == live.id)
         : rows;
     final users = {
@@ -307,7 +322,9 @@ class SalesRepository {
               ? 'mixed'
               : payment.firstOrNull?.method ?? 'unknown',
           sale.customerId == null
-              ? 'Walk-in'
+              ? (sale.walkInName?.trim().isNotEmpty == true
+                  ? sale.walkInName!
+                  : 'Walk-in / Anonymous')
               : customers[sale.customerId] ?? 'Unknown customer'));
     }
     return result;
@@ -387,6 +404,13 @@ class SalesRepository {
           throw StateError(
               'Sale has item refunds; full reversal is unavailable');
         }
+        if ((await db.customSelect(
+                'SELECT 1 FROM sale_returns WHERE original_sale_id=? LIMIT 1',
+                variables: [Variable.withString(saleId)]).get())
+            .isNotEmpty) {
+          throw StateError(
+              'Sale has item returns; full reversal is unavailable');
+        }
         if (kind == 'void' && !stockRestored) {
           throw StateError('Voids must restore stock');
         }
@@ -423,6 +447,18 @@ class SalesRepository {
                   (s) => s.id.equals(saleId) & s.status.equals('completed')))
             .write(SalesCompanion(status: Value(newStatus)));
         if (count != 1) throw StateError('Sale already voided or refunded');
+        final reward = await db.customSelect(
+            'SELECT * FROM sale_loyalty WHERE sale_id=?',
+            variables: [Variable.withString(saleId)]).getSingleOrNull();
+        if (reward != null) {
+          final earned = reward.read<int>('earned_points');
+          await LoyaltyRepository(db).append(
+              reward.read<String>('customer_id'), 'sale_reversal', -earned,
+              sourceId: saleId, actorId: live.id, reason: kind);
+          await LoyaltyRepository(db).append(reward.read<String>('customer_id'),
+              'sale_restore', reward.read<int>('redeemed_points'),
+              sourceId: saleId, actorId: live.id, reason: kind);
+        }
         final reversal = await db.into(db.saleReversals).insertReturning(
             SaleReversalsCompanion.insert(
                 saleId: saleId,
@@ -579,6 +615,13 @@ class SalesRepository {
     final itemRefunds = (await db.select(db.saleItemRefunds).get())
         .where((r) => !r.createdAt.isBefore(start) && r.createdAt.isBefore(end))
         .fold<int>(0, (sum, r) => sum + r.amountCents);
+    final commercial = await db
+        .customSelect('''SELECT COALESCE(SUM(refund_value_cents),0) AS amount
+      FROM sale_returns WHERE created_at>=? AND created_at<?''', variables: [
+      Variable.withInt(start.millisecondsSinceEpoch),
+      Variable.withInt(end.millisecondsSinceEpoch)
+    ]).getSingle();
+    final commercialRefunds = commercial.read<int>('amount');
     final breakdown = <String, int>{};
     for (final sale in completed) {
       final payments = await (db.select(db.payments)
@@ -616,8 +659,8 @@ class SalesRepository {
         start,
         completed.length,
         gross,
-        gross - net + itemRefunds,
-        net - itemRefunds,
+        gross - net + itemRefunds + commercialRefunds,
+        net - itemRefunds - commercialRefunds,
         breakdown,
         low,
         lowDetails);

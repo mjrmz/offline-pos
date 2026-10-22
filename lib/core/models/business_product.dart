@@ -45,7 +45,7 @@ class BusinessProduct {
     if (weight && unit != SaleUnit.kilogram && unit != SaleUnit.gram) {
       throw ArgumentError('Weight products must use kg or g');
     }
-    if ((weight || refill || tank) && priceCents <= 0) {
+    if ((refill || tank) && priceCents <= 0) {
       throw ArgumentError('Specialty price must be positive');
     }
     if (containerPriceCents < 0 || depositCents < 0) {
@@ -53,6 +53,10 @@ class BusinessProduct {
     }
     if (refill && tank) {
       throw ArgumentError('Refill and tank modes cannot overlap');
+    }
+    if (weight && (refill || tank || madeToOrder)) {
+      throw ArgumentError(
+          'Weight cannot overlap refill, LPG, or made-to-order');
     }
     if ((refill || tank) && unit.fractional) {
       throw ArgumentError('Refill and tank quantities must be whole');

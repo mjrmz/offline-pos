@@ -23,9 +23,97 @@ class LayawayRepository {
 
   Future<List<Layaway>> history() => (db.select(db.layaways)
         ..orderBy([
-          (l) => OrderingTerm(expression: l.createdAt, mode: OrderingMode.desc)
+          (l) => OrderingTerm(expression: l.createdAt, mode: OrderingMode.desc),
+          (l) => OrderingTerm(expression: l.id, mode: OrderingMode.desc)
         ]))
       .get();
+
+  Future<List<Layaway>> page(
+      {int page = 0,
+      int pageSize = 50,
+      String search = '',
+      String status = 'all'}) async {
+    final query = db.select(db.layaways).join([
+      innerJoin(
+          db.customers, db.customers.id.equalsExp(db.layaways.customerId)),
+    ]);
+    if (status != 'all') {
+      query.where(db.layaways.status.equals(status));
+    }
+    final term = search.trim();
+    if (term.isNotEmpty) {
+      final pattern = '%${term.replaceAll('%', r'\%').replaceAll('_', r'\_')}%';
+      query.where(db.layaways.reference.like(pattern) |
+          db.customers.name.like(pattern));
+    }
+    query.orderBy([
+      OrderingTerm(expression: db.layaways.createdAt, mode: OrderingMode.desc),
+      OrderingTerm(expression: db.layaways.id, mode: OrderingMode.desc),
+    ]);
+    query.limit(pageSize + 1, offset: page * pageSize);
+    return (await query.get())
+        .map((row) => row.readTable(db.layaways))
+        .toList();
+  }
+
+  Future<int> countPage({String search = '', String status = 'all'}) async {
+    final query = db.selectOnly(db.layaways).join([
+      innerJoin(db.customers, db.customers.id.equalsExp(db.layaways.customerId)),
+    ]);
+    if (status != 'all') query.where(db.layaways.status.equals(status));
+    final term = search.trim();
+    if (term.isNotEmpty) {
+      final pattern = '%${term.replaceAll('%', r'\%').replaceAll('_', r'\_')}%';
+      query.where(db.layaways.reference.like(pattern) |
+          db.customers.name.like(pattern));
+    }
+    final count = db.layaways.id.count();
+    query.addColumns([count]);
+    final result = await query.getSingle();
+    return result.read(count) ?? 0;
+  }
+
+  Future<Map<String, int>> balancesFor(Iterable<String> ids) async {
+    final idList = ids.toList();
+    if (idList.isEmpty) return {};
+    final payments = await (db.select(db.layawayPayments)
+          ..where((p) => p.layawayId.isIn(idList)))
+        .get();
+    final paid = <String, int>{};
+    for (final payment in payments) {
+      paid.update(payment.layawayId, (value) => value + payment.amountCents,
+          ifAbsent: () => payment.amountCents);
+    }
+    return paid;
+  }
+
+  Future<Map<String, int>> overview() async {
+    final results = await db.customSelect('''
+      SELECT l.status, COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN l.status = 'active'
+          THEN l.total_cents - COALESCE(p.paid, 0) ELSE 0 END), 0) AS outstanding
+      FROM layaways l
+      LEFT JOIN (
+        SELECT layaway_id, SUM(amount_cents) AS paid
+        FROM layaway_payments GROUP BY layaway_id
+      ) p ON p.layaway_id = l.id
+      GROUP BY l.status
+    ''', readsFrom: {db.layaways, db.layawayPayments}).get();
+    final values = <String, int>{
+      'active': 0,
+      'completed': 0,
+      'cancelled': 0,
+      'outstanding': 0
+    };
+    for (final row in results) {
+      final status = row.read<String>('status');
+      values[status] = row.read<int>('total');
+      values['outstanding'] =
+          values['outstanding']! + row.read<int>('outstanding');
+    }
+    return values;
+  }
+
   Future<List<LayawayItem>> items(String id) =>
       (db.select(db.layawayItems)..where((i) => i.layawayId.equals(id))).get();
   Future<List<LayawayPayment>> payments(String id) =>

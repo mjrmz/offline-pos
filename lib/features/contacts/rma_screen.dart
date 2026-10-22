@@ -8,6 +8,7 @@ import '../../data/daos/sales_repository.dart';
 import '../../data/database.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/utils/money.dart';
+import '../../shared/widgets/app_workspace.dart';
 import 'rma_detail_page.dart';
 import 'new_customer_rma_page.dart';
 import 'new_supplier_rma_page.dart';
@@ -45,6 +46,7 @@ class _RmaScreenState extends State<RmaScreen> {
   String origin = 'customer';
   String filter = 'All';
   String searchText = '';
+  int listPage = 0;
   final searchController = TextEditingController();
 
   @override
@@ -1271,58 +1273,38 @@ class _RmaScreenState extends State<RmaScreen> {
         ('Resolved', 'Resolved'),
       ],
     ];
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      key: const ValueKey('rma-status-strip'),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Wrap(spacing: 4, runSpacing: 2, children: [
-        for (final metric in metrics)
-          TextButton(
-            onPressed: metric.$2 == 'Open'
-                ? () => setState(() => filter = 'All')
-                : () => setState(() => filter = metric.$2),
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-              minimumSize: const Size(0, 36),
-              backgroundColor: filter == metric.$2 && metric.$2 != 'Open'
-                  ? scheme.primaryContainer
-                  : null,
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        key: const ValueKey('rma-status-strip'),
+        children: [
+          for (final metric in metrics) ...[
+            if (metric != metrics.first) const SizedBox(width: 10),
+            AppMetricTile(
+              width: 160,
+              label: metric.$1,
+              value: '${rows.where((row) => row.origin == origin && (metric.$2 == 'Open' ? !{
+                  'Completed',
+                  'Resolved',
+                  'Rejected',
+                  'Cancelled',
+                  'Rejected / Cancelled',
+                  'Legacy'
+                }.contains(stages[row.id]) : stages[row.id] == metric.$2)).length}',
+              onTap: metric.$2 == 'Open'
+                  ? () => setState(() => filter = 'All')
+                  : () => setState(() => filter = metric.$2),
             ),
-            child: Text.rich(TextSpan(children: [
-              TextSpan(
-                  text:
-                      '${rows.where((row) => row.origin == origin && (metric.$2 == 'Open' ? !{
-                          'Completed',
-                          'Resolved',
-                          'Rejected',
-                          'Cancelled',
-                          'Rejected / Cancelled',
-                          'Legacy'
-                        }.contains(stages[row.id]) : stages[row.id] == metric.$2)).length}  ',
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w700, fontSize: 17)),
-              TextSpan(text: metric.$1, style: const TextStyle(fontSize: 12)),
-            ])),
-          ),
-      ]),
+          ],
+        ],
+      ),
     );
   }
 
   Widget queueRow(BuildContext context, RmaCase row) {
     final stage = stages[row.id] ?? 'Loading';
-    final legacy = stage == 'Legacy';
     final supplier = row.origin == 'inbound';
-    final source = supplier
-        ? linkedReferences[row.id] != null
-            ? 'Linked ${linkedReferences[row.id]}'
-            : 'Source · ${receivingReferences[row.id] ?? 'Inventory / Receiving'}'
-        : null;
     final scheme = Theme.of(context).colorScheme;
-    final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
     final done = {
       'Completed',
       'Resolved',
@@ -1331,145 +1313,104 @@ class _RmaScreenState extends State<RmaScreen> {
       'Rejected / Cancelled'
     }.contains(stage);
     final waiting = stage == 'Awaiting supplier';
-    final badgeColor = done
-        ? scheme.surfaceContainerHighest
-        : waiting
-            ? scheme.secondaryContainer
-            : scheme.primaryContainer;
-    final badgeText = done
-        ? scheme.onSurfaceVariant
-        : waiting
-            ? scheme.onSecondaryContainer
-            : scheme.onPrimaryContainer;
-    final action = nextActions[row.id] ?? 'Loading';
-    final next = legacy
+    final source = supplier
+        ? linkedReferences[row.id] != null
+            ? 'Linked ${linkedReferences[row.id]}'
+            : 'Source: ${receivingReferences[row.id] ?? 'Inventory / Receiving'}'
+        : receiptLabels[row.id];
+    final next = stage == 'Legacy'
         ? 'Detailed physical history unavailable'
         : waiting
             ? 'Waiting on supplier'
-            : 'Next · $action';
-    Widget badge() => Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-              color: badgeColor, borderRadius: BorderRadius.circular(6)),
-          child: Text(stage,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  color: badgeText, fontSize: 11, fontWeight: FontWeight.w600)),
-        );
-    Widget twoLines(String first, String? second, {bool strong = false}) =>
-        Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(first,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: strong ? 14 : 13,
-                      fontWeight: strong ? FontWeight.w700 : FontWeight.w500,
-                      color:
-                          done ? scheme.onSurfaceVariant : scheme.onSurface)),
-              if (second != null)
-                Text(second,
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: muted),
-            ]);
-    return LayoutBuilder(builder: (context, constraints) {
-      final wide = constraints.maxWidth >= 800;
-      return Padding(
-          padding: const EdgeInsets.only(bottom: 4),
-          child: Material(
-              color: done ? scheme.surfaceContainerLow : scheme.surface,
-              borderRadius: BorderRadius.circular(8),
-              child: InkWell(
-                  key: ValueKey('rma-row-${row.id}'),
-                  borderRadius: BorderRadius.circular(8),
-                  hoverColor: scheme.primary.withValues(alpha: .06),
-                  focusColor: scheme.primary.withValues(alpha: .12),
-                  onTap: () => showCaseDetail(row),
-                  child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      child: wide
-                          ? Row(children: [
-                              Expanded(
-                                  flex: 28,
-                                  child: twoLines(
-                                      row.reference, parties[row.id],
-                                      strong: true)),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                  flex: 27,
-                                  child: twoLines(
-                                      productTitles[row.id] ?? 'Item',
-                                      serialLabels[row.id] == null
-                                          ? null
-                                          : 'Serial ${serialLabels[row.id]}')),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                  flex: 29,
-                                  child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        badge(),
-                                        Text(
-                                            source ??
-                                                receiptLabels[row.id] ??
-                                                '',
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: muted),
-                                        Text(next,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: muted),
-                                      ])),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                  flex: 16,
-                                  child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      children: [
-                                        Text(ageLabel(row), style: muted),
-                                        const SizedBox(width: 6),
-                                        const Icon(Icons.chevron_right,
-                                            size: 18)
-                                      ])),
-                            ])
-                          : Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                  Row(children: [
-                                    Expanded(
-                                        child: twoLines(
-                                            row.reference, parties[row.id],
-                                            strong: true)),
-                                    badge(),
-                                    const Icon(Icons.chevron_right, size: 18),
-                                  ]),
-                                  const SizedBox(height: 3),
-                                  twoLines(
-                                      productTitles[row.id] ?? 'Item',
-                                      serialLabels[row.id] == null
-                                          ? null
-                                          : 'Serial ${serialLabels[row.id]}'),
-                                  if (source != null ||
-                                      receiptLabels[row.id] != null)
-                                    Text(source ?? receiptLabels[row.id]!,
-                                        style: muted,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis),
-                                  Row(children: [
-                                    Expanded(
-                                        child: Text(next,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: muted)),
-                                    Text(ageLabel(row), style: muted)
-                                  ]),
-                                ])))));
-    });
+            : 'Next: ${nextActions[row.id] ?? 'Loading'}';
+    final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 13);
+    final detail = [
+      parties[row.id] ?? (supplier ? 'Supplier' : 'Walk-in customer'),
+      productTitles[row.id] ?? 'Item',
+      if (serialLabels[row.id] != null) 'Serial ${serialLabels[row.id]}',
+    ].join(' · ');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: done ? scheme.surfaceContainerLow : scheme.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          key: ValueKey('rma-row-${row.id}'),
+          onTap: () => showCaseDetail(row),
+          hoverColor: scheme.primary.withValues(alpha: .06),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: LayoutBuilder(builder: (context, constraints) {
+              final narrow = constraints.maxWidth < 600;
+              final summary = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(row.reference,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: scheme.onSurface)),
+                  const SizedBox(height: 3),
+                  Text(detail,
+                      maxLines: narrow ? 2 : 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: muted),
+                  if (source != null)
+                    Text(source,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: muted),
+                ],
+              );
+              final status = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AppSemanticStatusBadge(label: stage),
+                  const SizedBox(height: 4),
+                  Text(next,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: muted),
+                ],
+              );
+              final trailing = Row(mainAxisSize: MainAxisSize.min, children: [
+                Text(ageLabel(row), style: muted),
+                const SizedBox(width: 8),
+                Icon(Icons.chevron_right,
+                    size: 20, color: scheme.onSurfaceVariant),
+              ]);
+              return narrow
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                          summary,
+                          const SizedBox(height: 10),
+                          status,
+                          const SizedBox(height: 6),
+                          Align(
+                              alignment: Alignment.centerRight,
+                              child: trailing),
+                        ])
+                  : Row(children: [
+                      Expanded(flex: 6, child: summary),
+                      const SizedBox(width: 16),
+                      Expanded(flex: 3, child: status),
+                      const SizedBox(width: 8),
+                      trailing,
+                    ]);
+            }),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget moreMenu() => PopupMenuButton<String>(
@@ -1504,189 +1445,210 @@ class _RmaScreenState extends State<RmaScreen> {
                     .toLowerCase()
                     .contains(searchText.trim().toLowerCase())))
         .toList();
-    Widget tab(String value, String label) => Semantics(
-          button: true,
-          selected: origin == value,
-          child: Material(
-            color: origin == value
-                ? Theme.of(context).colorScheme.primaryContainer
-                : Theme.of(context).colorScheme.surfaceContainerLow,
+    final activeWorkspace = origin == 'customer' || origin == 'inbound';
+    final scheme = Theme.of(context).colorScheme;
+    Widget workspace(
+        String value, String title, String subtitle, IconData icon) {
+      final selected = origin == value;
+      return Semantics(
+        button: true,
+        selected: selected,
+        child: Material(
+          color:
+              selected ? scheme.primaryContainer : scheme.surfaceContainerLow,
+          shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(8),
-            child: InkWell(
-              key: ValueKey('workspace-$value'),
-              borderRadius: BorderRadius.circular(8),
-              onTap: () => setState(() {
-                origin = value;
-                filter = 'All';
-              }),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                child: Text(
-                    '$label  ${rows.where((row) => row.origin == value).length}',
-                    style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: origin == value
-                            ? FontWeight.w700
-                            : FontWeight.w500)),
-              ),
+            side: BorderSide(
+                color: selected ? scheme.primary : scheme.outlineVariant),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            key: ValueKey('workspace-$value'),
+            onTap: () => setState(() {
+              origin = value;
+              filter = 'All';
+              listPage = 0;
+            }),
+          child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(children: [
+                Icon(icon,
+                    size: 26,
+                    color: selected ? scheme.primary : scheme.onSurfaceVariant),
+                const SizedBox(width: 8),
+                Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: selected ? scheme.primary : scheme.onSurface,
+                        fontWeight: FontWeight.w700)),
+                    Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall),
+                  ])),
+              ]),
             ),
           ),
-        );
+        ),
+      );
+    }
+
     Widget action() => FilledButton.icon(
           onPressed: () => create(origin),
           icon: const Icon(Icons.add, size: 18),
           label: Text(
               origin == 'customer' ? 'New Customer RMA' : 'New Supplier RMA'),
         );
+    final filters = origin == 'customer'
+        ? const [
+            'All',
+            'Awaiting approval',
+            'Awaiting receipt',
+            'Awaiting inspection',
+            'Awaiting resolution',
+            'Awaiting supplier',
+            'Ready for handoff',
+            'Completed',
+            'Rejected / Cancelled'
+          ]
+        : const [
+            'All',
+            'Ready to send',
+            'Awaiting supplier',
+            'Fulfillment pending',
+            'Resolved',
+            'Requested',
+            'Rejected',
+            'Cancelled'
+          ];
     return Scaffold(
-        appBar: AppBar(title: const Text('RMA / Warranty'), actions: [
-          IconButton(
-              tooltip: 'Refresh RMA queue',
-              onPressed: refresh,
-              icon: const Icon(Icons.refresh))
-        ]),
-        body: Center(
+        body: LayoutBuilder(builder: (context, viewport) =>
+          SingleChildScrollView(
+            physics: viewport.maxWidth < 600 || viewport.maxHeight < 760 || !activeWorkspace
+                ? null : const NeverScrollableScrollPhysics(),
+            child: SizedBox(
+              height: viewport.maxWidth < 600 && viewport.maxHeight < 1700
+                  ? 1700 : viewport.maxHeight < 760
+                      ? 900 : !activeWorkspace && viewport.maxHeight < 850
+                      ? 850 : viewport.maxHeight,
+              child: Center(
             child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 1500),
-                child: ListView(
-                    padding: EdgeInsets.symmetric(
+                child: Padding(padding: EdgeInsets.symmetric(
                         horizontal:
                             MediaQuery.sizeOf(context).width >= 600 ? 20 : 12,
-                        vertical: 8),
+                        vertical: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                          'Manage customer returns, warranties, and supplier recovery.',
-                          style: Theme.of(context).textTheme.bodyMedium),
-                      const SizedBox(height: 8),
-                      LayoutBuilder(
-                          builder: (context, constraints) =>
-                              constraints.maxWidth >= 1000
-                                  ? Row(children: [
-                                      tab('customer', 'Customer RMAs'),
-                                      const SizedBox(width: 8),
-                                      tab('inbound', 'Supplier RMAs'),
-                                      const SizedBox(width: 8),
-                                      moreMenu(),
-                                      const Spacer(),
-                                      if (origin == 'customer' ||
-                                          origin == 'inbound')
-                                        action(),
-                                    ])
-                                  : Wrap(
-                                      crossAxisAlignment:
-                                          WrapCrossAlignment.center,
-                                      spacing: 8,
-                                      runSpacing: 6,
-                                      children: [
-                                          tab('customer', 'Customer RMAs'),
-                                          tab('inbound', 'Supplier RMAs'),
-                                          if (origin == 'customer' ||
-                                              origin == 'inbound')
-                                            action(),
-                                          moreMenu(),
-                                        ])),
-                      const SizedBox(height: 8),
-                      if (origin == 'customer' || origin == 'inbound')
+                      AppPageHeader(
+                        title: 'RMA / Warranty',
+                        subtitle:
+                            'Manage customer returns, warranties, and supplier recovery.',
+                        action: activeWorkspace &&
+                                MediaQuery.sizeOf(context).width >= 600
+                            ? action()
+                            : null,
+                      ),
+                      LayoutBuilder(builder: (context, constraints) {
+                        final cards = [
+                          workspace(
+                              'customer',
+                              'Customer RMA',
+                              'Returns & warranties',
+                              Icons.assignment_return_outlined),
+                          workspace(
+                              'inbound',
+                              'Supplier RMA',
+                              'Supplier recovery & defective stock',
+                              Icons.local_shipping_outlined),
+                        ];
+                        return constraints.maxWidth >= 650
+                            ? Row(children: [
+                                Expanded(child: cards[0]),
+                                const SizedBox(width: 8),
+                                Expanded(child: cards[1]),
+                                const SizedBox(width: 8),
+                                moreMenu(),
+                              ])
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                    cards[0],
+                                    const SizedBox(height: 10),
+                                    cards[1],
+                                    const SizedBox(height: 4),
+                                    moreMenu(),
+                                  ]);
+                      }),
+                      if (activeWorkspace) ...[
+                        const SizedBox(height: 22),
+                        Text(
+                            origin == 'customer'
+                                ? 'Customer RMA'
+                                : 'Supplier RMA',
+                            key: const ValueKey('active-workspace-heading'),
+                            style: Theme.of(context)
+                                .textTheme
+                                .headlineSmall
+                                ?.copyWith(
+                                    fontSize: 25, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 8),
+                        Text(
+                            origin == 'customer'
+                                ? 'Manage customer returns, warranty claims, inspection, resolution, and handoff.'
+                                : 'Manage supplier warranty recovery and defective stock.',
+                            style: Theme.of(context).textTheme.bodyMedium),
+                        const SizedBox(height: 16),
+                        if (MediaQuery.sizeOf(context).width < 600)
+                          Align(
+                              alignment: Alignment.centerLeft, child: action()),
                         metricTiles(context),
-                      const SizedBox(height: 8),
+                        const SizedBox(height: 22),
+                      ],
                       if (error != null)
-                        Text(error!,
-                            style: TextStyle(
-                                color: Theme.of(context).colorScheme.error)),
-                      const SizedBox(height: 4),
-                      if (origin == 'customer' || origin == 'inbound')
-                        SizedBox(
-                            height: 44,
-                            child: TextField(
-                                key: const ValueKey('rma-search'),
-                                controller: searchController,
-                                decoration: InputDecoration(
-                                    hintText:
-                                        'Search RMA, receipt, customer, product, serial...',
-                                    prefixIcon: const Icon(Icons.search),
-                                    filled: true,
-                                    fillColor:
-                                        Theme.of(context).colorScheme.surface,
-                                    contentPadding:
-                                        const EdgeInsets.symmetric(vertical: 8),
-                                    border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                        borderSide: BorderSide.none)),
-                                onChanged: (value) =>
-                                    setState(() => searchText = value))),
-                      const SizedBox(height: 6),
-                      if (origin == 'customer' || origin == 'inbound')
-                        SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(children: [
-                              for (final stage in origin == 'customer'
-                                  ? const [
-                                      'All',
-                                      'Awaiting approval',
-                                      'Awaiting receipt',
-                                      'Awaiting inspection',
-                                      'Awaiting resolution',
-                                      'Awaiting supplier',
-                                      'Ready for handoff',
-                                      'Completed',
-                                    ]
-                                  : const [
-                                      'All',
-                                      'Ready to send',
-                                      'Awaiting supplier',
-                                      'Fulfillment pending',
-                                      'Resolved',
-                                    ])
-                                Padding(
-                                    padding: const EdgeInsets.only(right: 5),
-                                    child: ChoiceChip(
-                                        label: Text(switch (stage) {
-                                          'Awaiting approval' => 'Approval',
-                                          'Awaiting receipt' => 'Receipt',
-                                          'Awaiting inspection' => 'Inspection',
-                                          'Awaiting resolution' => 'Resolution',
-                                          'Awaiting supplier' => 'Supplier',
-                                          'Ready for handoff' => 'Handoff',
-                                          'Ready to send' => 'Ready to send',
-                                          'Fulfillment pending' =>
-                                            'Fulfillment',
-                                          'Resolved' => 'Completed',
-                                          _ => stage,
-                                        }),
-                                        visualDensity: VisualDensity.compact,
-                                        materialTapTargetSize:
-                                            MaterialTapTargetSize.shrinkWrap,
-                                        selected: filter == stage,
-                                        onSelected: (_) =>
-                                            setState(() => filter = stage))),
-                              PopupMenuButton<String>(
-                                tooltip: 'More filters',
-                                onSelected: (value) =>
-                                    setState(() => filter = value),
-                                itemBuilder: (_) => (origin == 'customer'
-                                        ? const [
-                                            'Rejected / Cancelled',
-                                            'Legacy'
-                                          ]
-                                        : const [
-                                            'Requested',
-                                            'Rejected',
-                                            'Cancelled'
-                                          ])
-                                    .map((value) => PopupMenuItem(
-                                        value: value, child: Text(value)))
-                                    .toList(),
-                                child: const Padding(
-                                    padding:
-                                        EdgeInsets.symmetric(horizontal: 8),
-                                    child: Row(children: [
-                                      Text('More filters'),
-                                      Icon(Icons.arrow_drop_down)
-                                    ])),
-                              ),
-                            ])),
-                      const SizedBox(height: 6),
+                        Text(error!, style: TextStyle(color: scheme.error)),
+                      if (activeWorkspace) ...[
+                        AppSearchField(
+                          key: const ValueKey('rma-search'),
+                          controller: searchController,
+                          hintText:
+                              'Search RMA, receipt, customer, product, serial...',
+                          onChanged: (value) =>
+                              setState(() { searchText = value; listPage = 0; }),
+                        ),
+                        const SizedBox(height: 14),
+                        Wrap(spacing: 8, runSpacing: 8, children: [
+                          for (final stage in filters)
+                            ChoiceChip(
+                              label: Text(stage),
+                              selected: filter == stage,
+                              onSelected: (_) => setState(() { filter = stage; listPage = 0; }),
+                            ),
+                          PopupMenuButton<String>(
+                            tooltip: 'More filters',
+                            onSelected: (value) =>
+                                setState(() { filter = value; listPage = 0; }),
+                            itemBuilder: (_) => (origin == 'customer'
+                                    ? const ['Legacy']
+                                    : const <String>[])
+                                .map((value) => PopupMenuItem(
+                                    value: value, child: Text(value)))
+                                .toList(),
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 9),
+                              child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text('More filters'),
+                                    Icon(Icons.arrow_drop_down),
+                                  ]),
+                            ),
+                          ),
+                        ]),
+                        const SizedBox(height: 18),
+                      ],
                       if (origin == 'attention') ...[
                         Text('Customer claims awaiting suppliers',
                             style: Theme.of(context).textTheme.titleMedium),
@@ -1752,37 +1714,20 @@ class _RmaScreenState extends State<RmaScreen> {
                         const Text(
                             'Supplier overdue tracking requires an SLA. No RMA-specific settings are configured.'),
                       ],
-                      if (visible.isEmpty &&
-                          (origin == 'customer' || origin == 'inbound'))
-                        Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                      rows
-                                              .where(
-                                                  (row) => row.origin == origin)
-                                              .isEmpty
-                                          ? origin == 'customer'
-                                              ? 'No Customer RMAs found'
-                                              : 'No Supplier RMAs found'
-                                          : origin == 'customer'
-                                              ? 'No Customer RMAs found'
-                                              : 'No Supplier RMAs found',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleMedium),
-                                  const SizedBox(height: 6),
-                                  Text(rows
-                                          .where((row) => row.origin == origin)
-                                          .isEmpty
-                                      ? origin == 'customer'
-                                          ? 'Customer returns and warranty claims will appear here.'
-                                          : 'Supplier claims from receiving or customer recovery will appear here.'
-                                      : 'Try changing the search or filters.'),
-                                ])),
-                      for (final row in visible) queueRow(context, row),
-                    ]))));
+                      if (activeWorkspace)
+                        Expanded(child: AppPagedListPanel(
+                          key: ValueKey('rma-list-panel-$origin'),
+                          title: origin == 'customer' ? 'Customer RMA' : 'Supplier RMA',
+                          total: visible.length,
+                          count: visible.skip(listPage * 50).take(50).length,
+                          page: listPage,
+                          emptyTitle: origin == 'customer'
+                              ? 'No Customer RMAs found' : 'No Supplier RMAs found',
+                          onPrevious: () => setState(() => listPage--),
+                          onNext: () => setState(() => listPage++),
+                          itemBuilder: (context, index) =>
+                              queueRow(context, visible[listPage * 50 + index]),
+                        )),
+                    ]))))))));
   }
 }

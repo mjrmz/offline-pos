@@ -6,9 +6,9 @@ Repository: `C:\Users\MJ\Desktop\VERTEX\modern-offline-pos`
 
 ```powershell
 & 'C:\Program Files\PostgreSQL\17\bin\pg_ctl.exe' start -D "$env:LOCALAPPDATA\modern-offline-pos-phase6\postgres-data" -l "$env:LOCALAPPDATA\modern-offline-pos-phase6\postgres.log" -o '-h 127.0.0.1 -p 55432'
-```
+```      
 
-Expected: PostgreSQL listens on `127.0.0.1:55432`.
+Expected: PostgreSQL listens on `127.0.0.1:55432`
 
 ## Terminal 2 â€” Start License API
 
@@ -35,14 +35,16 @@ Expected: `http://localhost:5173`.
 
 ## Terminal 4 â€” Start POS
 
-```powershell
+```powershell 
+
 cd C:\Users\MJ\Desktop\VERTEX\modern-offline-pos
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-phase6-windows.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-phase6-windows.ps1
+
 ```
 
 Do **not** normally use `flutter run -d windows`: the licensing dart-defines may be missing.
 
-# 2. Admin login
+# 2. Admin logi
 
 Open `http://localhost:5173`. Username: `admin`. Read the local password with:
 

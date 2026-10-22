@@ -10,6 +10,7 @@ import '../../data/daos/pos_repository.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/widgets/transaction_picker.dart';
+import '../../shared/widgets/app_workspace.dart';
 
 class LayawayScreen extends StatefulWidget {
   final LayawayRepository repository;
@@ -33,6 +34,13 @@ class _LayawayScreenState extends State<LayawayScreen> {
   String? error;
   String query = '';
   String filter = 'all';
+  int page = 0;
+  bool hasNext = false;
+  int resultTotal = 0;
+  bool loading = false;
+  int requestGeneration = 0;
+  Map<String, int> paidById = {};
+  Map<String, int> overview = {};
   @override
   void initState() {
     super.initState();
@@ -40,21 +48,58 @@ class _LayawayScreenState extends State<LayawayScreen> {
   }
 
   Future<void> refresh() async {
+    final generation = ++requestGeneration;
+    if (mounted) setState(() => loading = true);
     try {
-      final next = await widget.repository.history();
+      final next = await widget.repository
+          .page(page: page, search: query, status: filter);
+      final total = await widget.repository.countPage(search: query, status: filter);
+      final paid = await widget.repository.balancesFor(next.map((r) => r.id));
+      final metrics = await widget.repository.overview();
       final directory = await widget.directory.customers();
       final catalog = await widget.products.products();
-      if (mounted) {
+      if (mounted && generation == requestGeneration) {
         setState(() {
-          rows = next;
+          rows = next.take(50).toList();
+          hasNext = next.length > 50;
+          resultTotal = total;
+          paidById = paid;
+          overview = metrics;
           customers = directory.where((c) => c.isActive).toList();
           products = catalog.where((p) => p.isActive).toList();
           error = null;
+          loading = false;
         });
       }
     } catch (failure) {
-      if (mounted) setState(() => error = safeMessage(failure));
+      if (mounted && generation == requestGeneration) {
+        setState(() {
+          error = safeMessage(failure);
+          loading = false;
+        });
+      }
     }
+  }
+
+  void changeFilter(String value) {
+    setState(() {
+      filter = value;
+      page = 0;
+    });
+    refresh();
+  }
+
+  void changeSearch(String value) {
+    setState(() {
+      query = value.toLowerCase();
+      page = 0;
+    });
+    refresh();
+  }
+
+  void changePage(int next) {
+    setState(() => page = next);
+    refresh();
   }
 
   Future<void> create() async {
@@ -659,52 +704,73 @@ class _LayawayScreenState extends State<LayawayScreen> {
       appBar: AppBar(title: const Text('Layaway'), actions: [
         IconButton(onPressed: refresh, icon: const Icon(Icons.refresh))
       ]),
-      body: ListView(padding: const EdgeInsets.all(16), children: [
+      body: LayoutBuilder(builder: (context, viewport) => SingleChildScrollView(
+        physics: viewport.maxWidth < 600 ? null : const NeverScrollableScrollPhysics(),
+        child: SizedBox(
+          height: viewport.maxWidth < 600 && viewport.maxHeight < 1200
+              ? 1200 : viewport.maxHeight,
+          child: Padding(padding: const EdgeInsets.all(24), child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+        AppPageHeader(
+          title: 'Layaway',
+          subtitle: 'Manage reserved purchases and customer payments.',
+          action: FilledButton.icon(
+            onPressed: create,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('New layaway'),
+          ),
+        ),
         if (error != null)
           Text(error!,
               style: TextStyle(color: Theme.of(context).colorScheme.error)),
-        Align(
-            alignment: Alignment.centerLeft,
-            child: FilledButton.icon(
-                onPressed: create,
-                icon: const Icon(Icons.add),
-                label: const Text('New layaway'))),
+        Wrap(spacing: 10, runSpacing: 10, children: [
+          AppMetricTile(
+              label: 'Active', value: '${overview['active'] ?? 0}', width: 175),
+          AppMetricTile(
+              label: 'Outstanding balance',
+              value: formatPeso(overview['outstanding'] ?? 0),
+              width: 215),
+          AppMetricTile(
+              label: 'Completed',
+              value: '${overview['completed'] ?? 0}',
+              width: 175),
+          AppMetricTile(
+              label: 'Cancelled',
+              value: '${overview['cancelled'] ?? 0}',
+              width: 175),
+        ]),
         const SizedBox(height: 16),
-        TextField(
-            decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
-                labelText: 'Search customer or layaway reference',
-                border: OutlineInputBorder()),
-            onChanged: (value) => setState(() => query = value.toLowerCase())),
+        AppSearchField(
+            hintText: 'Search customer or layaway reference',
+            onChanged: changeSearch),
         const SizedBox(height: 12),
         Wrap(spacing: 8, children: [
           for (final status in ['all', 'active', 'completed', 'cancelled'])
-            FilterChip(
-                label: Text(status[0].toUpperCase() + status.substring(1)),
+            AppFilterChip(
+                label: status[0].toUpperCase() + status.substring(1),
                 selected: filter == status,
-                onSelected: (_) => setState(() => filter = status)),
+                onSelected: () => changeFilter(status)),
         ]),
-        if (rows.isEmpty)
-          const Card(
-              child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                      'No layaways yet. Reserve stock for a customer and record a deposit to begin.'))),
-        for (final row in rows)
-          if (filter == 'all' || filter == row.status)
-            if ('${row.reference} ${customers.where((c) => c.id == row.customerId).firstOrNull?.name ?? ''}'
-                .toLowerCase()
-                .contains(query))
-              FutureBuilder<int>(
-                  future: widget.repository.balance(row.id),
-                  builder: (context, snapshot) => ListTile(
-                      onTap: () => showLayaway(row),
-                      title: Text(
-                          'Layaway ${row.reference} · ${customers.where((c) => c.id == row.customerId).firstOrNull?.name ?? 'Customer'}'),
-                      subtitle: Text(
-                          '${MaterialLocalizations.of(context).formatMediumDate(row.createdAt)} · Total ${formatPeso(row.totalCents)} · Paid ${snapshot.hasData ? formatPeso(row.totalCents - snapshot.data!) : '…'} · Balance ${snapshot.hasData ? formatPeso(snapshot.data!) : '…'}'),
-                      trailing: Chip(
-                          label: Text(row.status[0].toUpperCase() +
-                              row.status.substring(1))))),
-      ]));
+        const SizedBox(height: 16),
+        Expanded(child: AppPagedListPanel(
+          key: const Key('layaway-list-panel'),
+          title: 'Layaways', total: resultTotal, count: rows.length,
+          page: page, loading: loading,
+          emptyTitle: 'No layaways found',
+          onPrevious: () => changePage(page - 1),
+          onNext: () => changePage(page + 1),
+          itemBuilder: (context, index) {
+            final row = rows[index];
+            return AppEntityRow(
+            onTap: () => showLayaway(row),
+            title: row.reference,
+            subtitle:
+                '${customers.where((c) => c.id == row.customerId).firstOrNull?.name ?? 'Customer'} · ${MaterialLocalizations.of(context).formatMediumDate(row.createdAt)}\nTotal ${formatPeso(row.totalCents)} · Paid ${formatPeso(paidById[row.id] ?? 0)}',
+            amount: formatPeso(row.totalCents - (paidById[row.id] ?? 0)),
+            status: AppSemanticStatusBadge(
+                label: row.status[0].toUpperCase() + row.status.substring(1)),
+          );
+          },
+        )),
+      ]))))));
 }

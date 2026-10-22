@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/models/product.dart';
+import '../../core/models/quantity.dart';
 import '../../core/models/active_user.dart';
 import '../../data/database.dart';
 import '../../data/daos/directory_repository.dart';
@@ -9,20 +10,46 @@ import '../utils/money.dart';
 class TransactionProductPicker extends StatelessWidget {
   final List<PosProduct> products;
   final ValueChanged<PosProduct> onSelected;
+  final Map<String, int>? availabilityMilli;
+  final bool clearOnSelected;
+  final bool quoteMode;
   const TransactionProductPicker(
-      {super.key, required this.products, required this.onSelected});
+      {super.key,
+      required this.products,
+      required this.onSelected,
+      this.availabilityMilli,
+      this.clearOnSelected = false,
+      this.quoteMode = false});
+
+  String _availability(PosProduct product) {
+    final amount = availabilityMilli?[product.id];
+    if (amount == null) return '';
+    if (!quoteMode) return ' · ${Quantity.format(amount)} available';
+    if (amount <= 0) return ' · Available by order (0 in stock)';
+    if (amount <= product.lowStockThreshold * Quantity.scale) {
+      return ' · Low stock (${Quantity.format(amount)} available)';
+    }
+    return ' · In stock (${Quantity.format(amount)} available)';
+  }
 
   @override
-  Widget build(BuildContext context) => Autocomplete<PosProduct>(
-        displayStringForOption: (p) => p.name,
-        optionsBuilder: (value) {
-          final query = value.text.trim().toLowerCase();
-          if (query.isEmpty) return products;
-          return products.where((p) => [p.name, p.sku ?? '', p.barcode ?? '']
-              .any((part) => part.toLowerCase().contains(query)));
-        },
-        onSelected: onSelected,
-        fieldViewBuilder: (context, controller, focus, submit) => TextField(
+  Widget build(BuildContext context) {
+    TextEditingController? fieldController;
+    return Autocomplete<PosProduct>(
+      displayStringForOption: (p) => p.name,
+      optionsBuilder: (value) {
+        final query = value.text.trim().toLowerCase();
+        if (query.isEmpty) return products;
+        return products.where((p) => [p.name, p.sku ?? '', p.barcode ?? '']
+            .any((part) => part.toLowerCase().contains(query)));
+      },
+      onSelected: (product) {
+        onSelected(product);
+        if (clearOnSelected) fieldController?.clear();
+      },
+      fieldViewBuilder: (context, controller, focus, submit) {
+        fieldController = controller;
+        return TextField(
           controller: controller,
           focusNode: focus,
           onSubmitted: (_) => submit(),
@@ -30,24 +57,28 @@ class TransactionProductPicker extends StatelessWidget {
               prefixIcon: Icon(Icons.search),
               labelText: 'Search product, SKU, or barcode',
               border: OutlineInputBorder()),
-        ),
-        optionsViewBuilder: (context, select, options) => Align(
-          alignment: Alignment.topLeft,
-          child: Material(
-              elevation: 8,
-              child: ConstrainedBox(
-                  constraints:
-                      const BoxConstraints(maxHeight: 280, maxWidth: 540),
-                  child: ListView(shrinkWrap: true, children: [
-                    for (final p in options)
-                      ListTile(
-                          title: Text(p.name),
-                          subtitle: Text(
-                              '${formatPeso(p.priceCents)} / ${p.business.unit.label}${p.sku == null ? '' : ' · ${p.sku}'}'),
-                          onTap: () => select(p)),
-                  ]))),
-        ),
-      );
+        );
+      },
+      optionsViewBuilder: (context, select, options) => Align(
+        alignment: Alignment.topLeft,
+        child: Material(
+            elevation: 8,
+            child: ConstrainedBox(
+                constraints:
+                    const BoxConstraints(maxHeight: 280, maxWidth: 540),
+                child: ListView(shrinkWrap: true, children: [
+                  for (final p in options)
+                    ListTile(
+                        title: Text(p.name),
+                        subtitle: Text(
+                            '${formatPeso(p.priceCents)} / ${p.business.unit.label}${p.sku == null ? '' : ' · ${p.sku}'}'
+                            '${_availability(p)}'
+                            '${p.serialTracking ? ' · Serialized' : p.business.batch ? ' · Batch' : p.business.weight ? ' · Weight' : p.business.tank ? ' · LPG' : p.business.refill ? ' · Refill' : ''}'),
+                        onTap: () => select(p)),
+                ]))),
+      ),
+    );
+  }
 }
 
 class TransactionCustomerPicker extends StatelessWidget {
@@ -89,10 +120,19 @@ class TransactionTotal extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 4),
         child:
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(label,
-              style: strong ? Theme.of(context).textTheme.titleMedium : null),
-          Text(formatPeso(cents),
-              style: strong ? Theme.of(context).textTheme.titleLarge : null),
+          Flexible(
+              child: Text(label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      strong ? Theme.of(context).textTheme.titleMedium : null)),
+          const SizedBox(width: 8),
+          Flexible(
+              child: Text(formatPeso(cents),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style:
+                      strong ? Theme.of(context).textTheme.titleLarge : null)),
         ]),
       );
 }

@@ -1,0 +1,15 @@
+# Commercial returns and exchanges
+
+Open a completed sale in **Sales History** and choose **Return / Exchange**. Manager and Owner roles may finalize. RMA remains the separate warranty and repair workflow.
+
+Each finalized transaction receives a local `RET-000001` style reference. The original sale, receipt, items, allocations, and BIR invoice remain unchanged. Return history appears on the original sale. A replacement sale receives its own POS receipt and is linked to the return.
+
+The return editor accepts a positive fixed-point quantity up to the original quantity less prior commercial returns and RMA item refunds. Blank and zero mean no selection. Serialized items require exact serial selection. Legacy lines without complete allocation provenance, credit sales that need a receivable adjustment, and specialty sale modes requiring separate handling are unavailable for automatic returns.
+
+Refund value comes from the original sale item's `line_total_cents`, apportioned by cumulative thousandth quantity with integer division. The cumulative calculation makes the final portion receive any rounding remainder. Historical cost uses cumulative cent rounding per original allocation for the same reason. A return allocation records each original sale allocation and its historical unit cost. For ordinary items, partial returns restore consumed layers in their original allocation insertion order. Batch returns restore the original lot; an expired lot cannot be marked sellable. Sellable serials become available again. Restored stock keeps the original layer's receipt date, so later FIFO sales follow the existing layer order. Non-sellable returns record disposition and cost but do not increase available stock or reverse COGS.
+
+Refunds use the open Cash Session and post one negative cash movement. Exchange replacement items go through `PosRepository` stock planning and sale allocation. An exchange uses the return value as a payment credit against the replacement sale; only a positive difference is taken as cash or a negative difference is refunded from the drawer. Even exchanges post no cash movement. Return and replacement checkout run in one database transaction; failure rolls back both. Repeated submission is guarded in the editor, while database eligibility prevents over-return if an action is retried.
+
+Management reports keep original gross sales and COGS, show commercial returns separately in refunds, and reverse COGS only for sellable units restored at historical cost. The existing full-sale reversal engine remains for sales without commercial item returns. A sale with an item return cannot be fully reversed through that legacy action.
+
+The BIR invoice sequence, grand total, and Z-reading code are unchanged. Commercial returns remain operational documents. **BIR-ready exchanges are disabled** until compliant credit-document handling is designed; a non-BIR replacement sale is produced through normal POS checkout. Formal BIR credit documents, reversal of finalized returns, refunds to non-cash methods, store credit, and broader specialty product exchange modes remain future work.

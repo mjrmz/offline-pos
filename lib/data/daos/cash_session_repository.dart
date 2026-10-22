@@ -154,7 +154,8 @@ class CashSessionRepository {
         live.require(PosPermission.manageCashSession);
         final row = await active();
         if (row == null) throw StateError('No active cash session');
-        if (row.openedByUserId != live.id && live.role == UserRole.cashier) {
+        if (row.openedByUserId != live.id &&
+            !live.can(PosPermission.closeAnyCashSession)) {
           throw StateError(
               'Only the opener or a manager can close this session');
         }

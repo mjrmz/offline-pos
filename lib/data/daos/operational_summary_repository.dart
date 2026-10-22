@@ -1,6 +1,6 @@
 import '../../core/models/quantity.dart';
 import '../database.dart';
-import 'customer_credit_repository.dart';
+import 'inventory_health_repository.dart';
 import 'pos_repository.dart';
 
 class StockAlert {
@@ -52,6 +52,24 @@ class OperationalSummaryRepository {
     final byProduct = {
       for (final row in stockRows) row.productId: row.quantityMilli
     };
+    final reservations = <String, int>{};
+    for (final serial in await db.select(db.serialUnits).get()) {
+      if (serial.status == 'rma_reserved') {
+        reservations.update(serial.productId, (n) => n + Quantity.scale,
+            ifAbsent: () => Quantity.scale);
+      }
+    }
+    final layaways = await db.select(db.layaways).get();
+    final activeLayawayIds = {
+      for (final row in layaways)
+        if (row.status == 'active') row.id,
+    };
+    for (final item in await db.select(db.layawayItems).get()) {
+      if (activeLayawayIds.contains(item.layawayId)) {
+        reservations.update(item.productId, (n) => n + item.quantityMilli,
+            ifAbsent: () => item.quantityMilli);
+      }
+    }
     final lowAlerts = <StockAlert>[];
     final outAlerts = <StockAlert>[];
     final low = <String>[];
@@ -59,8 +77,7 @@ class OperationalSummaryRepository {
     for (final product
         in products.where((p) => p.isActive && !p.business.madeToOrder)) {
       final amount = byProduct[product.id] ?? 0;
-      final available =
-          amount - await PosRepository(db).reservedStockMilli(product.id);
+      final available = amount - (reservations[product.id] ?? 0);
       final label =
           '${product.name}: ${Quantity.format(available)} available / ${Quantity.format(amount)} physical ${product.business.unit.label}';
       final alert = StockAlert(product.id, product.name, available, amount,
@@ -75,7 +92,9 @@ class OperationalSummaryRepository {
     }
     final today = DateTime.now();
     final day = DateTime(today.year, today.month, today.day);
-    final soon = day.add(const Duration(days: 30));
+    final nearExpiryDays =
+        (await InventoryHealthRepository(db).settings()).nearExpiryDays;
+    final soon = day.add(Duration(days: nearExpiryDays));
     final names = {for (final p in products) p.id: p.name};
     final expired = <String>[];
     final expiring = <String>[];
@@ -90,9 +109,15 @@ class OperationalSummaryRepository {
       }
     }
     final owed = <(String, int)>[];
-    final credit = CustomerCreditRepository(db);
-    for (final customer in await db.select(db.customers).get()) {
-      final balance = await credit.balance(customer.id);
+    final customers = await db.select(db.customers).get();
+    final customerNames = {for (final c in customers) c.id: c.name};
+    final creditBalances = <String, int>{};
+    for (final entry in await db.select(db.customerCreditEntries).get()) {
+      creditBalances.update(entry.customerId, (n) => n + entry.amountCents,
+          ifAbsent: () => entry.amountCents);
+    }
+    for (final customer in customers) {
+      final balance = creditBalances[customer.id] ?? 0;
       if (balance > 0) owed.add((customer.name, balance));
     }
     final pending = (await db.select(db.madeOrders).get())
@@ -103,17 +128,12 @@ class OperationalSummaryRepository {
         in await db.select(db.customerRefundObligations).get()) {
       final due = obligation.amountCents - obligation.settledCents;
       if (due <= 0) continue;
-      final customer = await (db.select(db.customers)
-            ..where((c) => c.id.equals(obligation.customerId)))
-          .getSingle();
-      refunds.add((customer.name, due));
+      refunds.add((customerNames[obligation.customerId]!, due));
     }
     final openRma = (await db.select(db.rmaCases).get())
         .where((r) => r.status != 'resolved' && r.status != 'rejected')
         .length;
-    final activeLayaway = (await db.select(db.layaways).get())
-        .where((l) => l.status == 'active')
-        .length;
+    final activeLayaway = activeLayawayIds.length;
     final openQuotations = (await db.select(db.quotations).get())
         .where((q) =>
             q.status == 'open' &&

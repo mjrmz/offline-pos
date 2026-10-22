@@ -143,7 +143,7 @@ void main() {
             repository: repo,
             auth: auth,
             user: auth.current!,
-            initialView: 3)));
+            initialView: 4)));
     await tester.pumpAndSettle();
     expect(find.text('Inventory movements'), findsOneWidget);
     expect(find.text('Opening device'), findsOneWidget);
@@ -169,7 +169,7 @@ void main() {
             repository: repo,
             auth: auth,
             user: auth.current!,
-            initialView: 3)));
+            initialView: 4)));
     await tester.pumpAndSettle();
     expect(find.text('DEL-42'), findsOneWidget);
     expect(find.text('Stock received'), findsOneWidget);

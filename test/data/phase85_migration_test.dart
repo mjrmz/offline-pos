@@ -3,9 +3,96 @@ import 'dart:io';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/data/database.dart';
+import 'package:modern_offline_pos/core/services/auth_service.dart';
+import 'package:modern_offline_pos/data/daos/auth_repository.dart';
+import 'package:modern_offline_pos/data/daos/pos_repository.dart';
+import 'package:modern_offline_pos/data/daos/quotation_repository.dart';
+import 'package:modern_offline_pos/data/daos/petty_cash_repository.dart';
+import 'package:modern_offline_pos/data/daos/cash_session_repository.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 
 void main() {
+  test(
+      'schema 29 petty cash survives cash activity migration without double counting',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('cash-v29-');
+    final file = File('${dir.path}/pos.sqlite');
+    AppDatabase? db;
+    try {
+      db = AppDatabase.forTesting(NativeDatabase(file));
+      final auth = AuthService(AuthRepository(db));
+      final id = await auth.bootstrap('Owner', 'password123', 'Q?', 'answer');
+      await auth.login(id, 'password123');
+      final shift = await CashSessionRepository(db).open(auth.current!, 100000);
+      final legacy = await PettyCashRepository(db)
+          .record(auth.current!, amountCents: 12000, category: 'Transport');
+      await db.close();
+      db = null;
+      final raw = sqlite.sqlite3.open(file.path);
+      raw.execute('DROP TABLE business_cash_movements');
+      raw.execute('DROP TABLE cash_expense_categories');
+      raw.execute('PRAGMA user_version = 29');
+      raw.dispose();
+      db = AppDatabase.forTesting(NativeDatabase(file));
+      expect((await db.select(db.pettyCashEntries).get()).single.id, legacy.id);
+      expect(await CashSessionRepository(db).expected(shift.id), 88000);
+      expect(await db.select(db.businessCashMovements).get(), isEmpty);
+    } finally {
+      await db?.close();
+      await dir.delete(recursive: true);
+    }
+  });
+  test('schema 28 catalog quotation lines survive nullable product migration',
+      () async {
+    final dir = await Directory.systemTemp.createTemp('quote-v28-custom-');
+    final file = File('${dir.path}/pos.sqlite');
+    AppDatabase? db;
+    try {
+      db = AppDatabase.forTesting(NativeDatabase(file));
+      final auth = AuthService(AuthRepository(db));
+      final id = await auth.bootstrap('Owner', 'password123', 'Q?', 'answer');
+      await auth.login(id, 'password123');
+      final pos = PosRepository(db);
+      final product = await pos.saveProduct(
+          name: 'Legacy quote product',
+          priceCents: 50000,
+          costCents: 10000,
+          startingStock: 0);
+      final quote = await QuotationRepository(db, pos)
+          .create(auth.current!, [QuoteLineRequest(product, 1000)]);
+      await db.close();
+      db = null;
+      final raw = sqlite.sqlite3.open(file.path);
+      raw.execute('CREATE TABLE quotation_items_v28 ('
+          'id TEXT NOT NULL PRIMARY KEY, quotation_id TEXT NOT NULL, '
+          'product_id TEXT NOT NULL, product_name_snapshot TEXT NOT NULL, '
+          'sku_snapshot TEXT, barcode_snapshot TEXT, '
+          'sale_mode TEXT NOT NULL DEFAULT \'ordinary\', '
+          'extra_cents INTEGER NOT NULL DEFAULT 0, quantity_milli INTEGER NOT NULL, '
+          'unit_snapshot TEXT NOT NULL, unit_price_cents INTEGER NOT NULL, '
+          'line_total_cents INTEGER NOT NULL)');
+      raw.execute('INSERT INTO quotation_items_v28 SELECT id, quotation_id, '
+          'product_id, product_name_snapshot, sku_snapshot, barcode_snapshot, '
+          'sale_mode, extra_cents, quantity_milli, unit_snapshot, '
+          'unit_price_cents, line_total_cents FROM quotation_items');
+      raw.execute('DROP TABLE quotation_items');
+      raw.execute('ALTER TABLE quotation_items_v28 RENAME TO quotation_items');
+      raw.execute('PRAGMA user_version = 28');
+      raw.dispose();
+      db = AppDatabase.forTesting(NativeDatabase(file));
+      final restored = (await (db.select(db.quotationItems)
+                ..where((item) => item.quotationId.equals(quote.id)))
+              .get())
+          .single;
+      expect(db.schemaVersion, 40);
+      expect(restored.productId, product);
+      expect(restored.unitPriceCents, 50000);
+      expect(restored.customNotes, isNull);
+    } finally {
+      await db?.close();
+      await dir.delete(recursive: true);
+    }
+  });
   test('schema 22 upgrades warranty snapshots without changing legacy RMA',
       () async {
     final dir = await Directory.systemTemp.createTemp('rma-v22-warranty-');
@@ -23,7 +110,7 @@ void main() {
       raw.execute('PRAGMA user_version = 22');
       raw.dispose();
       db = AppDatabase.forTesting(NativeDatabase(file));
-      expect(db.schemaVersion, 24);
+      expect(db.schemaVersion, 40);
       expect((await db.select(db.rmaCases).get()).single.reference, 'RMA-OLD');
       expect(await db.select(db.serialWarrantySnapshots).get(), isEmpty);
     } finally {
@@ -50,7 +137,7 @@ void main() {
       db = AppDatabase.forTesting(NativeDatabase(file));
       expect((await db.select(db.rmaCases).get()).single.reference, 'RMA-OLD');
       expect(await db.select(db.rmaLifecycleEvents).get(), isEmpty);
-      expect(db.schemaVersion, 24);
+      expect(db.schemaVersion, 40);
     } finally {
       await db?.close();
       await dir.delete(recursive: true);
@@ -81,7 +168,7 @@ void main() {
       expect((await db.select(db.rmaCases).get()).single.reference, 'RMA-18');
       expect(await db.select(db.saleItemRefunds).get(), isEmpty);
       expect(await db.select(db.inboundRmaReplacements).get(), isEmpty);
-      expect(db.schemaVersion, 24);
+      expect(db.schemaVersion, 40);
     } finally {
       await db?.close();
       await dir.delete(recursive: true);
@@ -109,7 +196,7 @@ void main() {
       final cases = await db.select(db.rmaCases).get();
       expect(cases.single.reference, 'RMA-OLD');
       expect(cases.single.replacementSerialUnitId, isNull);
-      expect(db.schemaVersion, 24);
+      expect(db.schemaVersion, 40);
     } finally {
       await db?.close();
       await dir.delete(recursive: true);
@@ -148,7 +235,7 @@ void main() {
       raw.execute('PRAGMA user_version = 16');
       raw.dispose();
       db = AppDatabase.forTesting(NativeDatabase(file));
-      expect(db.schemaVersion, 24);
+      expect(db.schemaVersion, 40);
       expect(
           (await db.select(db.customerCreditEntries).get()).single.amountCents,
           500);
@@ -318,7 +405,7 @@ void main() {
       raw.execute('PRAGMA user_version = 10');
       raw.dispose();
       db = AppDatabase.forTesting(NativeDatabase(file));
-      expect(db.schemaVersion, 24);
+      expect(db.schemaVersion, 40);
       expect((await db.select(db.products).get()).single.name, 'Rice');
       expect(
           (await db.select(db.productLots).get()).single.quantityMilli, 2000);

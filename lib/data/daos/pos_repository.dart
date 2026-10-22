@@ -3,10 +3,12 @@ import '../../core/models/product.dart';
 import '../../core/models/business_product.dart';
 import '../../core/models/business_feature.dart';
 import '../../core/models/quantity.dart';
+import '../../core/models/manual_discount.dart';
 import 'business_feature_repository.dart';
 import 'inventory_layer_repository.dart';
 import '../../core/models/active_user.dart';
 import 'auth_repository.dart';
+import 'loyalty_repository.dart';
 import '../database.dart';
 import '../../backup/compliance_protection.dart';
 import 'package:uuid/uuid.dart';
@@ -18,8 +20,10 @@ class SaleLineRequest {
   final String mode;
   final String? batchId;
   final List<String> serialIds;
+  final String? lineKey;
   const SaleLineRequest(this.productId, this.quantity,
       {this.quantityMilli,
+      this.lineKey,
       this.mode = 'ordinary',
       this.batchId,
       this.serialIds = const []});
@@ -29,10 +33,14 @@ class OpeningBatch {
   final int quantityMilli;
   final String number;
   final DateTime? expiry;
-  const OpeningBatch(this.quantityMilli, this.number, this.expiry);
+  final int? unitCostCents;
+  final int? unitSellingPriceCents;
+  const OpeningBatch(this.quantityMilli, this.number, this.expiry,
+      {this.unitCostCents, this.unitSellingPriceCents});
 }
 
 class _ResolvedLine {
+  final String? lineKey;
   final Product product;
   final BusinessProduct config;
   final int quantityMilli;
@@ -42,8 +50,17 @@ class _ResolvedLine {
   final int lineCents;
   final List<SerialUnit> serials;
   final List<LayerConsumption> layers;
-  const _ResolvedLine(this.product, this.config, this.quantityMilli, this.mode,
-      this.batch, this.extraCents, this.lineCents, this.serials, this.layers);
+  const _ResolvedLine(
+      this.product,
+      this.config,
+      this.quantityMilli,
+      this.mode,
+      this.batch,
+      this.extraCents,
+      this.lineCents,
+      this.serials,
+      this.layers,
+      this.lineKey);
 }
 
 class CommittedSale {
@@ -223,9 +240,13 @@ class PosRepository {
   }
 
   Future<PosProduct?> barcode(String code) async {
-    final row = await (db.select(db.products)
+    final rows = await (db.select(db.products)
           ..where((p) => p.barcode.equals(code)))
-        .getSingleOrNull();
+        .get();
+    if (rows.length > 1) {
+      throw StateError('Barcode conflict: $code matches multiple products');
+    }
+    final row = rows.firstOrNull;
     if (row == null) return null;
     if (!row.isActive) throw StateError('Product is inactive');
     return _product(
@@ -281,12 +302,40 @@ class PosRepository {
       bool? serialTracking,
       List<String> openingSerials = const [],
       List<OpeningBatch> openingBatches = const [],
+      int? openingCostCents,
+      int? openingSellingPriceCents,
       String? pricingPolicy,
       BusinessProduct? business,
       String? batchNumber,
       DateTime? batchExpiry,
       String? actorId}) async {
     final initialMilli = startingStockMilli ?? startingStock * Quantity.scale;
+    if (id != null && initialMilli != 0) {
+      throw StateError(
+          'Existing stock can only change through receiving or an inventory adjustment');
+    }
+    if (openingCostCents != null && openingCostCents < 0) {
+      throw ArgumentError('Opening cost is invalid.');
+    }
+    final policy = pricingPolicy ??
+        (id == null
+            ? 'current'
+            : (await (db.select(db.products)..where((p) => p.id.equals(id)))
+                    .getSingle())
+                .pricingPolicy);
+    if (business?.weight == true && policy == 'current' && priceCents <= 0) {
+      throw ArgumentError(
+          'Weight products using one product price need a positive selling price');
+    }
+    if (policy == 'layer' &&
+        initialMilli > 0 &&
+        (openingBatches.isEmpty
+            ? openingSellingPriceCents == null || openingSellingPriceCents <= 0
+            : openingBatches.any((b) =>
+                b.unitSellingPriceCents == null ||
+                b.unitSellingPriceCents! <= 0))) {
+      throw ArgumentError('Opening layer selling price is required.');
+    }
     business?.validate(priceCents);
     if (business != null &&
         !business.fractional &&
@@ -308,6 +357,7 @@ class PosRepository {
               (business?.fractional != true &&
                   b.quantityMilli % Quantity.scale != 0) ||
               b.number.trim().isEmpty ||
+              (b.unitCostCents != null && b.unitCostCents! < 0) ||
               (b.expiry != null && b.expiry!.isBefore(todayStart))) ||
           openingBatches.map((b) => b.number.trim()).toSet().length !=
               openingBatches.length ||
@@ -376,6 +426,12 @@ class PosRepository {
             ((business ?? previous).fractional ||
                 (business ?? previous).madeToOrder)) {
           throw StateError('Serialized products require whole stocked units');
+        }
+        if ((business ?? previous).weight &&
+            policy == 'current' &&
+            priceCents <= 0) {
+          throw ArgumentError(
+              'Weight products using one product price need a positive selling price');
         }
         (business ?? previous).validate(priceCents);
         final count = await (db.update(db.products)
@@ -472,7 +528,9 @@ class PosRepository {
             ? openingBatches
             : [
                 OpeningBatch(
-                    initialMilli, batchNumber?.trim() ?? '', batchExpiry)
+                    initialMilli, batchNumber?.trim() ?? '', batchExpiry,
+                    unitCostCents: openingCostCents,
+                    unitSellingPriceCents: openingSellingPriceCents)
               ];
         var serialOffset = 0;
         for (final openingBatch in batches) {
@@ -483,10 +541,12 @@ class PosRepository {
                   source: const Value('opening'),
                   quantityReceivedMilli: openingBatch.quantityMilli,
                   quantityRemainingMilli: openingBatch.quantityMilli,
-                  unitCostCents: costCents,
+                  unitCostCents: openingBatch.unitCostCents ??
+                      openingCostCents ??
+                      costCents,
                   unitSellingPriceCents: Value(
                       (pricingPolicy ?? 'current') == 'layer'
-                          ? priceCents
+                          ? openingBatch.unitSellingPriceCents
                           : null),
                   batchNumber: Value(
                       business?.batch == true ? openingBatch.number : null),
@@ -671,39 +731,86 @@ class PosRepository {
 
   Future<CommittedSale> completeCashSale(
       List<SaleLineRequest> items, int cashReceivedCents, String cashierId,
-      {String? quotationId, String? layawayId}) async {
+      {String? quotationId,
+      String? layawayId,
+      String? customerId,
+      int redeemPoints = 0,
+      String? walkInName,
+      String? walkInContact,
+      String? heldReference,
+      ManualDiscount? manualDiscount}) async {
     if (birReady) {
       if (protection == null) {
         throw StateError('Compliance protection is unavailable');
       }
       return protection!.exclusive(() => _completeCashSale(
           items, cashReceivedCents, cashierId,
-          quotationId: quotationId, layawayId: layawayId));
+          quotationId: quotationId,
+          layawayId: layawayId,
+          customerId: customerId,
+          redeemPoints: redeemPoints,
+          walkInName: walkInName,
+          walkInContact: walkInContact,
+          heldReference: heldReference,
+          manualDiscount: manualDiscount));
     }
     return _completeCashSale(items, cashReceivedCents, cashierId,
-        quotationId: quotationId, layawayId: layawayId);
+        quotationId: quotationId,
+        layawayId: layawayId,
+        customerId: customerId,
+        redeemPoints: redeemPoints,
+        walkInName: walkInName,
+        walkInContact: walkInContact,
+        heldReference: heldReference,
+        manualDiscount: manualDiscount);
+  }
+
+  Future<CommittedSale> completeExchangeSale(List<SaleLineRequest> items,
+      int cashReceivedCents, String cashierId, int exchangeCreditCents,
+      {String? customerId}) {
+    if (birReady) {
+      throw StateError(
+          'BIR-ready exchanges require a compliant credit document workflow');
+    }
+    return _completeCashSale(items, cashReceivedCents, cashierId,
+        exchangeCreditCents: exchangeCreditCents, customerId: customerId);
   }
 
   Future<CommittedSale> completeCreditSale(List<SaleLineRequest> items,
       int cashPaidCents, String customerId, String cashierId,
-      {String? quotationId}) async {
+      {String? quotationId,
+      ManualDiscount? manualDiscount,
+      String? heldReference}) async {
     if (birReady) {
       if (protection == null) {
         throw StateError('Compliance protection is unavailable');
       }
       return protection!.exclusive(() => _completeCashSale(
           items, cashPaidCents, cashierId,
-          creditCustomerId: customerId, quotationId: quotationId));
+          creditCustomerId: customerId,
+          quotationId: quotationId,
+          manualDiscount: manualDiscount,
+          heldReference: heldReference));
     }
     return _completeCashSale(items, cashPaidCents, cashierId,
-        creditCustomerId: customerId, quotationId: quotationId);
+        creditCustomerId: customerId,
+        quotationId: quotationId,
+        manualDiscount: manualDiscount,
+        heldReference: heldReference);
   }
 
   Future<CommittedSale> _completeCashSale(
       List<SaleLineRequest> items, int cashReceivedCents, String cashierId,
       {String? creditCustomerId,
+      String? customerId,
+      int redeemPoints = 0,
       String? quotationId,
-      String? layawayId}) async {
+      String? layawayId,
+      int exchangeCreditCents = 0,
+      String? walkInName,
+      String? walkInContact,
+      String? heldReference,
+      ManualDiscount? manualDiscount}) async {
     if (birReady) {
       if (protection == null) {
         throw StateError('Compliance protection is unavailable');
@@ -719,7 +826,15 @@ class PosRepository {
           throw StateError('Not authorized to sell');
         }
         if (items.isEmpty) throw StateError('Cart is empty');
+        if (exchangeCreditCents < 0 ||
+            (exchangeCreditCents > 0 &&
+                (creditCustomerId != null ||
+                    layawayId != null ||
+                    quotationId != null))) {
+          throw StateError('Invalid exchange credit');
+        }
         final quotedPrices = <String, int>{};
+        final quotedExtras = <String, int>{};
         String? quotationCustomerId;
         var prepaidCents = 0;
         if (layawayId != null) {
@@ -773,6 +888,11 @@ class PosRepository {
               quote.customerId != creditCustomerId) {
             throw StateError('Quotation customer does not match checkout');
           }
+          if (quote.customerId != null &&
+              customerId != null &&
+              quote.customerId != customerId) {
+            throw StateError('Quotation customer does not match checkout');
+          }
           final quoteItems = await (db.select(db.quotationItems)
                 ..where((i) => i.quotationId.equals(quotationId)))
               .get();
@@ -780,6 +900,10 @@ class PosRepository {
             throw StateError('Quotation items changed');
           }
           for (final quoted in quoteItems) {
+            if (quoted.productId == null) {
+              throw StateError(
+                  'Resolve custom quotation items to Inventory products before checkout');
+            }
             final matches = items.where((i) =>
                 i.productId == quoted.productId &&
                 (i.quantityMilli ?? i.quantity * Quantity.scale) ==
@@ -787,42 +911,32 @@ class PosRepository {
             if (matches.length != 1) {
               throw StateError('Quotation items changed');
             }
-            quotedPrices[quoted.productId] = quoted.unitPriceCents;
+            if (matches.single.mode != quoted.saleMode) {
+              throw StateError('Quotation option changed');
+            }
+            quotedPrices[quoted.productId!] = quoted.unitPriceCents;
+            quotedExtras[quoted.productId!] = quoted.extraCents;
           }
         }
-        final merged = <String, SaleLineRequest>{};
         for (final item in items) {
           final milli = item.quantityMilli ?? item.quantity * Quantity.scale;
           if (milli <= 0) throw StateError('Invalid quantity');
-          final prior = merged[item.productId];
-          if (prior == null) {
-            merged[item.productId] = item;
-          } else if (prior.mode == item.mode && prior.batchId == item.batchId) {
-            merged[item.productId] = SaleLineRequest(item.productId, 0,
-                quantityMilli:
-                    (prior.quantityMilli ?? prior.quantity * Quantity.scale) +
-                        milli,
-                mode: item.mode,
-                batchId: item.batchId,
-                serialIds: [...prior.serialIds, ...item.serialIds]);
-          } else {
-            throw StateError('Use one transaction option per product');
-          }
         }
         final configs =
             await BusinessFeatureRepository(db).allProductConfigurations();
         final details = <_ResolvedLine>[];
+        final plannedLayerMilli = <String, int>{};
+        final plannedSerialIds = <String>{};
         var total = 0;
-        for (final entry in merged.entries) {
+        for (final request in items) {
           final product = await (db.select(db.products)
-                ..where((p) => p.id.equals(entry.key)))
+                ..where((p) => p.id.equals(request.productId)))
               .getSingleOrNull();
           if (product == null || !product.isActive) {
             throw StateError('Product is inactive or missing');
           }
           final config = configs[product.id] ?? const BusinessProduct();
           config.validate(product.priceCents);
-          final request = entry.value;
           final milli =
               request.quantityMilli ?? request.quantity * Quantity.scale;
           if (!config.fractional && milli % Quantity.scale != 0) {
@@ -830,6 +944,9 @@ class PosRepository {
           }
           final selectedSerials = <SerialUnit>[];
           if (product.serialTracking) {
+            if (request.serialIds.any(plannedSerialIds.contains)) {
+              throw StateError('Select one unique serial per sold unit');
+            }
             if (milli % Quantity.scale != 0 ||
                 request.serialIds.length != milli ~/ Quantity.scale ||
                 request.serialIds.toSet().length != request.serialIds.length) {
@@ -854,6 +971,7 @@ class PosRepository {
               }
               selectedSerials.add(serial);
             }
+            plannedSerialIds.addAll(request.serialIds);
             final availableSerials = await (db.select(db.serialUnits)
                   ..where((s) =>
                       s.productId.equals(product.id) &
@@ -925,17 +1043,24 @@ class PosRepository {
                   milli) {
             throw StateError('Insufficient stock for ${product.name}');
           }
-          final extra = mode == 'deposit'
-              ? config.depositCents
-              : mode == 'container'
-                  ? config.containerPriceCents
-                  : 0;
+          final extra = quotedExtras[product.id] ??
+              (mode == 'deposit'
+                  ? config.depositCents
+                  : mode == 'container'
+                      ? config.containerPriceCents
+                      : 0);
           final layers = config.madeToOrder
               ? <LayerConsumption>[]
               : await InventoryLayerRepository(db).consume(product.id, milli,
                   batchNumber: batch?.batchNumber,
                   serials: selectedSerials,
-                  commit: false);
+                  commit: false,
+                  reservedMilliByLayer: plannedLayerMilli);
+          for (final part in layers) {
+            plannedLayerMilli.update(
+                part.layer.id, (current) => current + part.quantityMilli,
+                ifAbsent: () => part.quantityMilli);
+          }
           final useLayerPrice = product.pricingPolicy == 'layer' &&
               !quotedPrices.containsKey(product.id);
           final line = !useLayerPrice
@@ -954,8 +1079,49 @@ class PosRepository {
                           part.quantityMilli) +
                       Quantity.lineCents(extra, part.quantityMilli));
           details.add(_ResolvedLine(product, config, milli, mode, batch, extra,
-              line, selectedSerials, layers));
+              line, selectedSerials, layers, request.lineKey));
           total += line;
+        }
+        final detailDiscounts = <_ResolvedLine, int>{};
+        var manualDiscountEffect = 0;
+        if (manualDiscount != null) {
+          if (layawayId != null || exchangeCreditCents != 0) {
+            throw StateError('Manual discount is unavailable for this sale');
+          }
+          final approver = await AuthRepository(db)
+              .requireActive(manualDiscount.authorizedBy);
+          if (!approver.can(PosPermission.approveDiscount) ||
+              (!actor.can(PosPermission.approveDiscount) &&
+                  approver.id == actor.id)) {
+            throw StateError('Manager authorization is required');
+          }
+          final eligible = manualDiscount.scope == 'line'
+              ? details
+                  .where((d) => d.lineKey == manualDiscount.lineKey)
+                  .toList()
+              : details;
+          if (eligible.isEmpty ||
+              (manualDiscount.scope == 'line' && eligible.length != 1)) {
+            throw StateError('Discount line changed');
+          }
+          final basis = eligible.fold<int>(0, (sum, d) => sum + d.lineCents);
+          if (basis != manualDiscount.approvedBasisCents) {
+            throw StateError('Sale changed; authorize the discount again');
+          }
+          manualDiscountEffect = manualDiscount.effectOn(basis);
+          if (manualDiscountEffect > total) {
+            throw StateError('Discount exceeds the sale total');
+          }
+          var remaining = manualDiscountEffect;
+          for (var i = 0; i < eligible.length; i++) {
+            final d = eligible[i];
+            final allocated = i == eligible.length - 1
+                ? remaining
+                : manualDiscountEffect * d.lineCents ~/ basis;
+            detailDiscounts[d] = allocated;
+            remaining -= allocated;
+          }
+          total -= manualDiscountEffect;
         }
         if (layawayId != null) {
           final layaway = await (db.select(db.layaways)
@@ -965,8 +1131,37 @@ class PosRepository {
             throw StateError('Layaway total changed');
           }
         }
+        final linkedCustomerId =
+            creditCustomerId ?? quotationCustomerId ?? customerId;
+        if (linkedCustomerId != null) {
+          final linked = await (db.select(db.customers)
+                ..where((c) => c.id.equals(linkedCustomerId)))
+              .getSingleOrNull();
+          if (linked == null || !linked.isActive) {
+            throw StateError('Select an active customer');
+          }
+        }
+        final loyalty = LoyaltyRepository(db);
+        final loyaltyRule = await loyalty.settings();
+        var rewardDiscount = 0;
+        if (redeemPoints != 0) {
+          if (!loyaltyRule.enabled ||
+              linkedCustomerId == null ||
+              redeemPoints < 0 ||
+              redeemPoints % loyaltyRule.redeemPoints != 0 ||
+              redeemPoints > await loyalty.balance(linkedCustomerId)) {
+            throw StateError('Invalid rewards redemption');
+          }
+          rewardDiscount = redeemPoints ~/
+              loyaltyRule.redeemPoints *
+              loyaltyRule.redeemValueCents;
+          if (rewardDiscount >= total) {
+            throw StateError('Rewards must leave a positive sale total');
+          }
+          total -= rewardDiscount;
+        }
         if (creditCustomerId == null) {
-          if (cashReceivedCents + prepaidCents < total) {
+          if (cashReceivedCents + prepaidCents + exchangeCreditCents < total) {
             throw StateError('Insufficient cash');
           }
         } else {
@@ -1027,9 +1222,42 @@ class PosRepository {
                     : Value(reservedSaleId!),
                 cashierId: cashierId,
                 cashSessionId: Value(session?.id),
-                customerId: Value(creditCustomerId ?? quotationCustomerId),
+                customerId: Value(
+                    creditCustomerId ?? quotationCustomerId ?? customerId),
+                walkInName: Value(customerId == null &&
+                        creditCustomerId == null &&
+                        quotationCustomerId == null
+                    ? walkInName?.trim().isEmpty == true
+                        ? null
+                        : walkInName?.trim()
+                    : null),
+                walkInContact: Value(customerId == null &&
+                        creditCustomerId == null &&
+                        quotationCustomerId == null
+                    ? walkInContact?.trim().isEmpty == true
+                        ? null
+                        : walkInContact?.trim()
+                    : null),
+                heldReference: Value(heldReference),
                 totalCents: total,
                 birInvoiceNumber: Value(invoiceNumber)));
+        if (manualDiscount != null) {
+          await db.into(db.saleManualDiscounts).insert(
+              SaleManualDiscountsCompanion.insert(
+                  saleId: sale.id,
+                  scope: manualDiscount.scope,
+                  lineKey: Value(manualDiscount.lineKey),
+                  kind: manualDiscount.kind,
+                  value: manualDiscount.value,
+                  effectCents: manualDiscountEffect,
+                  reason: manualDiscount.reason.trim(),
+                  notes: Value(manualDiscount.notes?.trim()),
+                  requestedBy: manualDiscount.requestedBy,
+                  authorizedBy: manualDiscount.authorizedBy,
+                  authorizedAt: manualDiscount.authorizedAt));
+          await AuthRepository(db).audit(manualDiscount.authorizedBy,
+              'manual_discount.authorized', sale.id);
+        }
         for (final detail in details) {
           final product = detail.product;
           final milli = detail.quantityMilli;
@@ -1043,15 +1271,25 @@ class PosRepository {
           final groups =
               layerPrice ? consumed.map((part) => [part]).toList() : [consumed];
           if (groups.isEmpty) groups.add(<LayerConsumption>[]);
+          final detailDiscount = detailDiscounts[detail] ?? 0;
+          var discountRemaining = detailDiscount;
+          var groupIndex = 0;
           for (final group in groups) {
             final groupMilli = layerPrice ? group.single.quantityMilli : milli;
             final unitPrice = layerPrice
                 ? group.single.layer.unitSellingPriceCents ?? product.priceCents
                 : quotedPrices[product.id] ?? product.priceCents;
-            final groupTotal = layerPrice
+            final grossGroupTotal = layerPrice
                 ? Quantity.lineCents(unitPrice, groupMilli) +
                     Quantity.lineCents(detail.extraCents, groupMilli)
                 : detail.lineCents;
+            final groupDiscount = ++groupIndex == groups.length
+                ? discountRemaining
+                : detail.lineCents == 0
+                    ? 0
+                    : detailDiscount * grossGroupTotal ~/ detail.lineCents;
+            discountRemaining -= groupDiscount;
+            final groupTotal = grossGroupTotal - groupDiscount;
             final saleItem = await db.into(db.saleItems).insertReturning(
                 SaleItemsCompanion.insert(
                     saleId: sale.id,
@@ -1065,7 +1303,8 @@ class PosRepository {
                     batchNumber: Value(detail.batch?.batchNumber),
                     extraCents: Value(detail.extraCents),
                     unitPriceCents: unitPrice,
-                    lineTotalCents: Value(groupTotal)));
+                    lineTotalCents: Value(groupTotal),
+                    manualDiscountCents: Value(groupDiscount)));
             for (final part in group) {
               await db
                   .into(db.saleItemInventoryAllocations)
@@ -1136,15 +1375,24 @@ class PosRepository {
                     referenceId: Value(sale.id)));
           }
         }
-        final cashPortion =
-            creditCustomerId == null ? total - prepaidCents : cashReceivedCents;
+        final appliedExchangeCredit =
+            exchangeCreditCents > total ? total : exchangeCreditCents;
+        final cashPortion = creditCustomerId == null
+            ? total - prepaidCents - appliedExchangeCredit
+            : cashReceivedCents;
+        if (appliedExchangeCredit > 0) {
+          await db.into(db.payments).insert(PaymentsCompanion.insert(
+              saleId: sale.id,
+              method: 'exchange_credit',
+              amountCents: appliedExchangeCredit));
+        }
         if (prepaidCents > 0) {
           await db.into(db.payments).insert(PaymentsCompanion.insert(
               saleId: sale.id,
               method: 'layaway_prepaid',
               amountCents: prepaidCents));
         }
-        if (cashPortion > 0) {
+        if (cashPortion > 0 || total == 0) {
           await db.into(db.payments).insert(PaymentsCompanion.insert(
               saleId: sale.id, method: 'cash', amountCents: cashPortion));
         }
@@ -1168,6 +1416,38 @@ class PosRepository {
               kind: 'cash_sale'));
         }
         await AuthRepository(db).audit(cashierId, 'sale.completed', sale.id);
+        if (linkedCustomerId != null) {
+          final rule = loyaltyRule;
+          // The returned side already reverses its original points. The
+          // replacement earns on its full commercial value, including the
+          // portion funded by the return, so even exchanges preserve points.
+          final eligible = total;
+          final earned = rule.enabled ? eligible ~/ rule.spendPerPointCents : 0;
+          await db.customStatement('''INSERT INTO sale_loyalty
+            (sale_id,customer_id,eligible_cents,earned_points,redeemed_points,
+             discount_cents,spend_per_point_cents,redeem_unit_points,redeem_unit_cents)
+            VALUES (?,?,?,?,?,?,?,?,?)''', [
+            sale.id,
+            linkedCustomerId,
+            eligible,
+            earned,
+            redeemPoints,
+            rewardDiscount,
+            rule.spendPerPointCents,
+            rule.redeemPoints,
+            rule.redeemValueCents
+          ]);
+          await loyalty.append(linkedCustomerId, 'earn', earned,
+              sourceId: sale.id,
+              actorId: cashierId,
+              eligibleCents: eligible,
+              snapshot: '${rule.spendPerPointCents} cents per point');
+          await loyalty.append(linkedCustomerId, 'redeem', -redeemPoints,
+              sourceId: sale.id,
+              actorId: cashierId,
+              snapshot:
+                  '${rule.redeemPoints} points = ${rule.redeemValueCents} cents');
+        }
         if (quotationId != null) {
           final updated = await (db.update(db.quotations)
                 ..where(

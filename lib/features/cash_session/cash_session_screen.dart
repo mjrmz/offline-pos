@@ -5,6 +5,7 @@ import '../../core/models/active_user.dart';
 import '../../data/daos/cash_session_repository.dart';
 import '../../data/database.dart';
 import '../../shared/utils/money.dart';
+import '../../shared/widgets/app_workspace.dart';
 import '../pos_checkout/pos_shift.dart';
 
 class CashSessionScreen extends StatefulWidget {
@@ -161,9 +162,10 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             if (widget.showTitle) ...[
-              Text('Cash Session',
-                  style: Theme.of(context).textTheme.headlineMedium),
-              const SizedBox(height: 16),
+              const AppPageHeader(
+                title: 'Cash Session',
+                subtitle: 'Review shift cash and closing history.',
+              ),
             ],
             if (loadingSessions && sessions.isEmpty)
               const Padding(
@@ -304,8 +306,9 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
                   ? 'Current shift'
                   : 'Previous shift'),
               content: SizedBox(
-                  width: 380,
-                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  width: 430,
+                  child: SingleChildScrollView(
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
                     _metric('Opened by', _name(row.session.openedByUserId)),
                     _metric('Opened at', _when(row.session.openedAt)),
                     if (row.session.closedAt != null)
@@ -320,7 +323,57 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
                       _metric(_status(row.varianceCents!),
                           _signed(row.varianceCents!)),
                     if (z != null) _metric('Z-reading', 'Z #${z.number}'),
-                  ])),
+                    const Divider(),
+                    FutureBuilder(
+                      future: (widget.repository.db
+                              .select(widget.repository.db.cashMovements)
+                            ..where((m) => m.sessionId.equals(row.session.id)))
+                          .get(),
+                      builder: (context, snapshot) {
+                        if (!snapshot.hasData) {
+                          return const LinearProgressIndicator();
+                        }
+                        final movements = snapshot.data!;
+                        int sum(String kind) => movements
+                            .where((m) => m.kind == kind)
+                            .fold(0, (total, m) => total + m.amountCents);
+                        return Column(children: [
+                          _metric(
+                              'Cash sales and other inflows',
+                              formatPeso(movements
+                                  .where((m) =>
+                                      m.amountCents > 0 &&
+                                      m.kind != 'business_expense_reversal')
+                                  .fold(
+                                      0, (total, m) => total + m.amountCents))),
+                          _metric(
+                              'Cash expenses',
+                              formatPeso(sum('business_expense').abs() +
+                                  sum('petty_cash').abs())),
+                          _metric('Expense reversals',
+                              formatPeso(sum('business_expense_reversal'))),
+                          _metric(
+                              'Refunds and other cash out',
+                              formatPeso(movements
+                                  .where((m) =>
+                                      m.amountCents < 0 &&
+                                      m.kind != 'business_expense' &&
+                                      m.kind != 'petty_cash')
+                                  .fold<int>(
+                                      0, (total, m) => total - m.amountCents))),
+                          for (final movement in movements.where((m) =>
+                              m.kind == 'business_expense' ||
+                              m.kind == 'business_expense_reversal' ||
+                              m.kind == 'petty_cash'))
+                            _metric(
+                                movement.kind == 'business_expense_reversal'
+                                    ? 'Expense reversal'
+                                    : 'Drawer expense',
+                                formatPeso(movement.amountCents)),
+                        ]);
+                      },
+                    ),
+                  ]))),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(context),

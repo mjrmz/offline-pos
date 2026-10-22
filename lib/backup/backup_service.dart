@@ -5,6 +5,7 @@ import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'package:bcrypt/bcrypt.dart';
 import '../data/database.dart';
 import '../core/models/app_config.dart';
+import '../core/models/active_user.dart';
 
 enum BackupKind { manual, daily, weekly }
 
@@ -67,7 +68,7 @@ class BackupService {
         'ok');
   }
 
-  static int verify(File file, {int maxSchemaVersion = 24}) {
+  static int verify(File file, {int maxSchemaVersion = 40}) {
     if (!file.existsSync() || file.lengthSync() == 0) {
       throw StateError('Backup is missing or empty');
     }
@@ -96,6 +97,8 @@ class BackupService {
         'users',
         'cash_sessions',
         'audit_logs',
+        if (version >= 40) ...['roles', 'role_permissions'],
+        if (version >= 37) 'inventory_health_settings',
         if (version >= 22) 'rma_lifecycle_events',
         if (version >= 23) 'serial_warranty_snapshots',
         if (version >= 2) ...['categories', 'inventory'],
@@ -120,10 +123,36 @@ class BackupService {
         ],
         if (version >= 13) 'customer_credit_entries',
         if (version >= 14) ...['stock_receivings', 'stock_receiving_items'],
+        if (version >= 31) ...['purchase_orders', 'purchase_order_lines'],
+        if (version >= 39) 'purchase_order_line_source_links',
+        if (version >= 32) ...[
+          'stock_counts',
+          'stock_count_lines',
+          'inventory_adjustments',
+          'inventory_adjustment_allocations'
+        ],
+        if (version >= 33) ...[
+          'sale_returns',
+          'sale_return_lines',
+          'sale_return_allocations'
+        ],
+        if (version >= 34) ...[
+          'loyalty_settings',
+          'loyalty_ledger',
+          'sale_loyalty',
+          'customer_groups'
+        ],
+        if (version >= 35) ...['held_sales', 'sale_manual_discounts'],
         if (version >= 19) ...['sale_item_refunds', 'inbound_rma_replacements'],
         if (version >= 20) ...[
           'inventory_layers',
           'sale_item_inventory_allocations'
+        ],
+        if (version >= 26) 'quotation_document_settings',
+        if (version >= 28) 'quotation_sourcing_requirements',
+        if (version >= 30) ...[
+          'cash_expense_categories',
+          'business_cash_movements'
         ],
       };
       for (final name in requiredTables) {
@@ -134,7 +163,37 @@ class BackupService {
           throw StateError('Backup lacks required table: $name');
         }
       }
+      if (version >= 40) {
+        final hasUsers =
+            connection.select('SELECT 1 FROM users LIMIT 1').isNotEmpty;
+        final owner = connection.select(
+            "SELECT 1 FROM users WHERE role = 'owner' AND is_active = 1 LIMIT 1");
+        if (hasUsers && owner.isEmpty) {
+          throw StateError('Backup has no active Owner');
+        }
+        final orphan =
+            connection.select('SELECT 1 FROM users u LEFT JOIN roles r '
+                'ON r.code = u.role WHERE r.code IS NULL LIMIT 1');
+        if (orphan.isNotEmpty) {
+          throw StateError('Backup has an unknown user role');
+        }
+        final unknown = connection.select(
+            'SELECT permission_key FROM '
+            'role_permissions WHERE permission_key NOT IN (${PermissionRegistry.byKey.keys.map((_) => '?').join(',')}) '
+            'LIMIT 1',
+            PermissionRegistry.byKey.keys.toList());
+        if (unknown.isNotEmpty) {
+          throw StateError('Backup uses a newer permission version');
+        }
+      }
       final columns = <String, List<String>>{
+        if (version >= 37)
+          'inventory_health_settings': [
+            'id',
+            'slow_moving_days',
+            'dead_stock_days',
+            'near_expiry_days'
+          ],
         'products': [
           'id',
           'sku',
@@ -148,6 +207,11 @@ class BackupService {
           if (version >= 3) 'low_stock_threshold',
           if (version >= 17) 'serial_tracking',
           if (version >= 20) 'pricing_policy',
+          if (version >= 36) ...[
+            'reorder_level_qty_milli',
+            'target_stock_qty_milli',
+            'preferred_supplier_id'
+          ],
         ],
         'inventory_movements': [
           'id',
@@ -167,7 +231,12 @@ class BackupService {
           if (version >= 8) 'bir_invoice_number',
           if (version >= 12) 'cash_session_id',
           if (version >= 13) 'customer_id',
-          if (version >= 24) 'receipt_number'
+          if (version >= 24) 'receipt_number',
+          if (version >= 35) ...[
+            'walk_in_name',
+            'walk_in_contact',
+            'held_reference'
+          ]
         ],
         'sale_items': [
           'id',
@@ -185,6 +254,7 @@ class BackupService {
           'unit_price_cents',
           if (version >= 2) 'line_total_cents',
           if (version >= 5) 'product_name',
+          if (version >= 35) 'manual_discount_cents',
         ],
         'payments': ['id', 'sale_id', 'method', 'amount_cents'],
         'users': [
@@ -449,7 +519,12 @@ class BackupService {
             'id',
             'reference',
             'customer_id',
+            if (version >= 27) ...[
+              'customer_name_snapshot',
+              'customer_phone_snapshot'
+            ],
             'created_by',
+            if (version >= 27) 'prepared_by_snapshot',
             'valid_until',
             'status',
             'notes',
@@ -461,10 +536,45 @@ class BackupService {
             'id',
             'quotation_id',
             'product_id',
+            if (version >= 25) ...[
+              'product_name_snapshot',
+              'sku_snapshot',
+              'barcode_snapshot',
+              'sale_mode',
+              'extra_cents'
+            ],
+            if (version >= 29) 'custom_notes',
             'quantity_milli',
             'unit_snapshot',
             'unit_price_cents',
             'line_total_cents'
+          ],
+        if (version >= 28)
+          'quotation_sourcing_requirements': [
+            'id',
+            'quotation_id',
+            'product_id',
+            'quantity_required_milli',
+            'quantity_available_at_request_milli',
+            'quantity_to_source_milli',
+            'preferred_supplier_id',
+            'notes',
+            'status',
+            'created_by',
+            'created_at',
+            'resolved_at'
+          ],
+        if (version >= 26)
+          'quotation_document_settings': [
+            'id',
+            'show_sku',
+            'show_barcode',
+            'show_unit',
+            'show_prepared_by',
+            'show_signature',
+            'show_acceptance',
+            'footer',
+            'terms'
           ],
         if (version >= 17)
           'layaways': [
@@ -503,6 +613,138 @@ class BackupService {
             'amount_cents',
             'method',
             'created_at'
+          ],
+        if (version >= 30) 'cash_expense_categories': ['id', 'name', 'active'],
+        if (version >= 30)
+          'business_cash_movements': [
+            'id',
+            'type',
+            'amount_cents',
+            'source',
+            'destination',
+            'cash_session_id',
+            'drawer_movement_id',
+            'category_id',
+            'category_name',
+            'payee',
+            'reference',
+            'note',
+            'personally_paid_by',
+            'recorded_by_user_id',
+            'reversal_of_id',
+            'created_at'
+          ],
+        if (version >= 31)
+          'purchase_orders': [
+            'id',
+            'sequence',
+            'supplier_id',
+            'status',
+            'order_date',
+            'expected_delivery_date',
+            'supplier_reference',
+            'notes',
+            'created_by',
+            'created_at',
+            'updated_at',
+            'sent_at',
+            'cancelled_at',
+            'cancelled_by',
+            'cancel_reason',
+            'closed_at',
+            if (version >= 39) ...['sent_by', 'closed_by']
+          ],
+        if (version >= 39)
+          'purchase_order_line_source_links': [
+            'id',
+            'purchase_order_line_id',
+            'quotation_id',
+            'quotation_line_id',
+            'planned_qty_milli',
+            'created_at',
+            'created_by_user_id'
+          ],
+        if (version >= 31)
+          'purchase_order_lines': [
+            'id',
+            'purchase_order_id',
+            'product_id',
+            'ordered_qty_milli',
+            'expected_unit_cost_cents',
+            'cancelled_qty_milli',
+            'notes'
+          ],
+        if (version >= 31 && version < 38)
+          'stock_receivings': ['purchase_order_id'],
+        if (version >= 38 && version < 39)
+          'stock_receivings': ['purchase_order_id', 'sequence'],
+        if (version >= 39)
+          'stock_receivings': ['purchase_order_id', 'sequence', 'finalized_at'],
+        if (version >= 31) 'stock_receiving_items': ['purchase_order_line_id'],
+        if (version >= 32)
+          'stock_counts': [
+            'id',
+            'reference',
+            'status',
+            'scope',
+            'created_by',
+            'created_at',
+            'finalized_by',
+            'finalized_at'
+          ],
+        if (version >= 32)
+          'stock_count_lines': [
+            'id',
+            'stock_count_id',
+            'product_id',
+            'unit_label',
+            'expected_milli',
+            'movement_count',
+            'counted_milli'
+          ],
+        if (version >= 32)
+          'inventory_adjustments': [
+            'id',
+            'reference',
+            'product_id',
+            'delta_milli',
+            'reason',
+            'created_by',
+            'created_at',
+            'stock_count_line_id'
+          ],
+        if (version >= 32)
+          'inventory_adjustment_allocations': [
+            'id',
+            'adjustment_id',
+            'inventory_layer_id',
+            'serial_unit_id',
+            'quantity_milli',
+            'unit_cost_cents'
+          ],
+        if (version >= 35)
+          'held_sales': [
+            'id',
+            'reference',
+            'label',
+            'snapshot_json',
+            'held_by',
+            'held_at'
+          ],
+        if (version >= 35)
+          'sale_manual_discounts': [
+            'id',
+            'sale_id',
+            'scope',
+            'line_key',
+            'kind',
+            'value',
+            'effect_cents',
+            'reason',
+            'notes',
+            'requested_by',
+            'authorized_by',
+            'authorized_at'
           ],
       };
       for (final entry in columns.entries) {

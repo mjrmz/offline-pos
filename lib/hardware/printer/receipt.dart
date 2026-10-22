@@ -18,6 +18,8 @@ class ReceiptDocument {
   final String paymentMethod;
   final int appliedCents;
   final int? birInvoiceNumber;
+  final String? walkInName;
+  final String? walkInContact;
 
   const ReceiptDocument(
       this.reference,
@@ -32,7 +34,9 @@ class ReceiptDocument {
       this.storeAddress = '',
       this.storeContact = '',
       this.customHeader = '',
-      this.customFooter = '']);
+      this.customFooter = '',
+      this.walkInName,
+      this.walkInContact]);
 
   factory ReceiptDocument.fromDetail(SaleDetail detail, String storeName,
           [PrinterSettings? settings]) =>
@@ -50,6 +54,7 @@ class ReceiptDocument {
                 mode: detail.items[i].saleMode,
                 batchNumber: detail.items[i].batchNumber,
                 extraCents: detail.items[i].extraCents,
+                manualDiscountCents: detail.items[i].manualDiscountCents,
                 serialNumbers:
                     detail.serialNumbersByItem[detail.items[i].id] ?? const [])
         ],
@@ -61,6 +66,8 @@ class ReceiptDocument {
         settings?.storeContact ?? '',
         settings?.receiptHeader ?? '',
         settings?.receiptFooter ?? '',
+        detail.summary.sale.walkInName,
+        detail.summary.sale.walkInContact,
       );
 }
 
@@ -74,6 +81,7 @@ class ReceiptLine {
   final String mode;
   final String? batchNumber;
   final int extraCents;
+  final int manualDiscountCents;
   final List<String> serialNumbers;
   const ReceiptLine(this.name, this.quantity, this.unitCents, this.totalCents,
       {this.quantityMilli = 0,
@@ -81,6 +89,7 @@ class ReceiptLine {
       this.mode = 'ordinary',
       this.batchNumber,
       this.extraCents = 0,
+      this.manualDiscountCents = 0,
       this.serialNumbers = const []});
 }
 
@@ -108,12 +117,20 @@ class EscPosEncoder {
     if (receipt.storeAddress.isNotEmpty) line(receipt.storeAddress);
     if (receipt.storeContact.isNotEmpty) line(receipt.storeContact);
     if (receipt.customHeader.isNotEmpty) line(receipt.customHeader);
-    line('Receipt #: ${receipt.reference}');
+    line(receipt.reference.startsWith('RET-')
+        ? 'Return / Exchange #: ${receipt.reference}'
+        : 'Receipt #: ${receipt.reference}');
     if (receipt.birInvoiceNumber != null) {
       line('Invoice #: ${receipt.birInvoiceNumber}');
     }
     line('Date: ${receipt.timestamp.toLocal()}');
     line('Cashier: ${receipt.cashier}');
+    if (receipt.walkInName?.isNotEmpty == true) {
+      line('Customer: ${receipt.walkInName}');
+    }
+    if (receipt.walkInContact?.isNotEmpty == true) {
+      line('Contact: ${receipt.walkInContact}');
+    }
     line('-' * columns);
     for (final item in receipt.lines) {
       line(item.name.length > columns
@@ -132,6 +149,9 @@ class EscPosEncoder {
       }
       if (item.extraCents > 0) {
         line('Extra: ${receiptMoney(item.extraCents)} per ${item.unit}');
+      }
+      if (item.manualDiscountCents > 0) {
+        line('Manual discount: -${receiptMoney(item.manualDiscountCents)}');
       }
     }
     line('-' * columns);

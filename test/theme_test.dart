@@ -72,15 +72,50 @@ void main() {
       child: const MaterialApp(home: Scaffold(body: ThemeSettingTile())),
     ));
     expect(find.byKey(const Key('theme-selector')), findsOneWidget);
+    expect(find.text('Use the default navy sidebar with a light workspace.'),
+        findsOneWidget);
     for (final label in ['Light', 'Dark', 'System']) {
       await tester.tap(find.byKey(const Key('theme-selector')));
       await tester.pumpAndSettle();
       await tester.tap(find.text(label).last);
       await tester.pumpAndSettle();
       expect(controller.mode.name, label.toLowerCase());
+      expect(
+          find.text(switch (label) {
+            'Light' => 'Use the light workspace appearance.',
+            'Dark' => 'Use the dark workspace appearance.',
+            _ => 'Use the default navy sidebar with a light workspace.',
+          }),
+          findsOneWidget);
     }
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString(ThemeModeController.preferenceKey), 'system');
+    controller.dispose();
+  });
+
+  test('sidebar colors persist and System keeps a light workspace', () async {
+    SharedPreferences.setMockInitialValues({});
+    final controller = ThemeModeController();
+    await controller.load();
+    expect(controller.workspaceMode, ThemeMode.light);
+    expect(controller.effectiveSidebarColor, SidebarColorPreset.navy);
+    await controller.setSidebarColor(SidebarColorPreset.light);
+    final reopened = ThemeModeController();
+    await reopened.load();
+    expect(reopened.effectiveSidebarColor, SidebarColorPreset.light);
+    expect(reopened.effectiveSidebarColor.foreground.computeLuminance(),
+        lessThan(.5));
+    expect(
+        SidebarColorPreset.navy.foreground.computeLuminance(), greaterThan(.5));
+    await reopened.setMode(ThemeMode.dark);
+    expect(reopened.workspaceMode, ThemeMode.dark);
+    await reopened.setSidebarColor(null);
+    expect(reopened.effectiveSidebarColor, SidebarColorPreset.dark);
+    await reopened.resetAppearance();
+    expect(reopened.mode, ThemeMode.system);
+    expect(reopened.workspaceMode, ThemeMode.light);
+    expect(reopened.effectiveSidebarColor, SidebarColorPreset.navy);
+    reopened.dispose();
     controller.dispose();
   });
 

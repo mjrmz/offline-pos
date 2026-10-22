@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_layout.dart';
 
 class AppStatusColors extends ThemeExtension<AppStatusColors> {
   const AppStatusColors(
@@ -59,7 +60,7 @@ class AppTheme {
       error: dark ? const Color(0xFFFFB4AB) : const Color(0xFFB3261E),
     );
     final border = OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: AppLayout.controlRadius,
         borderSide: BorderSide(color: scheme.outlineVariant));
     return ThemeData(
       useMaterial3: true,
@@ -72,6 +73,16 @@ class AppTheme {
         )
       ],
       scaffoldBackgroundColor: scheme.surface,
+      textTheme: TextTheme(
+        headlineSmall: TextStyle(
+            fontSize: 26, fontWeight: FontWeight.w600, color: scheme.onSurface),
+        titleLarge: TextStyle(
+            fontSize: 18, fontWeight: FontWeight.w600, color: scheme.onSurface),
+        titleMedium: TextStyle(
+            fontSize: 16, fontWeight: FontWeight.w600, color: scheme.onSurface),
+        bodyMedium: TextStyle(fontSize: 14, color: scheme.onSurface),
+        bodySmall: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+      ),
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surface,
         foregroundColor: scheme.onSurface,
@@ -89,8 +100,10 @@ class AppTheme {
           elevation: 0,
           color: scheme.surfaceContainerLow,
           shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: AppLayout.panelRadius,
               side: BorderSide(color: scheme.outlineVariant))),
+      dialogTheme: const DialogThemeData(
+          shape: RoundedRectangleBorder(borderRadius: AppLayout.dialogRadius)),
       inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: scheme.surfaceContainerLow,
@@ -103,11 +116,17 @@ class AppTheme {
           focusedErrorBorder: border.copyWith(
               borderSide: BorderSide(color: scheme.error, width: 2)),
           contentPadding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 14)),
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10)),
       filledButtonTheme: FilledButtonThemeData(
-          style: FilledButton.styleFrom(minimumSize: const Size(0, 44))),
+          style: FilledButton.styleFrom(minimumSize: const Size(0, 40))),
       outlinedButtonTheme: OutlinedButtonThemeData(
-          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 44))),
+          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 40))),
+      chipTheme: ChipThemeData(
+        shape:
+            const RoundedRectangleBorder(borderRadius: AppLayout.controlRadius),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        labelStyle: TextStyle(fontSize: 13, color: scheme.onSurface),
+      ),
       navigationBarTheme: NavigationBarThemeData(
           height: 70,
           labelTextStyle: WidgetStatePropertyAll(

@@ -20,7 +20,8 @@ class InventoryLayerRepository {
   Future<List<LayerConsumption>> consume(String productId, int quantityMilli,
       {String? batchNumber,
       List<SerialUnit> serials = const [],
-      bool commit = true}) async {
+      bool commit = true,
+      Map<String, int> reservedMilliByLayer = const {}}) async {
     final rows = await (db.select(db.inventoryLayers)
           ..where((l) =>
               l.productId.equals(productId) &
@@ -39,7 +40,10 @@ class InventoryLayerRepository {
       for (final serial in serials) {
         final layer =
             rows.where((l) => l.id == serial.inventoryLayerId).firstOrNull;
-        if (layer == null) {
+        if (layer == null ||
+            layer.quantityRemainingMilli -
+                    (reservedMilliByLayer[layer.id] ?? 0) <
+                1000) {
           throw StateError('Serial has no available source layer');
         }
         if (batchNumber != null && layer.batchNumber != batchNumber) {
@@ -52,7 +56,13 @@ class InventoryLayerRepository {
       for (final layer in rows) {
         if (batchNumber != null && layer.batchNumber != batchNumber) continue;
         if (remaining == 0) break;
-        final take = math.min(remaining, layer.quantityRemainingMilli);
+        final take = math.min(
+            remaining,
+            math.max(
+                0,
+                layer.quantityRemainingMilli -
+                    (reservedMilliByLayer[layer.id] ?? 0)));
+        if (take == 0) continue;
         selected.add(LayerConsumption(layer, take));
         remaining -= take;
       }

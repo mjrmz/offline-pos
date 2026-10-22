@@ -47,9 +47,15 @@ void main() {
     await tester.enterText(field, '99999');
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pumpAndSettle();
-    expect(find.text('Barcode or serial number not found'), findsOneWidget);
+    expect(find.text('Barcode not found: 99999'), findsOneWidget);
+    expect(find.byKey(const Key('unknown-barcode-panel')), findsOneWidget);
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('unknown-barcode-panel')), findsOneWidget);
     await tester.enterText(field, '12345');
     await tester.pumpAndSettle();
-    expect(find.text('Barcode or serial number not found'), findsNothing);
+    await tester.tap(find.text('Dismiss'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('unknown-barcode-panel')), findsNothing);
   });
 }

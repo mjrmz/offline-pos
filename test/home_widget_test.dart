@@ -45,7 +45,7 @@ void main() {
       ));
     }));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('More actions'));
+    await tester.tap(find.byKey(const Key('sidebar-account')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Refresh license'));
     await tester.pumpAndSettle();
@@ -82,14 +82,14 @@ void main() {
               changes++;
             })));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('More actions'));
+    await tester.tap(find.byKey(const Key('sidebar-account')));
     await tester.pumpAndSettle();
     await tester.tapAt(const Offset(10, 300));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(refreshes, 0);
     expect(changes, 0);
-    await tester.tap(find.byTooltip('More actions'));
+    await tester.tap(find.byKey(const Key('sidebar-account')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Refresh license'));
     await tester.pumpAndSettle();
@@ -104,7 +104,7 @@ void main() {
     expect(auth.current?.id, ownerId);
     expect(find.byType(HomeScreen), findsOneWidget);
 
-    await tester.tap(find.byTooltip('More actions'));
+    await tester.tap(find.byKey(const Key('sidebar-account')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Refresh license'));
     await tester.pumpAndSettle();
@@ -115,7 +115,7 @@ void main() {
     expect(refreshes, 0);
     expect(changes, 0);
 
-    await tester.tap(find.byTooltip('More actions'));
+    await tester.tap(find.byKey(const Key('sidebar-account')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Refresh license'));
     await tester.pumpAndSettle();
@@ -124,7 +124,7 @@ void main() {
     expect(find.byType(HomeScreen), findsOneWidget);
     expect(refreshes, 0);
 
-    await tester.tap(find.byTooltip('More actions'));
+    await tester.tap(find.byKey(const Key('sidebar-account')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Refresh license'));
     await tester.pumpAndSettle();
@@ -133,7 +133,7 @@ void main() {
     expect(refreshes, 0);
     expect(changes, 0);
 
-    await tester.tap(find.byTooltip('More actions'));
+    await tester.tap(find.byKey(const Key('sidebar-account')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Refresh license'));
     await tester.pumpAndSettle();
@@ -196,6 +196,10 @@ void main() {
             onChanged: () {})));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.text('Settings'), findsOneWidget);
+    expect(find.byKey(const Key('pos-shift-status')), findsNothing);
+    await tester.tap(find.text('Business').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Business Features'));
     await tester.pumpAndSettle();
@@ -273,13 +277,13 @@ void main() {
         isNotNull);
     await tester.tap(find.byKey(const Key('pay-button')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('Sale completed · Change'), findsOneWidget);
+    expect(find.text('SALE COMPLETE'), findsOneWidget);
     expect(find.textContaining(RegExp(r'Shift open.*40\.00')), findsOneWidget);
     await tester.tap(find.byTooltip('Cash session'));
     await tester.pumpAndSettle();
     expect(find.text('CURRENT SHIFT'), findsOneWidget);
     expect(find.textContaining('40.00'), findsWidgets);
-    expect(find.textContaining(RegExp(r'Shift open.*40\.00')), findsOneWidget);
+    expect(find.byKey(const Key('pos-shift-status')), findsNothing);
     final sale = (await db.select(db.sales).get()).single;
     expect(sale.cashierId, ownerId);
     await tester.tap(find.byTooltip('Sales History'));
@@ -288,7 +292,9 @@ void main() {
     expect(find.textContaining(sale.id), findsNothing);
     await tester.tap(find.byTooltip('Reports'));
     await tester.pumpAndSettle();
-    expect(find.text('Gross sales'), findsOneWidget);
-    expect(find.text('Net sales'), findsOneWidget);
+    expect(find.text('Net sales'), findsWidgets);
+    await tester.tap(find.text('Sales').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Gross sales'), findsWidgets);
   });
 }

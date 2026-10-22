@@ -1,5 +1,43 @@
 # Local Database Schema (SQLite via drift)
 
+Schema 40 adds normalized `roles` and `role_permissions` tables. Built-in
+`owner`, `manager`, and `cashier` codes are seeded with their existing effective
+access. The existing `users.role` column remains the single role code for each
+user; this avoids rewriting user rows, credentials, and historical audit data.
+New custom codes are UUIDs. Triggers reject unknown role codes on user insert
+and role change. Custom role deletion is blocked while assigned. Backups at
+version 40 verify valid role references, an active Owner for populated user
+databases, and recognized permission keys. Earlier backups migrate on open.
+
+Owner recovery, backup and restore, role administration, and the last active
+Owner safeguard remain tied to Owner identity. Serial mismatch overrides and
+opening cash funds also retain their existing Owner identity checks. Built-in
+role definitions are read-only; custom roles provide editable access.
+
+Schema 39 adds `purchase_order_line_source_links` for durable quotation sourcing,
+nullable PO `sent_by` and `closed_by`, and Receiving `finalized_at`. Source
+links retain their quotation item identifier and planned quantity when a
+quotation is edited; old note-only POs are not automatically linked.
+
+Schema 38 adds a nullable, unique `stock_receivings.sequence` for stable
+human `RCV-` references. Migration assigns existing rows by insertion order;
+new finalized Receivings take the next local number. Backup verification
+requires the column for schema 38 and continues to accept older backups.
+
+Schema 37 adds singleton `inventory_health_settings` with slow-moving,
+dead-stock, and near-expiry day thresholds (defaults 60, 180, and 30).
+The migration is additive. Derived health, aging, and expiry values remain
+read models based on sales and remaining inventory layers.
+
+Schema 36 adds nullable product reorder level, target stock (integer
+thousandths), and preferred supplier configuration.
+
+Schema 35 adds `held_sales` for persistent POS drafts and `sale_manual_discounts`
+for authorized discount snapshots. `sales` gains nullable `walk_in_name`,
+`walk_in_contact`, and `held_reference`; `sale_items` gains
+`manual_discount_cents`. Existing rows retain their values through an additive
+migration. Held drafts do not reserve stock and are included in backups.
+
 This is the local, per-device database. It is the source of truth for that
 device — never the UI, never the cloud.
 
@@ -469,3 +507,13 @@ changing an assigned reference. Preexisting sales remain null and display
 `receipt_number` is separate from `bir_invoice_number` and does not participate
 in BIR numbering, grand total, Z-reading, or FIFO. SQLite backups include the
 column and its values.
+
+## Customer loyalty (schema version 34)
+
+Schema 34 adds `loyalty_settings`, `loyalty_ledger`, `sale_loyalty`, and
+`customer_groups`. The ledger is append-only and indexed by customer ID;
+`UNIQUE(kind, source_id)` prevents a sale or return from posting the same
+movement twice. `sale_loyalty` stores the original earning and redemption
+rules alongside the sale. Existing customers implicitly belong to Retail
+until an Owner selects another primary group. See
+[customer_loyalty.md](customer_loyalty.md) for calculation policies.

@@ -2,7 +2,9 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/core/services/auth_service.dart';
+import 'package:modern_offline_pos/core/models/business_feature.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
+import 'package:modern_offline_pos/data/daos/business_feature_repository.dart';
 import 'package:modern_offline_pos/data/daos/directory_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/daos/stock_receiving_repository.dart';
@@ -10,7 +12,133 @@ import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/features/inventory/stock_receiving_screen.dart';
 import 'package:modern_offline_pos/features/pos_checkout/checkout_screen.dart';
 
+Future<void> revealProductField(WidgetTester tester, Finder target,
+    {double delta = 250, bool right = false}) async {
+  final vertical = find
+      .descendant(
+          of: find.byKey(
+              ValueKey(right ? 'product-editor-right' : 'product-editor-left')),
+          matching: find.byType(Scrollable))
+      .first;
+  await tester.scrollUntilVisible(target, delta, scrollable: vertical);
+  await tester.ensureVisible(target);
+  await tester.pumpAndSettle();
+}
+
 void main() {
+  testWidgets('opening batch table derives quantity and stores layer prices',
+      (tester) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final auth = AuthService(AuthRepository(db));
+    final owner = await auth.bootstrap('Owner', 'password123', 'Q?', 'Answer');
+    await auth.login(owner, 'password123');
+    await BusinessFeatureRepository(db)
+        .setEnabled(BusinessFeature.expiryBatchTracking, true, auth.current!);
+    final repo = PosRepository(db);
+    await tester.pumpWidget(
+        MaterialApp(home: ProductScreen(repository: repo, auth: auth)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add product').first);
+    await tester.pumpAndSettle();
+    final vertical = find
+        .descendant(
+            of: find.byKey(const ValueKey('product-editor-left')),
+            matching: find.byType(Scrollable))
+        .first;
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Product name *'), 'Batch item');
+    await revealProductField(tester, find.text('Batch / expiry'), right: true);
+    await tester.tap(find.widgetWithText(CheckboxListTile, 'Batch / expiry'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('I already have stock'), 250,
+        scrollable: vertical);
+    await tester.tap(find.text('I already have stock'));
+    await tester.pumpAndSettle();
+    await revealProductField(tester, find.text('PRICING'));
+    await tester.tap(find.text('Use one product price'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Price each stock layer separately').last);
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('OPENING BATCHES'), 250,
+        scrollable: vertical);
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Batch / lot *').first, 'LOT-A');
+    await tester.enterText(find.widgetWithText(TextField, 'Qty *').first, '2');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Cost *').first, '10');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Selling *').first, '15');
+    await tester.tap(find.text('Add batch'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Batch / lot *').last, 'LOT-B');
+    await tester.enterText(find.widgetWithText(TextField, 'Qty *').last, '3');
+    await tester.enterText(find.widgetWithText(TextField, 'Cost *').last, '11');
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Selling *').last, '17');
+    await tester.pumpAndSettle();
+    expect(find.text('Total opening quantity: 5 pcs'), findsOneWidget);
+    await tester.tap(find.text('Create product').last);
+    await tester.pumpAndSettle();
+    final product = (await repo.products()).single;
+    final layers = await repo.layersForProduct(product.id);
+    expect(layers.map((l) => l.batchNumber).toSet(), {'LOT-A', 'LOT-B'});
+    expect(layers.map((l) => l.unitCostCents).toSet(), {1000, 1100});
+    expect(layers.map((l) => l.unitSellingPriceCents).toSet(), {1500, 1700});
+    await tester.tap(find.text('Batch item').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Stock layers'), findsOneWidget);
+    await tester.ensureVisible(find.text('Stock layers'));
+    await tester.tap(find.text('Stock layers'));
+    await tester.pumpAndSettle();
+    expect(find.byType(DataTable), findsWidgets);
+    expect(find.text('LOT-A'), findsOneWidget);
+    expect(find.text('LOT-B'), findsOneWidget);
+  });
+
+  testWidgets(
+      'received-stock pricing creates zero stock without a product price',
+      (tester) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final auth = AuthService(AuthRepository(db));
+    final owner = await auth.bootstrap('Owner', 'password123', 'Q?', 'Answer');
+    await auth.login(owner, 'password123');
+    final repo = PosRepository(db);
+    await tester.pumpWidget(
+        MaterialApp(home: ProductScreen(repository: repo, auth: auth)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add product').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Low-stock alert threshold'), findsOneWidget);
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Product name *'), 'Layer item');
+    await tester.tap(find.text('Create product').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Selling price is required.'), findsOneWidget);
+    await revealProductField(tester, find.text('PRICING'));
+    await tester.tap(find.text('Use one product price'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Price each stock layer separately').last);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextField, 'Selling price *'), findsNothing);
+    await tester.tap(find.text('Create product').last);
+    await tester.pumpAndSettle();
+    final product = (await repo.products()).single;
+    expect(product.pricingPolicy, 'layer');
+    expect(product.priceCents, 0);
+    expect(await repo.layersForProduct(product.id), isEmpty);
+  });
+
   testWidgets('serialized opening stock requires exact scanned serials',
       (tester) async {
     tester.view.physicalSize = const Size(1300, 1000);
@@ -30,32 +158,26 @@ void main() {
     await tester.tap(find.text('Add product').first);
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Name'), 'Opening board');
+        find.widgetWithText(TextField, 'Product name *'), 'Opening board');
     await tester.enterText(
-        find.widgetWithText(TextField, 'Current selling price (pesos)'),
-        '3500');
-    await tester.drag(find.byType(ListView).last, const Offset(0, -500));
+        find.widgetWithText(TextField, 'Selling price *'), '3500');
+    await revealProductField(tester, find.text('Serial numbers'), right: true);
+    await tester.tap(find.text('Serial numbers'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Tracking options'));
+    await tester.ensureVisible(find.text('I already have stock').last);
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('Individual serial numbers'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Individual serial numbers'));
-    await tester.pumpAndSettle();
-    await tester.ensureVisible(find.text('I already have stock on hand').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('I already have stock on hand').last);
+    await tester.tap(find.text('I already have stock').last);
     await tester.pumpAndSettle();
     expect(find.text('Existing inventory'), findsOneWidget);
     expect(find.text('Serialized'), findsWidgets);
     await tester.enterText(
-        find.widgetWithText(TextField, 'Opening quantity'), '2');
+        find.widgetWithText(TextField, 'Cost per unit *'), '2000');
     await tester.tap(find.text('Create product').last);
     await tester.pumpAndSettle();
     await tester.drag(find.byType(ListView).last, const Offset(0, 700));
     await tester.pumpAndSettle();
     expect(
-        find.text('Enter 2 more serial numbers to continue.'), findsOneWidget);
+        find.text('Enter at least one opening serial number.'), findsOneWidget);
     await tester.drag(find.byType(ListView).last, const Offset(0, -700));
     await tester.pumpAndSettle();
     await tester.enterText(
@@ -75,6 +197,14 @@ void main() {
     final product = (await repo.products()).single;
     expect(await repo.stockMilli(product.id), 2000);
     expect((await repo.availableSerials(product.id)).length, 2);
+    await tester.tap(find.text('Opening board').first);
+    await tester.pumpAndSettle();
+    expect(find.text('AVAILABLE SERIALS (2)'), findsOneWidget);
+    await tester.ensureVisible(find.text('AVAILABLE SERIALS (2)'));
+    await tester.tap(find.text('AVAILABLE SERIALS (2)'));
+    await tester.pumpAndSettle();
+    expect(find.text('SN-1'), findsOneWidget);
+    expect(find.text('SN-2'), findsOneWidget);
   });
   testWidgets('Product stock setup preserves opening and receive paths',
       (tester) async {
@@ -99,15 +229,25 @@ void main() {
     await tester.tap(find.text('Add product').first);
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Name'), 'Opening item');
-    await tester.enterText(
-        find.widgetWithText(TextField, 'Current selling price (pesos)'), '10');
-    await tester.tap(find.text('Create with zero stock'));
+        find.widgetWithText(TextField, 'Product name *'), 'Opening item');
+    await revealProductField(tester, find.text('I already have stock'));
+    await tester.tap(find.text('I already have stock').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('I already have stock on hand').last);
-    await tester.pumpAndSettle();
+    await revealProductField(tester, find.text('PRICING'));
     await tester.enterText(
-        find.widgetWithText(TextField, 'Opening quantity'), '3');
+        find.widgetWithText(TextField, 'Selling price *'), '10');
+    await revealProductField(
+        tester, find.widgetWithText(TextField, 'Opening quantity *'));
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Opening quantity *'), '3');
+    await tester.scrollUntilVisible(
+        find.widgetWithText(TextField, 'Cost per unit *'), 250,
+        scrollable: find
+            .descendant(
+                of: find.byType(Dialog), matching: find.byType(Scrollable))
+            .first);
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Cost per unit *'), '5');
     await tester.tap(find.text('Create product').last);
     await tester.pumpAndSettle();
     await tester.pump(const Duration(milliseconds: 500));
@@ -118,13 +258,13 @@ void main() {
     await tester.tap(find.text('Add product').first);
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Name'), 'Receive item');
+        find.widgetWithText(TextField, 'Product name *'), 'Receive item');
+    await revealProductField(tester, find.text('Receive from supplier'));
+    await tester.tap(find.text('Receive from supplier').last);
+    await tester.pumpAndSettle();
+    await revealProductField(tester, find.text('PRICING'));
     await tester.enterText(
-        find.widgetWithText(TextField, 'Current selling price (pesos)'), '20');
-    await tester.tap(find.text('Create with zero stock'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Receive stock from a supplier now').last);
-    await tester.pumpAndSettle();
+        find.widgetWithText(TextField, 'Selling price *'), '20');
     await tester.tap(find.text('Create & Continue to Receiving').last);
     await tester.pumpAndSettle();
     expect(requestedReceiving, isNotNull);
@@ -181,9 +321,7 @@ void main() {
     await tester.tap(find.text('Add product').first);
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Name'), 'Jasmine rice');
-    await tester.enterText(
-        find.widgetWithText(TextField, 'Current selling price (pesos)'), '50');
+        find.widgetWithText(TextField, 'Product name *'), 'Jasmine rice');
     await tester.tap(find.text('Create new category'));
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextField, 'Name *'), 'Food');
@@ -191,6 +329,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Jasmine rice'), findsOneWidget);
     expect(find.text('Food'), findsOneWidget);
+    await revealProductField(tester, find.text('PRICING'));
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Selling price *'), '50');
     await tester.tap(find.text('Create product').last);
     await tester.pumpAndSettle();
     expect((await repo.products()).single.name, 'Jasmine rice');
@@ -231,7 +372,14 @@ void main() {
     expect(find.text('Rice'), findsNothing);
     await tester.tap(find.text('Laptop'));
     await tester.pumpAndSettle();
-    expect(find.text('View available serial units'), findsOneWidget);
+    expect(find.byKey(const Key('record-details-drawer')), findsOneWidget);
+    expect(find.text('Rice'), findsNothing);
+    expect(find.text('No physical stock on hand.'), findsOneWidget);
+    expect(find.text('AVAILABLE SERIALS (0)'), findsOneWidget);
+    await tester.ensureVisible(find.text('AVAILABLE SERIALS (0)'));
+    await tester.tap(find.text('AVAILABLE SERIALS (0)'));
+    await tester.pumpAndSettle();
+    expect(find.text('No available serials.'), findsOneWidget);
     await tester.tap(find.text('Receive stock'));
     expect(shortcut, laptop);
   });
@@ -262,14 +410,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('New Receiving'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Quantity (pcs)'), findsNothing);
-    await tester.tap(find.text('Add item to delivery').first);
+    await tester.tap(find.text('Add item').first);
     await tester.pumpAndSettle();
-    expect(find.text('Add item to delivery'), findsWidgets);
+    expect(find.text('Add item'), findsWidgets);
     expect(find.text('Mouse'), findsOneWidget);
     await tester.tap(find.byTooltip('Close item editor'));
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Supplier reference (optional)'),
+        find.widgetWithText(
+            TextField, 'Supplier invoice / reference (optional)'),
         'DR-123');
     await tester.tap(find.text('Search/select supplier'));
     await tester.pumpAndSettle();
@@ -316,9 +465,10 @@ void main() {
     await tester.tap(find.text(supplier.name).last);
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Supplier reference (optional)'),
+        find.widgetWithText(
+            TextField, 'Supplier invoice / reference (optional)'),
         'DR-456');
-    await tester.tap(find.text('Add item to delivery').first);
+    await tester.tap(find.text('Add item').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Search/select product'));
     await tester.pumpAndSettle();
@@ -326,8 +476,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextField, 'Name *'), 'Mouse');
     await tester.enterText(
-        find.widgetWithText(TextField, 'Current selling price (pesos) *'),
-        '800');
+        find.widgetWithText(TextField, 'Selling price *'), '800');
     await tester.tap(find.text('Create & select'));
     await tester.pumpAndSettle();
     expect(find.text('Mouse'), findsOneWidget);
@@ -337,7 +486,7 @@ void main() {
     await tester.enterText(
         find.widgetWithText(TextField, 'Quantity (pcs)'), '2');
     await tester.enterText(
-        find.widgetWithText(TextField, 'Unit purchase cost (pesos)'), '500');
+        find.widgetWithText(TextField, 'Cost / pcs *'), '500');
     await tester.tap(find.text('Add to delivery'));
     await tester.pumpAndSettle();
     expect(find.text('Items in this delivery'), findsOneWidget);
@@ -374,18 +523,21 @@ void main() {
     await tester.tap(find.text('New receiving'));
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Supplier reference (optional)'),
+        find.widgetWithText(
+            TextField, 'Supplier invoice / reference (optional)'),
         'DR-789');
-    await tester.tap(find.text('Add item to delivery').first);
+    await tester.tap(find.text('Add item').first);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Search/select product'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Quick add product'));
     await tester.pumpAndSettle();
-    expect(find.text('GENERAL'), findsOneWidget);
-    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'New mouse');
+    expect(find.text('PRODUCT'), findsOneWidget);
     await tester.enterText(
-        find.widgetWithText(TextField, 'Current selling price (pesos)'), '800');
+        find.widgetWithText(TextField, 'Product name *'), 'New mouse');
+    await revealProductField(tester, find.text('PRICING'));
+    await tester.enterText(
+        find.widgetWithText(TextField, 'Selling price *'), '800');
     await tester.tap(find.text('Create product').last);
     await tester.pumpAndSettle();
     expect((await repo.products()).single.name, 'New mouse');
@@ -418,7 +570,8 @@ void main() {
     await tester.tap(find.text('New receiving'));
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextField, 'Supplier reference (optional)'),
+        find.widgetWithText(
+            TextField, 'Supplier invoice / reference (optional)'),
         'DR-001');
     await tester.tap(find.byTooltip('Back to receiving'));
     await tester.pumpAndSettle();
@@ -466,15 +619,15 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text(supplier.name).last);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Add item to delivery').first);
+    await tester.tap(find.text('Add item').first);
     await tester.pumpAndSettle();
-    expect(find.text('Add item to delivery'), findsWidgets);
+    expect(find.text('Add item'), findsWidgets);
     expect(find.textContaining('Stock changes only after finalization.'),
         findsOneWidget);
     await tester.enterText(
         find.widgetWithText(TextField, 'Quantity (pcs)'), '2');
     await tester.enterText(
-        find.widgetWithText(TextField, 'Unit purchase cost (pesos)'), '500');
+        find.widgetWithText(TextField, 'Cost / pcs *'), '500');
     await tester.tap(find.text('Add to delivery'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Added to this delivery.'), findsOneWidget);
@@ -485,7 +638,9 @@ void main() {
     await tester.tap(find.text('Finalize Receiving'));
     await tester.pumpAndSettle();
     expect(find.text('Finalize this receiving?'), findsOneWidget);
-    expect(find.text('Finalizing will add these quantities to inventory.'),
+    expect(
+        find.text(
+            'Finalizing this receiving will add these quantities to inventory.'),
         findsOneWidget);
     expect(await repo.stockMilli(productId), 0);
     await tester.tap(find.text('Finalize Receiving').last);

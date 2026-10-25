@@ -19485,6 +19485,653 @@ class StockCountsCompanion extends UpdateCompanion<StockCount> {
   }
 }
 
+class $CycleCountSchedulesTable extends CycleCountSchedules
+    with TableInfo<$CycleCountSchedulesTable, CycleCountSchedule> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $CycleCountSchedulesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      clientDefault: () => _uuid());
+  static const VerificationMeta _titleMeta = const VerificationMeta('title');
+  @override
+  late final GeneratedColumn<String> title = GeneratedColumn<String>(
+      'title', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _scopeTypeMeta =
+      const VerificationMeta('scopeType');
+  @override
+  late final GeneratedColumn<String> scopeType = GeneratedColumn<String>(
+      'scope_type', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _scopeRefsMeta =
+      const VerificationMeta('scopeRefs');
+  @override
+  late final GeneratedColumn<String> scopeRefs = GeneratedColumn<String>(
+      'scope_refs', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _assigneeIdMeta =
+      const VerificationMeta('assigneeId');
+  @override
+  late final GeneratedColumn<String> assigneeId = GeneratedColumn<String>(
+      'assignee_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('REFERENCES users (id)'));
+  static const VerificationMeta _scheduledDateMeta =
+      const VerificationMeta('scheduledDate');
+  @override
+  late final GeneratedColumn<DateTime> scheduledDate =
+      GeneratedColumn<DateTime>('scheduled_date', aliasedName, false,
+          type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _dueDateMeta =
+      const VerificationMeta('dueDate');
+  @override
+  late final GeneratedColumn<DateTime> dueDate = GeneratedColumn<DateTime>(
+      'due_date', aliasedName, false,
+      type: DriftSqlType.dateTime, requiredDuringInsert: true);
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+      'status', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('scheduled'));
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      clientDefault: () => DateTime.now());
+  static const VerificationMeta _createdByMeta =
+      const VerificationMeta('createdBy');
+  @override
+  late final GeneratedColumn<String> createdBy = GeneratedColumn<String>(
+      'created_by', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('REFERENCES users (id)'));
+  static const VerificationMeta _updatedAtMeta =
+      const VerificationMeta('updatedAt');
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+      'updated_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      clientDefault: () => DateTime.now());
+  static const VerificationMeta _notesMeta = const VerificationMeta('notes');
+  @override
+  late final GeneratedColumn<String> notes = GeneratedColumn<String>(
+      'notes', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _stockCountIdMeta =
+      const VerificationMeta('stockCountId');
+  @override
+  late final GeneratedColumn<String> stockCountId = GeneratedColumn<String>(
+      'stock_count_id', aliasedName, true,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'UNIQUE REFERENCES stock_counts (id)'));
+  @override
+  List<GeneratedColumn> get $columns => [
+        id,
+        title,
+        scopeType,
+        scopeRefs,
+        assigneeId,
+        scheduledDate,
+        dueDate,
+        status,
+        createdAt,
+        createdBy,
+        updatedAt,
+        notes,
+        stockCountId
+      ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'cycle_count_schedules';
+  @override
+  VerificationContext validateIntegrity(Insertable<CycleCountSchedule> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('title')) {
+      context.handle(
+          _titleMeta, title.isAcceptableOrUnknown(data['title']!, _titleMeta));
+    } else if (isInserting) {
+      context.missing(_titleMeta);
+    }
+    if (data.containsKey('scope_type')) {
+      context.handle(_scopeTypeMeta,
+          scopeType.isAcceptableOrUnknown(data['scope_type']!, _scopeTypeMeta));
+    } else if (isInserting) {
+      context.missing(_scopeTypeMeta);
+    }
+    if (data.containsKey('scope_refs')) {
+      context.handle(_scopeRefsMeta,
+          scopeRefs.isAcceptableOrUnknown(data['scope_refs']!, _scopeRefsMeta));
+    } else if (isInserting) {
+      context.missing(_scopeRefsMeta);
+    }
+    if (data.containsKey('assignee_id')) {
+      context.handle(
+          _assigneeIdMeta,
+          assigneeId.isAcceptableOrUnknown(
+              data['assignee_id']!, _assigneeIdMeta));
+    } else if (isInserting) {
+      context.missing(_assigneeIdMeta);
+    }
+    if (data.containsKey('scheduled_date')) {
+      context.handle(
+          _scheduledDateMeta,
+          scheduledDate.isAcceptableOrUnknown(
+              data['scheduled_date']!, _scheduledDateMeta));
+    } else if (isInserting) {
+      context.missing(_scheduledDateMeta);
+    }
+    if (data.containsKey('due_date')) {
+      context.handle(_dueDateMeta,
+          dueDate.isAcceptableOrUnknown(data['due_date']!, _dueDateMeta));
+    } else if (isInserting) {
+      context.missing(_dueDateMeta);
+    }
+    if (data.containsKey('status')) {
+      context.handle(_statusMeta,
+          status.isAcceptableOrUnknown(data['status']!, _statusMeta));
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    }
+    if (data.containsKey('created_by')) {
+      context.handle(_createdByMeta,
+          createdBy.isAcceptableOrUnknown(data['created_by']!, _createdByMeta));
+    } else if (isInserting) {
+      context.missing(_createdByMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(_updatedAtMeta,
+          updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta));
+    }
+    if (data.containsKey('notes')) {
+      context.handle(
+          _notesMeta, notes.isAcceptableOrUnknown(data['notes']!, _notesMeta));
+    }
+    if (data.containsKey('stock_count_id')) {
+      context.handle(
+          _stockCountIdMeta,
+          stockCountId.isAcceptableOrUnknown(
+              data['stock_count_id']!, _stockCountIdMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  CycleCountSchedule map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return CycleCountSchedule(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      title: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}title'])!,
+      scopeType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}scope_type'])!,
+      scopeRefs: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}scope_refs'])!,
+      assigneeId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}assignee_id'])!,
+      scheduledDate: attachedDatabase.typeMapping.read(
+          DriftSqlType.dateTime, data['${effectivePrefix}scheduled_date'])!,
+      dueDate: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}due_date'])!,
+      status: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}status'])!,
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}created_at'])!,
+      createdBy: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}created_by'])!,
+      updatedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}updated_at'])!,
+      notes: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}notes']),
+      stockCountId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}stock_count_id']),
+    );
+  }
+
+  @override
+  $CycleCountSchedulesTable createAlias(String alias) {
+    return $CycleCountSchedulesTable(attachedDatabase, alias);
+  }
+}
+
+class CycleCountSchedule extends DataClass
+    implements Insertable<CycleCountSchedule> {
+  final String id;
+  final String title;
+  final String scopeType;
+  final String scopeRefs;
+  final String assigneeId;
+  final DateTime scheduledDate;
+  final DateTime dueDate;
+  final String status;
+  final DateTime createdAt;
+  final String createdBy;
+  final DateTime updatedAt;
+  final String? notes;
+  final String? stockCountId;
+  const CycleCountSchedule(
+      {required this.id,
+      required this.title,
+      required this.scopeType,
+      required this.scopeRefs,
+      required this.assigneeId,
+      required this.scheduledDate,
+      required this.dueDate,
+      required this.status,
+      required this.createdAt,
+      required this.createdBy,
+      required this.updatedAt,
+      this.notes,
+      this.stockCountId});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['title'] = Variable<String>(title);
+    map['scope_type'] = Variable<String>(scopeType);
+    map['scope_refs'] = Variable<String>(scopeRefs);
+    map['assignee_id'] = Variable<String>(assigneeId);
+    map['scheduled_date'] = Variable<DateTime>(scheduledDate);
+    map['due_date'] = Variable<DateTime>(dueDate);
+    map['status'] = Variable<String>(status);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['created_by'] = Variable<String>(createdBy);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    if (!nullToAbsent || notes != null) {
+      map['notes'] = Variable<String>(notes);
+    }
+    if (!nullToAbsent || stockCountId != null) {
+      map['stock_count_id'] = Variable<String>(stockCountId);
+    }
+    return map;
+  }
+
+  CycleCountSchedulesCompanion toCompanion(bool nullToAbsent) {
+    return CycleCountSchedulesCompanion(
+      id: Value(id),
+      title: Value(title),
+      scopeType: Value(scopeType),
+      scopeRefs: Value(scopeRefs),
+      assigneeId: Value(assigneeId),
+      scheduledDate: Value(scheduledDate),
+      dueDate: Value(dueDate),
+      status: Value(status),
+      createdAt: Value(createdAt),
+      createdBy: Value(createdBy),
+      updatedAt: Value(updatedAt),
+      notes:
+          notes == null && nullToAbsent ? const Value.absent() : Value(notes),
+      stockCountId: stockCountId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(stockCountId),
+    );
+  }
+
+  factory CycleCountSchedule.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return CycleCountSchedule(
+      id: serializer.fromJson<String>(json['id']),
+      title: serializer.fromJson<String>(json['title']),
+      scopeType: serializer.fromJson<String>(json['scopeType']),
+      scopeRefs: serializer.fromJson<String>(json['scopeRefs']),
+      assigneeId: serializer.fromJson<String>(json['assigneeId']),
+      scheduledDate: serializer.fromJson<DateTime>(json['scheduledDate']),
+      dueDate: serializer.fromJson<DateTime>(json['dueDate']),
+      status: serializer.fromJson<String>(json['status']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      createdBy: serializer.fromJson<String>(json['createdBy']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+      notes: serializer.fromJson<String?>(json['notes']),
+      stockCountId: serializer.fromJson<String?>(json['stockCountId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'title': serializer.toJson<String>(title),
+      'scopeType': serializer.toJson<String>(scopeType),
+      'scopeRefs': serializer.toJson<String>(scopeRefs),
+      'assigneeId': serializer.toJson<String>(assigneeId),
+      'scheduledDate': serializer.toJson<DateTime>(scheduledDate),
+      'dueDate': serializer.toJson<DateTime>(dueDate),
+      'status': serializer.toJson<String>(status),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'createdBy': serializer.toJson<String>(createdBy),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+      'notes': serializer.toJson<String?>(notes),
+      'stockCountId': serializer.toJson<String?>(stockCountId),
+    };
+  }
+
+  CycleCountSchedule copyWith(
+          {String? id,
+          String? title,
+          String? scopeType,
+          String? scopeRefs,
+          String? assigneeId,
+          DateTime? scheduledDate,
+          DateTime? dueDate,
+          String? status,
+          DateTime? createdAt,
+          String? createdBy,
+          DateTime? updatedAt,
+          Value<String?> notes = const Value.absent(),
+          Value<String?> stockCountId = const Value.absent()}) =>
+      CycleCountSchedule(
+        id: id ?? this.id,
+        title: title ?? this.title,
+        scopeType: scopeType ?? this.scopeType,
+        scopeRefs: scopeRefs ?? this.scopeRefs,
+        assigneeId: assigneeId ?? this.assigneeId,
+        scheduledDate: scheduledDate ?? this.scheduledDate,
+        dueDate: dueDate ?? this.dueDate,
+        status: status ?? this.status,
+        createdAt: createdAt ?? this.createdAt,
+        createdBy: createdBy ?? this.createdBy,
+        updatedAt: updatedAt ?? this.updatedAt,
+        notes: notes.present ? notes.value : this.notes,
+        stockCountId:
+            stockCountId.present ? stockCountId.value : this.stockCountId,
+      );
+  CycleCountSchedule copyWithCompanion(CycleCountSchedulesCompanion data) {
+    return CycleCountSchedule(
+      id: data.id.present ? data.id.value : this.id,
+      title: data.title.present ? data.title.value : this.title,
+      scopeType: data.scopeType.present ? data.scopeType.value : this.scopeType,
+      scopeRefs: data.scopeRefs.present ? data.scopeRefs.value : this.scopeRefs,
+      assigneeId:
+          data.assigneeId.present ? data.assigneeId.value : this.assigneeId,
+      scheduledDate: data.scheduledDate.present
+          ? data.scheduledDate.value
+          : this.scheduledDate,
+      dueDate: data.dueDate.present ? data.dueDate.value : this.dueDate,
+      status: data.status.present ? data.status.value : this.status,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      createdBy: data.createdBy.present ? data.createdBy.value : this.createdBy,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      notes: data.notes.present ? data.notes.value : this.notes,
+      stockCountId: data.stockCountId.present
+          ? data.stockCountId.value
+          : this.stockCountId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CycleCountSchedule(')
+          ..write('id: $id, ')
+          ..write('title: $title, ')
+          ..write('scopeType: $scopeType, ')
+          ..write('scopeRefs: $scopeRefs, ')
+          ..write('assigneeId: $assigneeId, ')
+          ..write('scheduledDate: $scheduledDate, ')
+          ..write('dueDate: $dueDate, ')
+          ..write('status: $status, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('createdBy: $createdBy, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('notes: $notes, ')
+          ..write('stockCountId: $stockCountId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      id,
+      title,
+      scopeType,
+      scopeRefs,
+      assigneeId,
+      scheduledDate,
+      dueDate,
+      status,
+      createdAt,
+      createdBy,
+      updatedAt,
+      notes,
+      stockCountId);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is CycleCountSchedule &&
+          other.id == this.id &&
+          other.title == this.title &&
+          other.scopeType == this.scopeType &&
+          other.scopeRefs == this.scopeRefs &&
+          other.assigneeId == this.assigneeId &&
+          other.scheduledDate == this.scheduledDate &&
+          other.dueDate == this.dueDate &&
+          other.status == this.status &&
+          other.createdAt == this.createdAt &&
+          other.createdBy == this.createdBy &&
+          other.updatedAt == this.updatedAt &&
+          other.notes == this.notes &&
+          other.stockCountId == this.stockCountId);
+}
+
+class CycleCountSchedulesCompanion extends UpdateCompanion<CycleCountSchedule> {
+  final Value<String> id;
+  final Value<String> title;
+  final Value<String> scopeType;
+  final Value<String> scopeRefs;
+  final Value<String> assigneeId;
+  final Value<DateTime> scheduledDate;
+  final Value<DateTime> dueDate;
+  final Value<String> status;
+  final Value<DateTime> createdAt;
+  final Value<String> createdBy;
+  final Value<DateTime> updatedAt;
+  final Value<String?> notes;
+  final Value<String?> stockCountId;
+  final Value<int> rowid;
+  const CycleCountSchedulesCompanion({
+    this.id = const Value.absent(),
+    this.title = const Value.absent(),
+    this.scopeType = const Value.absent(),
+    this.scopeRefs = const Value.absent(),
+    this.assigneeId = const Value.absent(),
+    this.scheduledDate = const Value.absent(),
+    this.dueDate = const Value.absent(),
+    this.status = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.createdBy = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.notes = const Value.absent(),
+    this.stockCountId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  CycleCountSchedulesCompanion.insert({
+    this.id = const Value.absent(),
+    required String title,
+    required String scopeType,
+    required String scopeRefs,
+    required String assigneeId,
+    required DateTime scheduledDate,
+    required DateTime dueDate,
+    this.status = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    required String createdBy,
+    this.updatedAt = const Value.absent(),
+    this.notes = const Value.absent(),
+    this.stockCountId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : title = Value(title),
+        scopeType = Value(scopeType),
+        scopeRefs = Value(scopeRefs),
+        assigneeId = Value(assigneeId),
+        scheduledDate = Value(scheduledDate),
+        dueDate = Value(dueDate),
+        createdBy = Value(createdBy);
+  static Insertable<CycleCountSchedule> custom({
+    Expression<String>? id,
+    Expression<String>? title,
+    Expression<String>? scopeType,
+    Expression<String>? scopeRefs,
+    Expression<String>? assigneeId,
+    Expression<DateTime>? scheduledDate,
+    Expression<DateTime>? dueDate,
+    Expression<String>? status,
+    Expression<DateTime>? createdAt,
+    Expression<String>? createdBy,
+    Expression<DateTime>? updatedAt,
+    Expression<String>? notes,
+    Expression<String>? stockCountId,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (title != null) 'title': title,
+      if (scopeType != null) 'scope_type': scopeType,
+      if (scopeRefs != null) 'scope_refs': scopeRefs,
+      if (assigneeId != null) 'assignee_id': assigneeId,
+      if (scheduledDate != null) 'scheduled_date': scheduledDate,
+      if (dueDate != null) 'due_date': dueDate,
+      if (status != null) 'status': status,
+      if (createdAt != null) 'created_at': createdAt,
+      if (createdBy != null) 'created_by': createdBy,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (notes != null) 'notes': notes,
+      if (stockCountId != null) 'stock_count_id': stockCountId,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  CycleCountSchedulesCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? title,
+      Value<String>? scopeType,
+      Value<String>? scopeRefs,
+      Value<String>? assigneeId,
+      Value<DateTime>? scheduledDate,
+      Value<DateTime>? dueDate,
+      Value<String>? status,
+      Value<DateTime>? createdAt,
+      Value<String>? createdBy,
+      Value<DateTime>? updatedAt,
+      Value<String?>? notes,
+      Value<String?>? stockCountId,
+      Value<int>? rowid}) {
+    return CycleCountSchedulesCompanion(
+      id: id ?? this.id,
+      title: title ?? this.title,
+      scopeType: scopeType ?? this.scopeType,
+      scopeRefs: scopeRefs ?? this.scopeRefs,
+      assigneeId: assigneeId ?? this.assigneeId,
+      scheduledDate: scheduledDate ?? this.scheduledDate,
+      dueDate: dueDate ?? this.dueDate,
+      status: status ?? this.status,
+      createdAt: createdAt ?? this.createdAt,
+      createdBy: createdBy ?? this.createdBy,
+      updatedAt: updatedAt ?? this.updatedAt,
+      notes: notes ?? this.notes,
+      stockCountId: stockCountId ?? this.stockCountId,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (title.present) {
+      map['title'] = Variable<String>(title.value);
+    }
+    if (scopeType.present) {
+      map['scope_type'] = Variable<String>(scopeType.value);
+    }
+    if (scopeRefs.present) {
+      map['scope_refs'] = Variable<String>(scopeRefs.value);
+    }
+    if (assigneeId.present) {
+      map['assignee_id'] = Variable<String>(assigneeId.value);
+    }
+    if (scheduledDate.present) {
+      map['scheduled_date'] = Variable<DateTime>(scheduledDate.value);
+    }
+    if (dueDate.present) {
+      map['due_date'] = Variable<DateTime>(dueDate.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (createdBy.present) {
+      map['created_by'] = Variable<String>(createdBy.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (notes.present) {
+      map['notes'] = Variable<String>(notes.value);
+    }
+    if (stockCountId.present) {
+      map['stock_count_id'] = Variable<String>(stockCountId.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CycleCountSchedulesCompanion(')
+          ..write('id: $id, ')
+          ..write('title: $title, ')
+          ..write('scopeType: $scopeType, ')
+          ..write('scopeRefs: $scopeRefs, ')
+          ..write('assigneeId: $assigneeId, ')
+          ..write('scheduledDate: $scheduledDate, ')
+          ..write('dueDate: $dueDate, ')
+          ..write('status: $status, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('createdBy: $createdBy, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('notes: $notes, ')
+          ..write('stockCountId: $stockCountId, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $StockCountLinesTable extends StockCountLines
     with TableInfo<$StockCountLinesTable, StockCountLine> {
   @override
@@ -36550,6 +37197,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $PurchaseReturnLinesTable purchaseReturnLines =
       $PurchaseReturnLinesTable(this);
   late final $StockCountsTable stockCounts = $StockCountsTable(this);
+  late final $CycleCountSchedulesTable cycleCountSchedules =
+      $CycleCountSchedulesTable(this);
   late final $StockCountLinesTable stockCountLines =
       $StockCountLinesTable(this);
   late final $InventoryAdjustmentsTable inventoryAdjustments =
@@ -36653,6 +37302,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         serialUnits,
         purchaseReturnLines,
         stockCounts,
+        cycleCountSchedules,
         stockCountLines,
         inventoryAdjustments,
         inventoryAdjustmentAllocations,
@@ -62915,6 +63565,25 @@ final class $$StockCountsTableReferences
         manager.$state.copyWith(prefetchedData: [item]));
   }
 
+  static MultiTypedResultKey<$CycleCountSchedulesTable,
+      List<CycleCountSchedule>> _cycleCountSchedulesRefsTable(
+          _$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(db.cycleCountSchedules,
+          aliasName: $_aliasNameGenerator(
+              db.stockCounts.id, db.cycleCountSchedules.stockCountId));
+
+  $$CycleCountSchedulesTableProcessedTableManager get cycleCountSchedulesRefs {
+    final manager = $$CycleCountSchedulesTableTableManager(
+            $_db, $_db.cycleCountSchedules)
+        .filter(
+            (f) => f.stockCountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache =
+        $_typedResult.readTableOrNull(_cycleCountSchedulesRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+
   static MultiTypedResultKey<$StockCountLinesTable, List<StockCountLine>>
       _stockCountLinesRefsTable(_$AppDatabase db) =>
           MultiTypedResultKey.fromTable(db.stockCountLines,
@@ -63004,6 +63673,27 @@ class $$StockCountsTableFilterComposer
                   $removeJoinBuilderFromRootComposer,
             ));
     return composer;
+  }
+
+  Expression<bool> cycleCountSchedulesRefs(
+      Expression<bool> Function($$CycleCountSchedulesTableFilterComposer f) f) {
+    final $$CycleCountSchedulesTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.cycleCountSchedules,
+        getReferencedColumn: (t) => t.stockCountId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$CycleCountSchedulesTableFilterComposer(
+              $db: $db,
+              $table: $db.cycleCountSchedules,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
   }
 
   Expression<bool> stockCountLinesRefs(
@@ -63175,6 +63865,29 @@ class $$StockCountsTableAnnotationComposer
     return composer;
   }
 
+  Expression<T> cycleCountSchedulesRefs<T extends Object>(
+      Expression<T> Function($$CycleCountSchedulesTableAnnotationComposer a)
+          f) {
+    final $$CycleCountSchedulesTableAnnotationComposer composer =
+        $composerBuilder(
+            composer: this,
+            getCurrentColumn: (t) => t.id,
+            referencedTable: $db.cycleCountSchedules,
+            getReferencedColumn: (t) => t.stockCountId,
+            builder: (joinBuilder,
+                    {$addJoinBuilderToRootComposer,
+                    $removeJoinBuilderFromRootComposer}) =>
+                $$CycleCountSchedulesTableAnnotationComposer(
+                  $db: $db,
+                  $table: $db.cycleCountSchedules,
+                  $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                  joinBuilder: joinBuilder,
+                  $removeJoinBuilderFromRootComposer:
+                      $removeJoinBuilderFromRootComposer,
+                ));
+    return f(composer);
+  }
+
   Expression<T> stockCountLinesRefs<T extends Object>(
       Expression<T> Function($$StockCountLinesTableAnnotationComposer a) f) {
     final $$StockCountLinesTableAnnotationComposer composer = $composerBuilder(
@@ -63209,7 +63922,10 @@ class $$StockCountsTableTableManager extends RootTableManager<
     (StockCount, $$StockCountsTableReferences),
     StockCount,
     PrefetchHooks Function(
-        {bool createdBy, bool finalizedBy, bool stockCountLinesRefs})> {
+        {bool createdBy,
+        bool finalizedBy,
+        bool cycleCountSchedulesRefs,
+        bool stockCountLinesRefs})> {
   $$StockCountsTableTableManager(_$AppDatabase db, $StockCountsTable table)
       : super(TableManagerState(
           db: db,
@@ -63281,10 +63997,12 @@ class $$StockCountsTableTableManager extends RootTableManager<
           prefetchHooksCallback: (
               {createdBy = false,
               finalizedBy = false,
+              cycleCountSchedulesRefs = false,
               stockCountLinesRefs = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [
+                if (cycleCountSchedulesRefs) db.cycleCountSchedules,
                 if (stockCountLinesRefs) db.stockCountLines
               ],
               addJoins: <
@@ -63325,6 +64043,18 @@ class $$StockCountsTableTableManager extends RootTableManager<
               },
               getPrefetchedDataCallback: (items) async {
                 return [
+                  if (cycleCountSchedulesRefs)
+                    await $_getPrefetchedData<StockCount, $StockCountsTable, CycleCountSchedule>(
+                        currentTable: table,
+                        referencedTable: $$StockCountsTableReferences
+                            ._cycleCountSchedulesRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$StockCountsTableReferences(db, table, p0)
+                                .cycleCountSchedulesRefs,
+                        referencedItemsForCurrentItem:
+                            (item, referencedItems) => referencedItems
+                                .where((e) => e.stockCountId == item.id),
+                        typedResults: items),
                   if (stockCountLinesRefs)
                     await $_getPrefetchedData<StockCount, $StockCountsTable,
                             StockCountLine>(
@@ -63357,7 +64087,566 @@ typedef $$StockCountsTableProcessedTableManager = ProcessedTableManager<
     (StockCount, $$StockCountsTableReferences),
     StockCount,
     PrefetchHooks Function(
-        {bool createdBy, bool finalizedBy, bool stockCountLinesRefs})>;
+        {bool createdBy,
+        bool finalizedBy,
+        bool cycleCountSchedulesRefs,
+        bool stockCountLinesRefs})>;
+typedef $$CycleCountSchedulesTableCreateCompanionBuilder
+    = CycleCountSchedulesCompanion Function({
+  Value<String> id,
+  required String title,
+  required String scopeType,
+  required String scopeRefs,
+  required String assigneeId,
+  required DateTime scheduledDate,
+  required DateTime dueDate,
+  Value<String> status,
+  Value<DateTime> createdAt,
+  required String createdBy,
+  Value<DateTime> updatedAt,
+  Value<String?> notes,
+  Value<String?> stockCountId,
+  Value<int> rowid,
+});
+typedef $$CycleCountSchedulesTableUpdateCompanionBuilder
+    = CycleCountSchedulesCompanion Function({
+  Value<String> id,
+  Value<String> title,
+  Value<String> scopeType,
+  Value<String> scopeRefs,
+  Value<String> assigneeId,
+  Value<DateTime> scheduledDate,
+  Value<DateTime> dueDate,
+  Value<String> status,
+  Value<DateTime> createdAt,
+  Value<String> createdBy,
+  Value<DateTime> updatedAt,
+  Value<String?> notes,
+  Value<String?> stockCountId,
+  Value<int> rowid,
+});
+
+final class $$CycleCountSchedulesTableReferences extends BaseReferences<
+    _$AppDatabase, $CycleCountSchedulesTable, CycleCountSchedule> {
+  $$CycleCountSchedulesTableReferences(
+      super.$_db, super.$_table, super.$_typedResult);
+
+  static $UsersTable _assigneeIdTable(_$AppDatabase db) => db.users.createAlias(
+      $_aliasNameGenerator(db.cycleCountSchedules.assigneeId, db.users.id));
+
+  $$UsersTableProcessedTableManager get assigneeId {
+    final $_column = $_itemColumn<String>('assignee_id')!;
+
+    final manager = $$UsersTableTableManager($_db, $_db.users)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_assigneeIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+
+  static $UsersTable _createdByTable(_$AppDatabase db) => db.users.createAlias(
+      $_aliasNameGenerator(db.cycleCountSchedules.createdBy, db.users.id));
+
+  $$UsersTableProcessedTableManager get createdBy {
+    final $_column = $_itemColumn<String>('created_by')!;
+
+    final manager = $$UsersTableTableManager($_db, $_db.users)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_createdByTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+
+  static $StockCountsTable _stockCountIdTable(_$AppDatabase db) =>
+      db.stockCounts.createAlias($_aliasNameGenerator(
+          db.cycleCountSchedules.stockCountId, db.stockCounts.id));
+
+  $$StockCountsTableProcessedTableManager? get stockCountId {
+    final $_column = $_itemColumn<String>('stock_count_id');
+    if ($_column == null) return null;
+    final manager = $$StockCountsTableTableManager($_db, $_db.stockCounts)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_stockCountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
+
+class $$CycleCountSchedulesTableFilterComposer
+    extends Composer<_$AppDatabase, $CycleCountSchedulesTable> {
+  $$CycleCountSchedulesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get scopeType => $composableBuilder(
+      column: $table.scopeType, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get scopeRefs => $composableBuilder(
+      column: $table.scopeRefs, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get scheduledDate => $composableBuilder(
+      column: $table.scheduledDate, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get dueDate => $composableBuilder(
+      column: $table.dueDate, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get status => $composableBuilder(
+      column: $table.status, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get notes => $composableBuilder(
+      column: $table.notes, builder: (column) => ColumnFilters(column));
+
+  $$UsersTableFilterComposer get assigneeId {
+    final $$UsersTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.assigneeId,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableFilterComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$UsersTableFilterComposer get createdBy {
+    final $$UsersTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.createdBy,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableFilterComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$StockCountsTableFilterComposer get stockCountId {
+    final $$StockCountsTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.stockCountId,
+        referencedTable: $db.stockCounts,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$StockCountsTableFilterComposer(
+              $db: $db,
+              $table: $db.stockCounts,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$CycleCountSchedulesTableOrderingComposer
+    extends Composer<_$AppDatabase, $CycleCountSchedulesTable> {
+  $$CycleCountSchedulesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get title => $composableBuilder(
+      column: $table.title, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get scopeType => $composableBuilder(
+      column: $table.scopeType, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get scopeRefs => $composableBuilder(
+      column: $table.scopeRefs, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get scheduledDate => $composableBuilder(
+      column: $table.scheduledDate,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get dueDate => $composableBuilder(
+      column: $table.dueDate, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get status => $composableBuilder(
+      column: $table.status, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+      column: $table.updatedAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get notes => $composableBuilder(
+      column: $table.notes, builder: (column) => ColumnOrderings(column));
+
+  $$UsersTableOrderingComposer get assigneeId {
+    final $$UsersTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.assigneeId,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableOrderingComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$UsersTableOrderingComposer get createdBy {
+    final $$UsersTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.createdBy,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableOrderingComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$StockCountsTableOrderingComposer get stockCountId {
+    final $$StockCountsTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.stockCountId,
+        referencedTable: $db.stockCounts,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$StockCountsTableOrderingComposer(
+              $db: $db,
+              $table: $db.stockCounts,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$CycleCountSchedulesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $CycleCountSchedulesTable> {
+  $$CycleCountSchedulesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get title =>
+      $composableBuilder(column: $table.title, builder: (column) => column);
+
+  GeneratedColumn<String> get scopeType =>
+      $composableBuilder(column: $table.scopeType, builder: (column) => column);
+
+  GeneratedColumn<String> get scopeRefs =>
+      $composableBuilder(column: $table.scopeRefs, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get scheduledDate => $composableBuilder(
+      column: $table.scheduledDate, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get dueDate =>
+      $composableBuilder(column: $table.dueDate, builder: (column) => column);
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get notes =>
+      $composableBuilder(column: $table.notes, builder: (column) => column);
+
+  $$UsersTableAnnotationComposer get assigneeId {
+    final $$UsersTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.assigneeId,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableAnnotationComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$UsersTableAnnotationComposer get createdBy {
+    final $$UsersTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.createdBy,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableAnnotationComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$StockCountsTableAnnotationComposer get stockCountId {
+    final $$StockCountsTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.stockCountId,
+        referencedTable: $db.stockCounts,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$StockCountsTableAnnotationComposer(
+              $db: $db,
+              $table: $db.stockCounts,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$CycleCountSchedulesTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $CycleCountSchedulesTable,
+    CycleCountSchedule,
+    $$CycleCountSchedulesTableFilterComposer,
+    $$CycleCountSchedulesTableOrderingComposer,
+    $$CycleCountSchedulesTableAnnotationComposer,
+    $$CycleCountSchedulesTableCreateCompanionBuilder,
+    $$CycleCountSchedulesTableUpdateCompanionBuilder,
+    (CycleCountSchedule, $$CycleCountSchedulesTableReferences),
+    CycleCountSchedule,
+    PrefetchHooks Function(
+        {bool assigneeId, bool createdBy, bool stockCountId})> {
+  $$CycleCountSchedulesTableTableManager(
+      _$AppDatabase db, $CycleCountSchedulesTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$CycleCountSchedulesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$CycleCountSchedulesTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$CycleCountSchedulesTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> title = const Value.absent(),
+            Value<String> scopeType = const Value.absent(),
+            Value<String> scopeRefs = const Value.absent(),
+            Value<String> assigneeId = const Value.absent(),
+            Value<DateTime> scheduledDate = const Value.absent(),
+            Value<DateTime> dueDate = const Value.absent(),
+            Value<String> status = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+            Value<String> createdBy = const Value.absent(),
+            Value<DateTime> updatedAt = const Value.absent(),
+            Value<String?> notes = const Value.absent(),
+            Value<String?> stockCountId = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              CycleCountSchedulesCompanion(
+            id: id,
+            title: title,
+            scopeType: scopeType,
+            scopeRefs: scopeRefs,
+            assigneeId: assigneeId,
+            scheduledDate: scheduledDate,
+            dueDate: dueDate,
+            status: status,
+            createdAt: createdAt,
+            createdBy: createdBy,
+            updatedAt: updatedAt,
+            notes: notes,
+            stockCountId: stockCountId,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            required String title,
+            required String scopeType,
+            required String scopeRefs,
+            required String assigneeId,
+            required DateTime scheduledDate,
+            required DateTime dueDate,
+            Value<String> status = const Value.absent(),
+            Value<DateTime> createdAt = const Value.absent(),
+            required String createdBy,
+            Value<DateTime> updatedAt = const Value.absent(),
+            Value<String?> notes = const Value.absent(),
+            Value<String?> stockCountId = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              CycleCountSchedulesCompanion.insert(
+            id: id,
+            title: title,
+            scopeType: scopeType,
+            scopeRefs: scopeRefs,
+            assigneeId: assigneeId,
+            scheduledDate: scheduledDate,
+            dueDate: dueDate,
+            status: status,
+            createdAt: createdAt,
+            createdBy: createdBy,
+            updatedAt: updatedAt,
+            notes: notes,
+            stockCountId: stockCountId,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$CycleCountSchedulesTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: (
+              {assigneeId = false, createdBy = false, stockCountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (assigneeId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.assigneeId,
+                    referencedTable: $$CycleCountSchedulesTableReferences
+                        ._assigneeIdTable(db),
+                    referencedColumn: $$CycleCountSchedulesTableReferences
+                        ._assigneeIdTable(db)
+                        .id,
+                  ) as T;
+                }
+                if (createdBy) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.createdBy,
+                    referencedTable: $$CycleCountSchedulesTableReferences
+                        ._createdByTable(db),
+                    referencedColumn: $$CycleCountSchedulesTableReferences
+                        ._createdByTable(db)
+                        .id,
+                  ) as T;
+                }
+                if (stockCountId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.stockCountId,
+                    referencedTable: $$CycleCountSchedulesTableReferences
+                        ._stockCountIdTable(db),
+                    referencedColumn: $$CycleCountSchedulesTableReferences
+                        ._stockCountIdTable(db)
+                        .id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$CycleCountSchedulesTableProcessedTableManager = ProcessedTableManager<
+    _$AppDatabase,
+    $CycleCountSchedulesTable,
+    CycleCountSchedule,
+    $$CycleCountSchedulesTableFilterComposer,
+    $$CycleCountSchedulesTableOrderingComposer,
+    $$CycleCountSchedulesTableAnnotationComposer,
+    $$CycleCountSchedulesTableCreateCompanionBuilder,
+    $$CycleCountSchedulesTableUpdateCompanionBuilder,
+    (CycleCountSchedule, $$CycleCountSchedulesTableReferences),
+    CycleCountSchedule,
+    PrefetchHooks Function(
+        {bool assigneeId, bool createdBy, bool stockCountId})>;
 typedef $$StockCountLinesTableCreateCompanionBuilder = StockCountLinesCompanion
     Function({
   Value<String> id,
@@ -80292,6 +81581,8 @@ class $AppDatabaseManager {
       $$PurchaseReturnLinesTableTableManager(_db, _db.purchaseReturnLines);
   $$StockCountsTableTableManager get stockCounts =>
       $$StockCountsTableTableManager(_db, _db.stockCounts);
+  $$CycleCountSchedulesTableTableManager get cycleCountSchedules =>
+      $$CycleCountSchedulesTableTableManager(_db, _db.cycleCountSchedules);
   $$StockCountLinesTableTableManager get stockCountLines =>
       $$StockCountLinesTableTableManager(_db, _db.stockCountLines);
   $$InventoryAdjustmentsTableTableManager get inventoryAdjustments =>

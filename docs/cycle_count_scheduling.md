@@ -1,0 +1,9 @@
+﻿# Cycle Count Scheduling (Phase L)
+
+Cycle Count Scheduling is available under Inventory to users with Stock Count access. Owners and managers with that permission can create, edit, assign, and cancel unstarted schedules. The assigned active employee, or an owner or manager with Stock Count permission, may start and resume a count. Finalization still requires the existing `finalizeStockCount` permission and follows the normal reconciliation path.
+
+The schedule stores selected product IDs or category IDs. Categories match products assigned directly to those categories; child categories are selected explicitly. They are resolved to active, inventory-tracked products when Start is pressed, with each product included once. The resulting Stock Count lines freeze product identity, expected quantity, unit, and movement count. Later catalog changes do not change an active count. A schedule may link to one count; repeated Start resumes that count. Manual Stock Counts have no schedule link and continue to work independently.
+
+Dates use local calendar days. A count is overdue beginning the day after its due date, including an in-progress count. Completed and cancelled counts are never overdue. Due date must be on or after the scheduled date. Starting or becoming overdue does not change inventory. Finalizing the linked Stock Count completes the schedule in the same transaction; cancelling its draft count cancels the schedule. A started schedule cannot be edited or cancelled directly.
+
+Schema 51 adds `cycle_count_schedules` with foreign keys to users and stock counts and indexes for due date and assignee queries. The migration creates the table and indexes without changing existing rows. Backup verification includes the new table for schema 51; older backups remain accepted and migrate on restore. There is no automatic down migration because removing the table would discard schedule history.

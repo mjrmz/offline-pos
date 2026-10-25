@@ -13,12 +13,14 @@ class StockCountsScreen extends StatefulWidget {
   final StockCountRepository repository;
   final ActiveUser user;
   final String? initialAdjustmentProductId;
+  final String? initialCountId;
   final String? initialAdjustmentBatch;
   final int? initialAdjustmentQtyMilli;
   const StockCountsScreen(
       {super.key,
       required this.repository,
       required this.user,
+      this.initialCountId,
       this.initialAdjustmentProductId,
       this.initialAdjustmentBatch,
       this.initialAdjustmentQtyMilli});
@@ -66,6 +68,9 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
 
   Future<void> _load() async {
     counts = await widget.repository.counts();
+    if (selected == null && widget.initialCountId != null) {
+      selected = counts.where((c) => c.id == widget.initialCountId).firstOrNull;
+    }
     countLines = {
       for (final c in counts) c.id: await widget.repository.lines(c.id)
     };

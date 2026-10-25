@@ -21,6 +21,7 @@ import 'purchase_returns_screen.dart';
 import '../../data/daos/purchase_return_repository.dart';
 import 'purchase_orders_screen.dart';
 import 'stock_counts_screen.dart';
+import 'cycle_count_schedules_screen.dart';
 import 'expiry_monitor_screen.dart';
 import '../../data/daos/inventory_health_repository.dart';
 import '../../data/daos/inventory_movement_repository.dart';
@@ -108,6 +109,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         if (widget.user.can(PosPermission.stockReceiving)) 'Receiving',
         if (widget.user.can(PosPermission.stockReceiving)) 'Purchase Returns',
         if (widget.user.can(PosPermission.stockCount)) 'Stock Counts',
+        if (widget.user.can(PosPermission.stockCount)) 'Cycle Count Scheduling',
         'Movements',
         'Tools',
       ];
@@ -295,6 +297,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
                 initialAdjustmentProductId: adjustmentProductId,
                 initialAdjustmentBatch: adjustmentBatch,
                 initialAdjustmentQtyMilli: adjustmentQuantityMilli),
+            'Cycle Count Scheduling' => CycleCountSchedulesScreen(
+                db: widget.repository.db, user: widget.user),
             'Movements' => _Movements(repository: widget.repository),
             'Tools' => expiryOpen
                 ? ExpiryMonitorScreen(
@@ -325,7 +329,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
                                     user: widget.user,
                                     onViewMovements: () {
                                       Navigator.of(context).pop();
-                                      setState(() => view = labels.indexOf('Movements'));
+                                      setState(() =>
+                                          view = labels.indexOf('Movements'));
                                     },
                                     onViewImported: (kind) {
                                       Navigator.of(context).pop();

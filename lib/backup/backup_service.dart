@@ -68,7 +68,7 @@ class BackupService {
         'ok');
   }
 
-  static int verify(File file, {int maxSchemaVersion = 50}) {
+  static int verify(File file, {int maxSchemaVersion = 51}) {
     if (!file.existsSync() || file.lengthSync() == 0) {
       throw StateError('Backup is missing or empty');
     }
@@ -98,8 +98,13 @@ class BackupService {
         'cash_sessions',
         'audit_logs',
         if (version >= 40) ...['roles', 'role_permissions'],
-        if (version >= 41) ...['promotions', 'promotion_product_targets', 'promotion_category_targets'],
+        if (version >= 41) ...[
+          'promotions',
+          'promotion_product_targets',
+          'promotion_category_targets'
+        ],
         if (version >= 42) 'sale_promotion_applications',
+        if (version >= 51) 'cycle_count_schedules',
         if (version >= 37) 'inventory_health_settings',
         if (version >= 22) 'rma_lifecycle_events',
         if (version >= 23) 'serial_warranty_snapshots',
@@ -697,6 +702,21 @@ class BackupService {
             'finalized_by',
             'finalized_at'
           ],
+        if (version >= 51)
+          'cycle_count_schedules': [
+            'id',
+            'title',
+            'scope_type',
+            'scope_refs',
+            'assignee_id',
+            'scheduled_date',
+            'due_date',
+            'status',
+            'created_at',
+            'created_by',
+            'updated_at',
+            'stock_count_id'
+          ],
         if (version >= 32)
           'stock_count_lines': [
             'id',
@@ -753,9 +773,17 @@ class BackupService {
           ],
         if (version >= 42)
           'sale_promotion_applications': [
-            'id', 'sale_id', 'promotion_id', 'promotion_reference',
-            'promotion_name', 'promotion_type', 'stacking_mode', 'priority',
-            'eligible_subtotal_cents', 'discount_cents', 'created_at'
+            'id',
+            'sale_id',
+            'promotion_id',
+            'promotion_reference',
+            'promotion_name',
+            'promotion_type',
+            'stacking_mode',
+            'priority',
+            'eligible_subtotal_cents',
+            'discount_cents',
+            'created_at'
           ],
       };
       for (final entry in columns.entries) {

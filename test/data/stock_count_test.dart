@@ -305,7 +305,7 @@ void main() {
       if (await dir.exists()) await dir.delete(recursive: true);
     });
     final backup = await BackupService(db, dir).create(BackupKind.manual);
-    expect(BackupService.verify(backup.file), 46);
+    expect(BackupService.verify(backup.file), db.schemaVersion);
     final copy =
         sqlite.sqlite3.open(backup.file.path, mode: sqlite.OpenMode.readOnly);
     try {

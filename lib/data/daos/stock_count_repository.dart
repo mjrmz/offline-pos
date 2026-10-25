@@ -30,6 +30,18 @@ class StockCountRepository {
   final AppDatabase db;
   StockCountRepository(this.db);
 
+  Future<void> _requireLinkedAssignee(ActiveUser live, String countId) async {
+    final schedule = await (db.select(db.cycleCountSchedules)
+          ..where((s) => s.stockCountId.equals(countId)))
+        .getSingleOrNull();
+    if (schedule != null &&
+        schedule.assigneeId != live.id &&
+        live.role != UserRole.owner &&
+        live.role != UserRole.manager) {
+      throw StateError('Count is assigned to another employee');
+    }
+  }
+
   Future<String> _reference(String table, String prefix) async {
     final row = await db
         .customSelect(
@@ -130,6 +142,7 @@ class StockCountRepository {
         final count = await (db.select(db.stockCounts)
               ..where((c) => c.id.equals(line.stockCountId)))
             .getSingle();
+        await _requireLinkedAssignee(live, count.id);
         if (count.status != 'draft') throw StateError('Count is read-only');
         final product = await (db.select(db.products)
               ..where((p) => p.id.equals(line.productId)))
@@ -161,6 +174,7 @@ class StockCountRepository {
         final count = await (db.select(db.stockCounts)
               ..where((c) => c.id.equals(line.stockCountId)))
             .getSingle();
+        await _requireLinkedAssignee(live, count.id);
         if (count.status != 'draft') throw StateError('Count is read-only');
         final stock = await (db.select(db.inventory)
               ..where((i) => i.productId.equals(line.productId)))
@@ -177,6 +191,7 @@ class StockCountRepository {
   Future<void> cancel(ActiveUser actor, String id) => db.transaction(() async {
         final live = await AuthRepository(db).requireActive(actor.id);
         live.require(PosPermission.stockCount);
+        await _requireLinkedAssignee(live, id);
         final changed = await (db.update(db.stockCounts)
               ..where((c) => c.id.equals(id) & c.status.equals('draft')))
             .write(StockCountsCompanion(
@@ -186,6 +201,18 @@ class StockCountRepository {
           throw StateError('Only draft counts can be cancelled');
         }
         await AuthRepository(db).audit(live.id, 'stock_count.cancelled', id);
+        final linked = await (db.select(db.cycleCountSchedules)
+              ..where((s) => s.stockCountId.equals(id)))
+            .getSingleOrNull();
+        if (linked != null) {
+          await (db.update(db.cycleCountSchedules)
+                ..where((s) => s.id.equals(linked.id)))
+              .write(CycleCountSchedulesCompanion(
+                  status: const Value('cancelled'),
+                  updatedAt: Value(DateTime.now())));
+          await AuthRepository(db)
+              .audit(live.id, 'cycle_count.cancelled', linked.id);
+        }
       });
 
   Future<InventoryAdjustment> adjust(
@@ -201,6 +228,7 @@ class StockCountRepository {
       db.transaction(() async {
         final live = await AuthRepository(db).requireActive(actor.id);
         live.require(PosPermission.finalizeStockCount);
+        await _requireLinkedAssignee(live, id);
         final count = await (db.select(db.stockCounts)
               ..where((c) => c.id.equals(id)))
             .getSingle();
@@ -245,6 +273,18 @@ class StockCountRepository {
         if (changed != 1) throw StateError('Count already finalized');
         await AuthRepository(db)
             .audit(live.id, 'stock_count.finalized', count.reference);
+        final linked = await (db.select(db.cycleCountSchedules)
+              ..where((s) => s.stockCountId.equals(id)))
+            .getSingleOrNull();
+        if (linked != null && linked.status != 'completed') {
+          await (db.update(db.cycleCountSchedules)
+                ..where((s) => s.id.equals(linked.id)))
+              .write(CycleCountSchedulesCompanion(
+                  status: const Value('completed'),
+                  updatedAt: Value(DateTime.now())));
+          await AuthRepository(db)
+              .audit(live.id, 'cycle_count.completed', linked.id);
+        }
       });
 
   Future<InventoryAdjustment> _post(ActiveUser live, AdjustmentRequest request,

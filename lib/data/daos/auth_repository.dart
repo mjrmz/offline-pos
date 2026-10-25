@@ -302,11 +302,15 @@ class AuthRepository {
         await audit(userId, 'login_success');
       });
   Future<void> discountCredentialSucceeded(String userId) =>
+      credentialSucceeded(userId, 'manual_discount.credential_verified');
+  Future<void> belowCostCredentialSucceeded(String userId) =>
+      credentialSucceeded(userId, 'below_cost.credential_verified');
+  Future<void> credentialSucceeded(String userId, String action) =>
       db.transaction(() async {
         await (db.update(db.users)..where((u) => u.id.equals(userId))).write(
             const UsersCompanion(
                 failedAttempts: Value(0), lockedUntil: Value(null)));
-        await audit(userId, 'manual_discount.credential_verified');
+        await audit(userId, action);
       });
   Future<void> audit(String? userId, String action, [String? details]) async {
     await db.into(db.auditLogs).insert(AuditLogsCompanion.insert(

@@ -2167,6 +2167,12 @@ class AppDatabase extends _$AppDatabase {
           await customStatement('PRAGMA foreign_keys = ON');
           await customStatement('PRAGMA journal_mode = WAL');
           await customStatement('PRAGMA busy_timeout = 5000');
+          // Protected system roles receive newly introduced capabilities on
+          // existing installations as well as fresh databases.
+          await customStatement('INSERT OR IGNORE INTO role_permissions '
+              '(role_code, permission_key) VALUES '
+              "('owner', 'authorizeBelowCost'), "
+              "('manager', 'authorizeBelowCost')");
           final cashActivityTables = await customSelect(
                   "SELECT name FROM sqlite_master WHERE type='table' "
                   "AND name='business_cash_movements'")

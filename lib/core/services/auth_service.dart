@@ -2,6 +2,31 @@ import 'package:bcrypt/bcrypt.dart';
 import '../models/active_user.dart';
 import '../../data/daos/auth_repository.dart';
 import '../../data/daos/role_repository.dart';
+import '../../data/daos/product_margin_repository.dart';
+
+final class BelowCostApproval {
+  final String cashierId;
+  final String approverId;
+  final String approverName;
+  final String reason;
+  final String fingerprint;
+  final DateTime authorizedAt;
+  bool _used = false;
+  bool _claimed = false;
+  BelowCostApproval._(this.cashierId, this.approverId, this.approverName,
+      this.reason, this.fingerprint, this.authorizedAt);
+  bool matches(String cashier, BelowCostQuote quote) => !_used && !_claimed &&
+      cashierId == cashier && fingerprint == quote.fingerprint &&
+      reason.trim().isNotEmpty;
+  bool claim(String cashier, BelowCostQuote quote) {
+    if (!matches(cashier, quote)) return false;
+    _claimed = true;
+    return true;
+  }
+  void release() => _claimed = false;
+  void consume() { _used = true; _claimed = false; }
+  void invalidate() { _used = true; _claimed = false; }
+}
 
 class AuthService {
   static const maxAttempts = 5;
@@ -52,6 +77,36 @@ class AuthService {
     }
     await repository.discountCredentialSucceeded(userId);
     return repository.requireActive(userId);
+  }
+
+  Future<BelowCostApproval> authorizeBelowCost(
+      BelowCostQuote quote, String reason,
+      {String? approverId, String? credential}) async {
+    final cashier = requireSession(PosPermission.sell);
+    if (!quote.isBelowCost || reason.trim().isEmpty) {
+      throw StateError('A below-cost reason is required');
+    }
+    final id = approverId ?? cashier.id;
+    final row = await repository.user(id);
+    if (row == null || !row.isActive ||
+        !(await repository.requireActive(id))
+            .can(PosPermission.authorizeBelowCost) ||
+        (row.lockedUntil != null && now().isBefore(row.lockedUntil!))) {
+      await repository.audit(cashier.id, 'below_cost.authorization_failed');
+      throw StateError('Below-cost authorization failed');
+    }
+    if (id != cashier.id || credential != null) {
+      if (credential == null || !_matches(credential, row.passwordHash)) {
+        final attempts = row.failedAttempts + 1;
+        await repository.failed(id, attempts,
+            attempts >= maxAttempts ? now().add(lockDuration) : null);
+        await repository.audit(cashier.id, 'below_cost.authorization_failed');
+        throw StateError('Below-cost authorization failed');
+      }
+      await repository.belowCostCredentialSucceeded(id);
+    }
+    return BelowCostApproval._(cashier.id, id, row.name, reason.trim(),
+        quote.fingerprint, now());
   }
 
   String _hash(String value) =>

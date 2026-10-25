@@ -118,7 +118,8 @@ void main() {
     expect(find.byKey(const Key('applied-promotion-row')), findsNothing);
     expect(find.text('Estimated cart margin: ₱75.00'), findsOneWidget);
     final state = tester.state<CheckoutScreenState>(find.byType(CheckoutScreen));
-    state.setState(() => state.rewardDiscountCents = 500);
+    state.rewardDiscountCents = 500;
+    await tester.enterText(find.byKey(const Key('cash-tendered')), '0');
     await tester.pumpAndSettle();
     expect(find.text('Estimated cart margin: ₱70.00'), findsOneWidget);
   });

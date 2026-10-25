@@ -12,6 +12,9 @@ import 'inventory_layer_repository.dart';
 import '../../core/models/active_user.dart';
 import 'auth_repository.dart';
 import 'loyalty_repository.dart';
+import 'product_margin_repository.dart';
+import '../../core/services/auth_service.dart';
+import 'dart:convert';
 import '../database.dart';
 import '../../backup/compliance_protection.dart';
 import 'package:uuid/uuid.dart';
@@ -794,7 +797,8 @@ class PosRepository {
       String? walkInContact,
       String? heldReference,
       ManualDiscount? manualDiscount,
-      String? salesOrderId}) async {
+      String? salesOrderId,
+      BelowCostApproval? belowCostApproval}) async {
     if (birReady) {
       if (protection == null) {
         throw StateError('Compliance protection is unavailable');
@@ -809,7 +813,8 @@ class PosRepository {
           walkInContact: walkInContact,
           heldReference: heldReference,
           manualDiscount: manualDiscount,
-          salesOrderId: salesOrderId));
+          salesOrderId: salesOrderId,
+          belowCostApproval: belowCostApproval));
     }
     return _completeCashSale(items, cashReceivedCents, cashierId,
         quotationId: quotationId,
@@ -820,7 +825,8 @@ class PosRepository {
         walkInContact: walkInContact,
         heldReference: heldReference,
         manualDiscount: manualDiscount,
-        salesOrderId: salesOrderId);
+        salesOrderId: salesOrderId,
+        belowCostApproval: belowCostApproval);
   }
 
   Future<CommittedSale> completeExchangeSale(List<SaleLineRequest> items,
@@ -839,7 +845,8 @@ class PosRepository {
       {String? quotationId,
       ManualDiscount? manualDiscount,
       String? heldReference,
-      String? salesOrderId}) async {
+      String? salesOrderId,
+      BelowCostApproval? belowCostApproval}) async {
     if (birReady) {
       if (protection == null) {
         throw StateError('Compliance protection is unavailable');
@@ -850,14 +857,16 @@ class PosRepository {
           quotationId: quotationId,
           manualDiscount: manualDiscount,
           heldReference: heldReference,
-          salesOrderId: salesOrderId));
+          salesOrderId: salesOrderId,
+          belowCostApproval: belowCostApproval));
     }
     return _completeCashSale(items, cashPaidCents, cashierId,
         creditCustomerId: customerId,
         quotationId: quotationId,
         manualDiscount: manualDiscount,
         heldReference: heldReference,
-        salesOrderId: salesOrderId);
+        salesOrderId: salesOrderId,
+        belowCostApproval: belowCostApproval);
   }
 
   Future<CommittedSale> _completeCashSale(
@@ -872,7 +881,8 @@ class PosRepository {
       String? walkInContact,
       String? heldReference,
       ManualDiscount? manualDiscount,
-      String? salesOrderId}) async {
+      String? salesOrderId,
+      BelowCostApproval? belowCostApproval}) async {
     if (birReady) {
       if (protection == null) {
         throw StateError('Compliance protection is unavailable');
@@ -880,6 +890,7 @@ class PosRepository {
       await protection!.prepare(db);
     }
     String? reservedSaleId;
+    var claimedBelowCost = false;
     late final CommittedSale committed;
     try {
       committed = await db.transaction(() async {
@@ -1358,6 +1369,33 @@ class PosRepository {
             throw StateError('Select an active customer for credit');
           }
         }
+        final marginLines = [
+          for (final detail in details)
+            MarginSaleLine(detail.lineKey ?? detail.product.id,
+                detail.product.id, detail.quantityMilli,
+                salesOrderId == null ? detail.lineCents :
+                    detail.lineCents - (detailDiscounts[detail] ?? 0),
+                detail.config.madeToOrder ? null : detail.layers.fold<int>(
+                    0, (sum, part) => sum + Quantity.lineCents(
+                        part.layer.unitCostCents, part.quantityMilli)),
+                detail.mode, detail.batch?.id,
+                [for (final serial in detail.serials) serial.id]),
+        ];
+        final marginQuote = ProductMarginRepository.quote(
+            marginLines, total - deliveryFeeForSale);
+        if (marginQuote.isBelowCost) {
+          if (belowCostApproval == null ||
+              !belowCostApproval.matches(cashierId, marginQuote)) {
+            throw StateError('Below-cost authorization required; sale changed or approval is missing');
+          }
+          final approver = await AuthRepository(db)
+              .requireActive(belowCostApproval.approverId);
+          approver.require(PosPermission.authorizeBelowCost);
+          if (!belowCostApproval.claim(cashierId, marginQuote)) {
+            throw StateError('Below-cost authorization is already in use');
+          }
+          claimedBelowCost = true;
+        }
         final session = await (db.select(db.cashSessions)
               ..where((s) => s.closedAt.isNull()))
             .getSingleOrNull();
@@ -1434,6 +1472,23 @@ class PosRepository {
                         ? 'none'
                         : 'promotion'),
                 birInvoiceNumber: Value(invoiceNumber)));
+        if (marginQuote.isBelowCost) {
+          await AuthRepository(db).audit(
+              belowCostApproval!.approverId,
+              'below_cost.sale_authorized',
+              jsonEncode({
+                'saleId': sale.id,
+                'cashierId': cashierId,
+                'approverId': belowCostApproval.approverId,
+                'approverName': belowCostApproval.approverName,
+                'reason': belowCostApproval.reason,
+                'authorizedAt': belowCostApproval.authorizedAt.toIso8601String(),
+                'saleValueCents': marginQuote.saleValueCents,
+                'expectedCostCents': marginQuote.expectedCostCents,
+                'estimatedLossCents': marginQuote.estimatedLossCents,
+                'fingerprint': marginQuote.fingerprint,
+              }));
+        }
         final fulfillment = salesOrder == null
             ? null
             : await db.into(db.salesOrderFulfillments).insertReturning(
@@ -1773,11 +1828,13 @@ class PosRepository {
         return CommittedSale(sale.id, total, invoiceNumber);
       });
     } catch (error) {
+      if (claimedBelowCost) belowCostApproval?.release();
       if (reservedSaleId != null && error is! SimulatedComplianceCrash) {
         await protection!.abortSaleAfterRollback(db, reservedSaleId!);
       }
       rethrow;
     }
+    if (belowCostApproval != null) belowCostApproval.consume();
     if (committed.birInvoiceNumber != null) {
       try {
         await protection!.finalizeSale(committed.saleId);

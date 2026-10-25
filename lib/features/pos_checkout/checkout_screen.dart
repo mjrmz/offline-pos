@@ -300,6 +300,25 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   int redeemPoints = 0;
   int salesOrderDeliveryFeeCents = 0;
   int rewardDiscountCents = 0;
+  BelowCostApproval? _belowCostApproval;
+  String? _authorizedEconomics;
+  String get _economicsFingerprint => [
+    for (final line in cart.lines)
+      '${line.id}:${line.product.id}:${line.quantityMilli}:${line.totalCents}:'
+      '${line.mode}:${line.batchId}:${line.serialIds.join(',')}',
+    'manual:$manualDiscountCents',
+    'promotion:$promotionDiscountCents',
+    'rewards:$rewardDiscountCents',
+  ].join('|');
+
+  void _invalidateChangedApproval() {
+    if (_belowCostApproval != null &&
+        _authorizedEconomics != _economicsFingerprint) {
+      _belowCostApproval!.invalidate();
+      _belowCostApproval = null;
+      _authorizedEconomics = null;
+    }
+  }
   int get manualDiscountCents {
     final discount = manualDiscount;
     if (discount == null) return 0;
@@ -1134,9 +1153,86 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     }
   }
 
+  Future<BelowCostApproval?> _requestBelowCostAuthorization(
+      BelowCostQuote quote) async {
+    final approvers = <User>[];
+    for (final row in await widget.repository.db.select(widget.repository.db.users).get()) {
+      if (row.isActive && (await widget.auth.repository.requireActive(row.id))
+          .can(PosPermission.authorizeBelowCost)) {
+        approvers.add(row);
+      }
+    }
+    if (!mounted || approvers.isEmpty) {
+      if (mounted) setState(() => message = 'No authorized Manager is available');
+      return null;
+    }
+    var approverId = widget.user.can(PosPermission.authorizeBelowCost)
+        ? widget.user.id : approvers.first.id;
+    final reason = TextEditingController();
+    final credential = TextEditingController();
+    String? error;
+    try {
+      return await showDialog<BelowCostApproval>(
+          context: context,
+          builder: (dialogContext) => StatefulBuilder(
+            builder: (context, update) => AlertDialog(
+              title: const Text('Below-Cost Sale Authorization'),
+              content: SizedBox(width: 420, child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('This sale is priced below expected inventory cost and requires authorization.'),
+                    const SizedBox(height: 12),
+                    DrawerLabelValue(label: 'Sale value', value: money(quote.saleValueCents)),
+                    DrawerLabelValue(label: 'Expected cost', value: money(quote.expectedCostCents!)),
+                    DrawerLabelValue(label: 'Estimated loss', value: money(quote.estimatedLossCents)),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      initialValue: approverId,
+                      decoration: const InputDecoration(labelText: 'Approver'),
+                      items: [for (final row in approvers)
+                        DropdownMenuItem(value: row.id, child: Text(row.name))],
+                      onChanged: (value) => update(() { approverId = value ?? approverId; error = null; }),
+                    ),
+                    if (approverId != widget.user.id) ...[
+                      const SizedBox(height: 8),
+                      TextField(controller: credential, obscureText: true,
+                        decoration: const InputDecoration(labelText: 'Manager password')),
+                    ],
+                    const SizedBox(height: 8),
+                    TextField(controller: reason, maxLines: 2,
+                      decoration: const InputDecoration(labelText: 'Reason *')),
+                    if (error != null) Padding(padding: const EdgeInsets.only(top: 8),
+                      child: Text(error!, style: TextStyle(
+                        color: Theme.of(context).colorScheme.error))),
+                  ]))),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Cancel')),
+                FilledButton(onPressed: () async {
+                  try {
+                    final approval = await widget.auth.authorizeBelowCost(
+                        quote, reason.text,
+                        approverId: approverId,
+                        credential: approverId == widget.user.id
+                            ? null : credential.text);
+                    if (dialogContext.mounted) Navigator.pop(dialogContext, approval);
+                  } catch (failure) {
+                    if (dialogContext.mounted) update(() => error = safeMessage(failure));
+                  }
+                }, child: const Text('Authorize & Continue')),
+              ],
+            )));
+    } finally {
+      await waitForDialogExit();
+      reason.dispose();
+      credential.dispose();
+    }
+  }
+
   Future<void> checkout() async {
     if (busy || pricingPending) return;
     await _evaluatePromotions();
+    _invalidateChangedApproval();
     if (!mounted || _promotionPending) return;
     final issue = _cartIssue() ?? quotationStockIssue;
     if (issue != null) {
@@ -1158,6 +1254,18 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       return;
     }
     final cashCents = tryParseMoney(cashController.text) ?? 0;
+    final belowCostQuote = await ProductMarginRepository(widget.repository.db)
+        .quoteCart(cart,
+            cart.totalCents - manualDiscountCents - promotionDiscountCents -
+                rewardDiscountCents,
+            batchNumbers: batchLabels);
+    if (!mounted) return;
+    if (belowCostQuote.isBelowCost &&
+        !(_belowCostApproval?.matches(widget.user.id, belowCostQuote) ?? false)) {
+      _belowCostApproval = await _requestBelowCostAuthorization(belowCostQuote);
+      if (!mounted || _belowCostApproval == null) return;
+      _authorizedEconomics = _economicsFingerprint;
+    }
     final wasCredit = credit;
     final selectedCustomerId = customerId;
     final customerLabel = customers
@@ -1178,7 +1286,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
           ? await sales.checkoutCredit(cart, customerId!, cashCents,
               manualDiscount: manualDiscount, heldReference: heldReference,
               salesOrderId: widget.salesOrderId,
-              deliveryFeeCents: salesOrderDeliveryFeeCents)
+              deliveryFeeCents: salesOrderDeliveryFeeCents,
+              belowCostApproval: _belowCostApproval)
           : await sales.checkout(cart, cashCents,
               quotationId: widget.quotationId,
               customerId: customerId,
@@ -1189,8 +1298,11 @@ class CheckoutScreenState extends State<CheckoutScreen> {
               walkInContact: walkInContact,
               heldReference: heldReference,
               salesOrderId: widget.salesOrderId,
-              deliveryFeeCents: salesOrderDeliveryFeeCents);
+              deliveryFeeCents: salesOrderDeliveryFeeCents,
+              belowCostApproval: _belowCostApproval);
       lastSaleId = result.saleId;
+      _belowCostApproval = null;
+      _authorizedEconomics = null;
       final completedSale =
           await (widget.repository.db.select(widget.repository.db.sales)
                 ..where((row) => row.id.equals(result.saleId)))
@@ -1265,6 +1377,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _invalidateChangedApproval();
     _schedulePromotionEvaluation();
     final compact = MediaQuery.sizeOf(context).width < 850;
     final scanFirst = layoutPreference.layout == PosLayoutType.scanFirst;
@@ -3918,22 +4031,36 @@ class CheckoutScreenState extends State<CheckoutScreen> {
         _amountRow(context, 'Manual discount', -manualDiscountCents),
       const Divider(),
       _amountRow(context, 'TOTAL', payableCents, prominent: true),
-      if (widget.user.can(PosPermission.manageCatalog) ||
-          widget.user.can(PosPermission.stockReceiving) ||
-          widget.user.can(PosPermission.reports))
-        FutureBuilder<int?>(
-          future: _estimatedCartCost(),
+      FutureBuilder<BelowCostQuote>(
+          future: ProductMarginRepository(widget.repository.db).quoteCart(
+              cart, cart.totalCents - manualDiscountCents -
+                  promotionDiscountCents - rewardDiscountCents,
+              batchNumbers: batchLabels),
           builder: (context, snapshot) {
-            if (!snapshot.hasData || snapshot.data == null) {
-              return const Text('Estimated cart margin: Unknown');
+            final quote = snapshot.data;
+            final canSeeCost = widget.user.can(PosPermission.manageCatalog) ||
+                widget.user.can(PosPermission.stockReceiving) ||
+                widget.user.can(PosPermission.reports);
+            if (quote == null) {
+              return canSeeCost
+                  ? const Text('Estimated cart margin: Unknown')
+                  : const SizedBox.shrink();
             }
-            final netSelling = cart.totalCents - manualDiscountCents -
-                promotionDiscountCents - rewardDiscountCents;
-            final margin = netSelling - snapshot.data!;
-            return Text('Estimated cart margin: ${money(margin)}'
-                '${margin < 0 ? ' · Below current FIFO cost' : ''}',
-                style: TextStyle(color: margin < 0
-                    ? Theme.of(context).colorScheme.tertiary : null));
+            final approved = _belowCostApproval?.matches(widget.user.id, quote) ?? false;
+            return Column(crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (quote.expectedCostCents == null)
+                  const Text('Cost unavailable · margin cannot be verified.'),
+                if (canSeeCost) Text(quote.expectedCostCents == null
+                    ? 'Estimated cart margin: Unknown'
+                    : 'Estimated cart margin: ${money(quote.saleValueCents - quote.expectedCostCents!)}',
+                    style: TextStyle(color: quote.isBelowCost
+                        ? Theme.of(context).colorScheme.tertiary : null)),
+                if (quote.isBelowCost) Text(approved
+                    ? 'Authorized by ${_belowCostApproval!.approverName}'
+                    : 'Below cost · Manager authorization required to complete this sale.',
+                    style: TextStyle(color: Theme.of(context).colorScheme.tertiary)),
+              ]);
           },
         ),
       const SizedBox(height: 10),
@@ -4005,18 +4132,6 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     ]);
   }
 
-  Future<int?> _estimatedCartCost() async {
-    final repo = ProductMarginRepository(widget.repository.db);
-    var total = 0;
-    for (final line in cart.lines) {
-      final cost = await repo.expectedCost(widget.user, line.product.id,
-          line.quantityMilli, batchNumber: line.batchId == null
-              ? null : batchLabels[line.batchId], serialIds: line.serialIds);
-      if (cost == null) return null;
-      total += cost;
-    }
-    return total;
-  }
 
   Widget _amountRow(BuildContext context, String label, int amount,
           {bool prominent = false}) =>

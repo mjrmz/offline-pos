@@ -32,7 +32,8 @@ class SaleService {
   Future<SaleResult> checkoutCredit(
       Cart cart, String customerId, int cashPaidCents,
       {ManualDiscount? manualDiscount, String? heldReference,
-      String? salesOrderId, int deliveryFeeCents = 0}) async {
+      String? salesOrderId, int deliveryFeeCents = 0,
+      BelowCostApproval? belowCostApproval}) async {
     final user = auth.requireSession(PosPermission.sell);
     if (_inFlight) throw StateError('Checkout is already in progress');
     _inFlight = true;
@@ -65,7 +66,8 @@ class SaleService {
       final committed = await repository.completeCreditSale(
           items, cashPaidCents, customerId, user.id,
           manualDiscount: manualDiscount, heldReference: heldReference,
-          salesOrderId: salesOrderId);
+          salesOrderId: salesOrderId,
+          belowCostApproval: belowCostApproval);
       cart.clear();
       return SaleResult(committed.saleId, committed.totalCents, 0,
           committed.protectionWarning);
@@ -83,7 +85,8 @@ class SaleService {
       String? walkInName,
       String? walkInContact,
       String? heldReference,
-      String? salesOrderId, int deliveryFeeCents = 0}) async {
+      String? salesOrderId, int deliveryFeeCents = 0,
+      BelowCostApproval? belowCostApproval}) async {
     final user = auth.requireSession(PosPermission.sell);
     if (_inFlight) throw StateError('Checkout is already in progress');
     _inFlight = true;
@@ -126,7 +129,8 @@ class SaleService {
           walkInName: walkInName,
           walkInContact: walkInContact,
           heldReference: heldReference,
-          salesOrderId: salesOrderId);
+          salesOrderId: salesOrderId,
+          belowCostApproval: belowCostApproval);
       cart.clear();
       return SaleResult(
           committed.saleId,

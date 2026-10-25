@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
+import 'dart:convert';
 
 import '../../core/models/active_user.dart';
+import '../../core/models/cart.dart';
 import '../../core/models/quantity.dart';
 import '../database.dart';
 import 'inventory_layer_repository.dart';
@@ -20,6 +22,32 @@ class ProductMarginContext {
       estimatedUnitMarginCents == null || currentPriceCents == 0
           ? null
           : estimatedUnitMarginCents! * 100 / currentPriceCents;
+}
+
+class MarginSaleLine {
+  final String key;
+  final String productId;
+  final int quantityMilli;
+  final int sellingCents;
+  final int? costCents;
+  final String mode;
+  final String? batchId;
+  final List<String> serialIds;
+  const MarginSaleLine(this.key, this.productId, this.quantityMilli,
+      this.sellingCents, this.costCents, this.mode, this.batchId,
+      this.serialIds);
+}
+
+class BelowCostQuote {
+  final int saleValueCents;
+  final int? expectedCostCents;
+  final String fingerprint;
+  const BelowCostQuote(this.saleValueCents, this.expectedCostCents,
+      this.fingerprint);
+  bool get isBelowCost => expectedCostCents != null &&
+      saleValueCents < expectedCostCents!;
+  int get estimatedLossCents => isBelowCost
+      ? expectedCostCents! - saleValueCents : 0;
 }
 
 class ProductMarginRepository {
@@ -64,7 +92,26 @@ class ProductMarginRepository {
   Future<int?> expectedCost(ActiveUser actor, String productId, int quantityMilli,
       {String? batchNumber, List<String> serialIds = const []}) async {
     requireVisibility(actor);
-    if (quantityMilli <= 0) return 0;
+    return _expectedCost(productId, quantityMilli,
+        batchNumber: batchNumber, serialIds: serialIds);
+  }
+
+  Future<int?> _expectedCost(String productId, int quantityMilli,
+      {String? batchNumber, List<String> serialIds = const [],
+      Map<String, int> reservedMilliByLayer = const {}}) async {
+    final parts = await _expectedParts(productId, quantityMilli,
+        batchNumber: batchNumber, serialIds: serialIds,
+        reservedMilliByLayer: reservedMilliByLayer);
+    if (parts == null) return null;
+    return parts.fold<int>(0, (total, part) => total +
+        Quantity.lineCents(part.layer.unitCostCents, part.quantityMilli));
+  }
+
+  Future<List<LayerConsumption>?> _expectedParts(
+      String productId, int quantityMilli,
+      {String? batchNumber, List<String> serialIds = const [],
+      Map<String, int> reservedMilliByLayer = const {}}) async {
+    if (quantityMilli <= 0) return const [];
     try {
       final serials = <SerialUnit>[];
       for (final id in serialIds) {
@@ -74,14 +121,51 @@ class ProductMarginRepository {
         if (serial == null || serial.productId != productId) return null;
         serials.add(serial);
       }
-      final parts = await InventoryLayerRepository(db).consume(productId,
+      return await InventoryLayerRepository(db).consume(productId,
           quantityMilli, batchNumber: batchNumber, serials: serials,
-          commit: false);
-      return parts.fold<int>(0, (total, part) => total +
-          Quantity.lineCents(part.layer.unitCostCents, part.quantityMilli));
+          commit: false, reservedMilliByLayer: reservedMilliByLayer);
     } on StateError {
       return null;
     }
+  }
+
+  static BelowCostQuote quote(List<MarginSaleLine> lines, int saleValueCents) {
+    final known = lines.every((line) => line.costCents != null);
+    final cost = known
+        ? lines.fold<int>(0, (sum, line) => sum + line.costCents!)
+        : null;
+    final fingerprint = jsonEncode([
+      saleValueCents, cost,
+      for (final line in lines) [
+        line.key, line.productId, line.quantityMilli, line.sellingCents,
+        line.costCents, line.mode, line.batchId, line.serialIds,
+      ],
+    ]);
+    return BelowCostQuote(saleValueCents, cost, fingerprint);
+  }
+
+  /// The checkout guard can evaluate a Cashier's cart without granting
+  /// general access to inventory costs or history.
+  Future<BelowCostQuote> quoteCart(Cart cart, int saleValueCents,
+      {Map<String, String> batchNumbers = const {}}) async {
+    final lines = <MarginSaleLine>[];
+    final reserved = <String, int>{};
+    for (final line in cart.lines) {
+      final parts = await _expectedParts(line.product.id, line.quantityMilli,
+          batchNumber: line.batchId == null ? null : batchNumbers[line.batchId],
+          serialIds: line.serialIds, reservedMilliByLayer: reserved);
+      final cost = parts?.fold<int>(0, (sum, part) => sum +
+          Quantity.lineCents(part.layer.unitCostCents, part.quantityMilli));
+      if (parts != null) {
+        for (final part in parts) {
+          reserved.update(part.layer.id, (value) => value + part.quantityMilli,
+              ifAbsent: () => part.quantityMilli);
+        }
+      }
+      lines.add(MarginSaleLine(line.id, line.product.id, line.quantityMilli,
+          line.totalCents, cost, line.mode, line.batchId, line.serialIds));
+    }
+    return quote(lines, saleValueCents);
   }
 
   Future<List<PriceHistoryData>> history(ActiveUser actor, String productId,

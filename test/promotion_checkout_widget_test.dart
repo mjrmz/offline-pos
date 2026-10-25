@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:modern_offline_pos/core/services/auth_service.dart';
+import 'package:modern_offline_pos/core/models/active_user.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/daos/promotion_repository.dart';
@@ -73,6 +74,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('applied-promotion-row')), findsOneWidget);
     expect(find.textContaining('Pay ₱90.00'), findsOneWidget);
+    expect(find.text('Estimated cart margin: ₱80.00'), findsOneWidget);
     await tester.tap(find.byKey(const Key('applied-promotion-row')));
     await tester.pumpAndSettle();
     expect(find.text('Available promotions'), findsOneWidget);
@@ -114,6 +116,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Pay ₱85.00'), findsOneWidget);
     expect(find.byKey(const Key('applied-promotion-row')), findsNothing);
+    expect(find.text('Estimated cart margin: ₱75.00'), findsOneWidget);
+    final state = tester.state<CheckoutScreenState>(find.byType(CheckoutScreen));
+    state.setState(() => state.rewardDiscountCents = 500);
+    await tester.pumpAndSettle();
+    expect(find.text('Estimated cart margin: ₱70.00'), findsOneWidget);
+  });
+
+  testWidgets('cashier cannot see POS cost or estimated margin', (tester) async {
+    final setup = await mount(tester);
+    final cashier = await setup.$2.createUser('Cashier', UserRole.cashier, '1234');
+    await setup.$2.login(cashier, '1234');
+    await tester.pumpWidget(MaterialApp(home: CheckoutScreen(
+        repository: setup.$3, user: setup.$2.current!, auth: setup.$2)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Bread').first);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Estimated cart margin'), findsNothing);
+    expect(find.textContaining('FIFO Cost'), findsNothing);
   });
 
   testWidgets('scan first shares discount and preserves scanner focus',

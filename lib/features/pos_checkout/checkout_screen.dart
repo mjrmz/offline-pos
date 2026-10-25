@@ -28,6 +28,7 @@ import '../../data/daos/directory_repository.dart';
 import '../../data/daos/stock_receiving_repository.dart';
 import '../../data/daos/purchase_order_repository.dart';
 import '../../data/daos/inventory_planning_repository.dart';
+import '../../data/daos/product_margin_repository.dart';
 import '../../data/daos/inventory_health_repository.dart';
 import '../../data/database.dart';
 import '../inventory/inventory_overview.dart' show inventoryMovementLabel;
@@ -3917,6 +3918,24 @@ class CheckoutScreenState extends State<CheckoutScreen> {
         _amountRow(context, 'Manual discount', -manualDiscountCents),
       const Divider(),
       _amountRow(context, 'TOTAL', payableCents, prominent: true),
+      if (widget.user.can(PosPermission.manageCatalog) ||
+          widget.user.can(PosPermission.stockReceiving) ||
+          widget.user.can(PosPermission.reports))
+        FutureBuilder<int?>(
+          future: _estimatedCartCost(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData || snapshot.data == null) {
+              return const Text('Estimated cart margin: Unknown');
+            }
+            final netSelling = cart.totalCents - manualDiscountCents -
+                promotionDiscountCents - rewardDiscountCents;
+            final margin = netSelling - snapshot.data!;
+            return Text('Estimated cart margin: ${money(margin)}'
+                '${margin < 0 ? ' · Below current FIFO cost' : ''}',
+                style: TextStyle(color: margin < 0
+                    ? Theme.of(context).colorScheme.tertiary : null));
+          },
+        ),
       const SizedBox(height: 10),
       Text('Payment method', style: Theme.of(context).textTheme.titleSmall),
       const SizedBox(height: 6),
@@ -3984,6 +4003,19 @@ class CheckoutScreenState extends State<CheckoutScreen> {
         _amountRow(context, 'Remaining', 0),
       ],
     ]);
+  }
+
+  Future<int?> _estimatedCartCost() async {
+    final repo = ProductMarginRepository(widget.repository.db);
+    var total = 0;
+    for (final line in cart.lines) {
+      final cost = await repo.expectedCost(widget.user, line.product.id,
+          line.quantityMilli, batchNumber: line.batchId == null
+              ? null : batchLabels[line.batchId], serialIds: line.serialIds);
+      if (cost == null) return null;
+      total += cost;
+    }
+    return total;
   }
 
   Widget _amountRow(BuildContext context, String label, int amount,
@@ -5852,7 +5884,70 @@ class _ProductScreenState extends State<ProductScreen> {
     }
   }
 
+  Future<void> _showOlderPrices(String productId, ActiveUser actor) async {
+    var page = 1;
+    final repository = ProductMarginRepository(widget.repository.db);
+    Future<(List<PriceHistoryData>, Map<String, String>)> load(int index) async {
+      final rows = await repository.history(actor, productId, page: index);
+      final names = <String, String>{};
+      for (final row in rows) {
+        if (row.userId == null || names.containsKey(row.userId)) continue;
+        names[row.userId!] =
+            (await widget.auth.repository.user(row.userId!))?.name ?? 'Former user';
+      }
+      return (rows, names);
+    }
+    var pending = load(page);
+    if (!mounted) return;
+    await showDialog<void>(context: context, builder: (dialogContext) =>
+      StatefulBuilder(builder: (context, update) => AlertDialog(
+        title: const Text('Older price changes'),
+        content: SizedBox(width: 520, height: 360,
+          child: FutureBuilder<(List<PriceHistoryData>, Map<String, String>)>(
+            future: pending,
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+              final (rows, names) = snapshot.data!;
+              if (rows.isEmpty) return const Text('No more price changes.');
+              return ListView(children: [for (final row in rows)
+                ListTile(dense: true,
+                  title: Text('${money(row.oldPriceCents)} → ${money(row.newPriceCents)}'),
+                  subtitle: Text('${row.createdAt.toLocal().toString().substring(0, 10)} · ${names[row.userId] ?? 'Unknown user'}'))]);
+            })),
+        actions: [
+          TextButton(onPressed: page <= 1 ? null : () => update(() {
+            page--; pending = load(page);
+          }), child: const Text('Newer')),
+          TextButton(onPressed: () => update(() {
+            page++; pending = load(page);
+          }), child: const Text('Older')),
+          TextButton(onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close')),
+        ],
+      )));
+  }
+
   Future<void> showProduct(PosProduct product) async {
+    final actor = widget.auth.current;
+    final canSeeMargin = actor != null &&
+        (actor.can(PosPermission.manageCatalog) ||
+            actor.can(PosPermission.stockReceiving) ||
+            actor.can(PosPermission.reports));
+    final marginRepository = ProductMarginRepository(widget.repository.db);
+    final margin = canSeeMargin
+        ? await marginRepository.context(actor, product.id)
+        : null;
+    final priceHistory = canSeeMargin
+        ? await marginRepository.history(actor, product.id)
+        : <PriceHistoryData>[];
+    final actorNames = <String, String>{};
+    if (canSeeMargin) {
+      for (final event in priceHistory) {
+        if (event.userId == null || actorNames.containsKey(event.userId)) continue;
+        final user = await widget.auth.repository.user(event.userId!);
+        actorNames[event.userId!] = user?.name ?? 'Former user';
+      }
+    }
     final categories = await widget.repository.categories();
     final snapshot =
         await InventoryHealthRepository(widget.repository.db).load();
@@ -5930,7 +6025,7 @@ class _ProductScreenState extends State<ProductScreen> {
             ),
           ),
           DrawerSection(
-            title: 'Pricing',
+            title: 'Pricing & Margin',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -5942,16 +6037,24 @@ class _ProductScreenState extends State<ProductScreen> {
                         color: Theme.of(context).colorScheme.primary,
                         fontWeight: FontWeight.w700)),
                 const SizedBox(height: 10),
-                DrawerLabelValue(
-                    label: 'Active purchase cost', value: _costRange(product)),
-                DrawerLabelValue(
-                    label: 'Reference purchase cost',
-                    value: money(product.costCents)),
-                DrawerLabelValue(
-                    label: 'Inventory cost value',
-                    value: plan == null
-                        ? 'Unavailable'
-                        : money(plan.costValueCents)),
+                DrawerLabelValue(label: 'Current catalog price',
+                    value: money(product.priceCents)),
+                if (margin != null) ...[
+                  DrawerLabelValue(label: 'Last Receiving Cost',
+                      value: margin.lastReceivingCostCents == null
+                          ? 'No receiving cost yet'
+                          : money(margin.lastReceivingCostCents!)),
+                  DrawerLabelValue(label: 'Next FIFO Cost',
+                      value: margin.nextFifoCostCents == null
+                          ? 'Unavailable' : money(margin.nextFifoCostCents!)),
+                  DrawerLabelValue(label: 'Estimated unit margin',
+                      value: margin.estimatedUnitMarginCents == null
+                          ? 'Unknown'
+                          : '${money(margin.estimatedUnitMarginCents!)} · ${margin.estimatedMarginPercent?.toStringAsFixed(1) ?? 'Percentage unavailable'}${margin.estimatedMarginPercent == null ? '' : '%'}'),
+                  if ((margin.estimatedUnitMarginCents ?? 0) < 0)
+                    Text('Below current FIFO cost',
+                        style: TextStyle(color: Theme.of(context).colorScheme.tertiary)),
+                ],
                 DrawerLabelValue(
                     label: 'Pricing method',
                     value: product.pricingPolicy == 'layer'
@@ -5960,6 +6063,18 @@ class _ProductScreenState extends State<ProductScreen> {
               ],
             ),
           ),
+          if (canSeeMargin)
+            DrawerSection(title: 'Price History', child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: priceHistory.isEmpty
+                  ? [const Text('No tracked catalog price changes yet.')]
+                  : [for (final event in priceHistory)
+                      Padding(padding: const EdgeInsets.only(bottom: 8),
+                        child: Text('${event.createdAt.toLocal().toString().substring(0, 10)}  ${money(event.oldPriceCents)} → ${money(event.newPriceCents)}  ·  ${actorNames[event.userId] ?? 'Unknown user'}')),
+                      if (priceHistory.length == 50)
+                        TextButton(onPressed: () => _showOlderPrices(product.id, actor),
+                            child: const Text('Older price changes'))],
+            )),
           DrawerSection(
             title: 'Inventory health',
             child: Column(

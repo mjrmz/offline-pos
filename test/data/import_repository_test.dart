@@ -73,6 +73,11 @@ void main() {
         {'name': 'name', 'sku': 'sku', 'selling_price': 'selling_price'},
         'b.csv');
     expect((await db.select(db.products).get()).single.priceCents, 1200);
+    final history = await db.select(db.priceHistory).get();
+    expect(history, hasLength(1));
+    expect(history.single.oldPriceCents, 1000);
+    expect(history.single.newPriceCents, 1200);
+    expect(history.single.userId, owner.id);
     expect(await db.select(db.inventory).get(), isEmpty);
   });
 

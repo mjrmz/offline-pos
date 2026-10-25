@@ -454,6 +454,15 @@ class ImportRepository {
             } else {
               await (db.update(db.products)..where((p) => p.id.equals(id)))
                   .write(values);
+              final newPrice = values.priceCents.value;
+              if (old != null && old.priceCents != newPrice) {
+                await db.into(db.priceHistory).insert(PriceHistoryCompanion.insert(
+                  productId: id,
+                  userId: Value(live.id),
+                  oldPriceCents: old.priceCents,
+                  newPriceCents: newPrice,
+                ));
+              }
               updated++;
             }
           } else if (kind == ImportKind.customers) {

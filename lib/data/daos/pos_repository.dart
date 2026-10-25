@@ -495,8 +495,7 @@ class PosRepository {
         await (db.update(db.products)..where((p) => p.id.equals(id)))
             .write(ProductsCompanion(serialTracking: Value(nextSerial)));
         if (count != 1) throw StateError('Product not found');
-        if (oldProduct.priceCents != priceCents ||
-            oldProduct.costCents != costCents) {
+        if (oldProduct.priceCents != priceCents) {
           await db.into(db.priceHistory).insert(PriceHistoryCompanion.insert(
                 productId: id,
                 userId: Value(actorId),
@@ -507,7 +506,8 @@ class PosRepository {
               ));
           if (actorId != null) {
             await AuthRepository(db)
-                .audit(actorId, 'product.price_changed', id);
+                .audit(actorId, 'product.price_changed',
+                    '$id: ${oldProduct.priceCents} → $priceCents cents (Product edit)');
           }
         }
         if (business != null) {

@@ -21,6 +21,7 @@ class ReceiptDocument {
   final String? walkInName;
   final String? walkInContact;
   final List<(String, int)> promotionDiscounts;
+  final int deliveryFeeCents;
 
   const ReceiptDocument(
       this.reference,
@@ -38,7 +39,8 @@ class ReceiptDocument {
       this.customFooter = '',
       this.walkInName,
       this.walkInContact,
-      this.promotionDiscounts = const []]);
+      this.promotionDiscounts = const [],
+      this.deliveryFeeCents = 0]);
 
   factory ReceiptDocument.fromDetail(SaleDetail detail, String storeName,
           [PrinterSettings? settings]) =>
@@ -75,6 +77,7 @@ class ReceiptDocument {
         detail.summary.sale.walkInContact,
         [for (final application in detail.promotionApplications)
           (application.promotionName, application.discountCents)],
+        detail.summary.sale.deliveryFeeCents,
       );
 }
 
@@ -166,6 +169,9 @@ class EscPosEncoder {
         (sum, item) => sum + item.totalCents)));
     for (final promotion in receipt.promotionDiscounts) {
       pair('Promo: ${promotion.$1}', '-${receiptMoney(promotion.$2)}');
+    }
+    if (receipt.deliveryFeeCents > 0) {
+      pair('Delivery fee', receiptMoney(receipt.deliveryFeeCents));
     }
     pair('Total', receiptMoney(receipt.totalCents));
     pair('Payment: ${receipt.paymentMethod}',

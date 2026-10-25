@@ -6485,6 +6485,14 @@ class $SalesTable extends Sales with TableInfo<$SalesTable, Sale> {
   late final GeneratedColumn<int> totalCents = GeneratedColumn<int>(
       'total_cents', aliasedName, false,
       type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _deliveryFeeCentsMeta =
+      const VerificationMeta('deliveryFeeCents');
+  @override
+  late final GeneratedColumn<int> deliveryFeeCents = GeneratedColumn<int>(
+      'delivery_fee_cents', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
   static const VerificationMeta _discountSourceMeta =
       const VerificationMeta('discountSource');
   @override
@@ -6527,6 +6535,7 @@ class $SalesTable extends Sales with TableInfo<$SalesTable, Sale> {
         walkInContact,
         heldReference,
         totalCents,
+        deliveryFeeCents,
         discountSource,
         birInvoiceNumber,
         status,
@@ -6595,6 +6604,12 @@ class $SalesTable extends Sales with TableInfo<$SalesTable, Sale> {
     } else if (isInserting) {
       context.missing(_totalCentsMeta);
     }
+    if (data.containsKey('delivery_fee_cents')) {
+      context.handle(
+          _deliveryFeeCentsMeta,
+          deliveryFeeCents.isAcceptableOrUnknown(
+              data['delivery_fee_cents']!, _deliveryFeeCentsMeta));
+    }
     if (data.containsKey('discount_source')) {
       context.handle(
           _discountSourceMeta,
@@ -6642,6 +6657,8 @@ class $SalesTable extends Sales with TableInfo<$SalesTable, Sale> {
           .read(DriftSqlType.string, data['${effectivePrefix}held_reference']),
       totalCents: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}total_cents'])!,
+      deliveryFeeCents: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}delivery_fee_cents'])!,
       discountSource: attachedDatabase.typeMapping.read(
           DriftSqlType.string, data['${effectivePrefix}discount_source'])!,
       birInvoiceNumber: attachedDatabase.typeMapping
@@ -6669,6 +6686,7 @@ class Sale extends DataClass implements Insertable<Sale> {
   final String? walkInContact;
   final String? heldReference;
   final int totalCents;
+  final int deliveryFeeCents;
   final String discountSource;
   final int? birInvoiceNumber;
   final String status;
@@ -6683,6 +6701,7 @@ class Sale extends DataClass implements Insertable<Sale> {
       this.walkInContact,
       this.heldReference,
       required this.totalCents,
+      required this.deliveryFeeCents,
       required this.discountSource,
       this.birInvoiceNumber,
       required this.status,
@@ -6711,6 +6730,7 @@ class Sale extends DataClass implements Insertable<Sale> {
       map['held_reference'] = Variable<String>(heldReference);
     }
     map['total_cents'] = Variable<int>(totalCents);
+    map['delivery_fee_cents'] = Variable<int>(deliveryFeeCents);
     map['discount_source'] = Variable<String>(discountSource);
     if (!nullToAbsent || birInvoiceNumber != null) {
       map['bir_invoice_number'] = Variable<int>(birInvoiceNumber);
@@ -6743,6 +6763,7 @@ class Sale extends DataClass implements Insertable<Sale> {
           ? const Value.absent()
           : Value(heldReference),
       totalCents: Value(totalCents),
+      deliveryFeeCents: Value(deliveryFeeCents),
       discountSource: Value(discountSource),
       birInvoiceNumber: birInvoiceNumber == null && nullToAbsent
           ? const Value.absent()
@@ -6765,6 +6786,7 @@ class Sale extends DataClass implements Insertable<Sale> {
       walkInContact: serializer.fromJson<String?>(json['walkInContact']),
       heldReference: serializer.fromJson<String?>(json['heldReference']),
       totalCents: serializer.fromJson<int>(json['totalCents']),
+      deliveryFeeCents: serializer.fromJson<int>(json['deliveryFeeCents']),
       discountSource: serializer.fromJson<String>(json['discountSource']),
       birInvoiceNumber: serializer.fromJson<int?>(json['birInvoiceNumber']),
       status: serializer.fromJson<String>(json['status']),
@@ -6784,6 +6806,7 @@ class Sale extends DataClass implements Insertable<Sale> {
       'walkInContact': serializer.toJson<String?>(walkInContact),
       'heldReference': serializer.toJson<String?>(heldReference),
       'totalCents': serializer.toJson<int>(totalCents),
+      'deliveryFeeCents': serializer.toJson<int>(deliveryFeeCents),
       'discountSource': serializer.toJson<String>(discountSource),
       'birInvoiceNumber': serializer.toJson<int?>(birInvoiceNumber),
       'status': serializer.toJson<String>(status),
@@ -6801,6 +6824,7 @@ class Sale extends DataClass implements Insertable<Sale> {
           Value<String?> walkInContact = const Value.absent(),
           Value<String?> heldReference = const Value.absent(),
           int? totalCents,
+          int? deliveryFeeCents,
           String? discountSource,
           Value<int?> birInvoiceNumber = const Value.absent(),
           String? status,
@@ -6819,6 +6843,7 @@ class Sale extends DataClass implements Insertable<Sale> {
         heldReference:
             heldReference.present ? heldReference.value : this.heldReference,
         totalCents: totalCents ?? this.totalCents,
+        deliveryFeeCents: deliveryFeeCents ?? this.deliveryFeeCents,
         discountSource: discountSource ?? this.discountSource,
         birInvoiceNumber: birInvoiceNumber.present
             ? birInvoiceNumber.value
@@ -6848,6 +6873,9 @@ class Sale extends DataClass implements Insertable<Sale> {
           : this.heldReference,
       totalCents:
           data.totalCents.present ? data.totalCents.value : this.totalCents,
+      deliveryFeeCents: data.deliveryFeeCents.present
+          ? data.deliveryFeeCents.value
+          : this.deliveryFeeCents,
       discountSource: data.discountSource.present
           ? data.discountSource.value
           : this.discountSource,
@@ -6871,6 +6899,7 @@ class Sale extends DataClass implements Insertable<Sale> {
           ..write('walkInContact: $walkInContact, ')
           ..write('heldReference: $heldReference, ')
           ..write('totalCents: $totalCents, ')
+          ..write('deliveryFeeCents: $deliveryFeeCents, ')
           ..write('discountSource: $discountSource, ')
           ..write('birInvoiceNumber: $birInvoiceNumber, ')
           ..write('status: $status, ')
@@ -6890,6 +6919,7 @@ class Sale extends DataClass implements Insertable<Sale> {
       walkInContact,
       heldReference,
       totalCents,
+      deliveryFeeCents,
       discountSource,
       birInvoiceNumber,
       status,
@@ -6907,6 +6937,7 @@ class Sale extends DataClass implements Insertable<Sale> {
           other.walkInContact == this.walkInContact &&
           other.heldReference == this.heldReference &&
           other.totalCents == this.totalCents &&
+          other.deliveryFeeCents == this.deliveryFeeCents &&
           other.discountSource == this.discountSource &&
           other.birInvoiceNumber == this.birInvoiceNumber &&
           other.status == this.status &&
@@ -6923,6 +6954,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
   final Value<String?> walkInContact;
   final Value<String?> heldReference;
   final Value<int> totalCents;
+  final Value<int> deliveryFeeCents;
   final Value<String> discountSource;
   final Value<int?> birInvoiceNumber;
   final Value<String> status;
@@ -6938,6 +6970,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
     this.walkInContact = const Value.absent(),
     this.heldReference = const Value.absent(),
     this.totalCents = const Value.absent(),
+    this.deliveryFeeCents = const Value.absent(),
     this.discountSource = const Value.absent(),
     this.birInvoiceNumber = const Value.absent(),
     this.status = const Value.absent(),
@@ -6954,6 +6987,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
     this.walkInContact = const Value.absent(),
     this.heldReference = const Value.absent(),
     required int totalCents,
+    this.deliveryFeeCents = const Value.absent(),
     this.discountSource = const Value.absent(),
     this.birInvoiceNumber = const Value.absent(),
     this.status = const Value.absent(),
@@ -6971,6 +7005,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
     Expression<String>? walkInContact,
     Expression<String>? heldReference,
     Expression<int>? totalCents,
+    Expression<int>? deliveryFeeCents,
     Expression<String>? discountSource,
     Expression<int>? birInvoiceNumber,
     Expression<String>? status,
@@ -6987,6 +7022,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
       if (walkInContact != null) 'walk_in_contact': walkInContact,
       if (heldReference != null) 'held_reference': heldReference,
       if (totalCents != null) 'total_cents': totalCents,
+      if (deliveryFeeCents != null) 'delivery_fee_cents': deliveryFeeCents,
       if (discountSource != null) 'discount_source': discountSource,
       if (birInvoiceNumber != null) 'bir_invoice_number': birInvoiceNumber,
       if (status != null) 'status': status,
@@ -7005,6 +7041,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
       Value<String?>? walkInContact,
       Value<String?>? heldReference,
       Value<int>? totalCents,
+      Value<int>? deliveryFeeCents,
       Value<String>? discountSource,
       Value<int?>? birInvoiceNumber,
       Value<String>? status,
@@ -7020,6 +7057,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
       walkInContact: walkInContact ?? this.walkInContact,
       heldReference: heldReference ?? this.heldReference,
       totalCents: totalCents ?? this.totalCents,
+      deliveryFeeCents: deliveryFeeCents ?? this.deliveryFeeCents,
       discountSource: discountSource ?? this.discountSource,
       birInvoiceNumber: birInvoiceNumber ?? this.birInvoiceNumber,
       status: status ?? this.status,
@@ -7058,6 +7096,9 @@ class SalesCompanion extends UpdateCompanion<Sale> {
     if (totalCents.present) {
       map['total_cents'] = Variable<int>(totalCents.value);
     }
+    if (deliveryFeeCents.present) {
+      map['delivery_fee_cents'] = Variable<int>(deliveryFeeCents.value);
+    }
     if (discountSource.present) {
       map['discount_source'] = Variable<String>(discountSource.value);
     }
@@ -7088,6 +7129,7 @@ class SalesCompanion extends UpdateCompanion<Sale> {
           ..write('walkInContact: $walkInContact, ')
           ..write('heldReference: $heldReference, ')
           ..write('totalCents: $totalCents, ')
+          ..write('deliveryFeeCents: $deliveryFeeCents, ')
           ..write('discountSource: $discountSource, ')
           ..write('birInvoiceNumber: $birInvoiceNumber, ')
           ..write('status: $status, ')
@@ -26096,6 +26138,64 @@ class $SalesOrdersTable extends SalesOrders
   late final GeneratedColumn<String> fulfillmentMethod =
       GeneratedColumn<String>('fulfillment_method', aliasedName, true,
           type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _physicalStatusMeta =
+      const VerificationMeta('physicalStatus');
+  @override
+  late final GeneratedColumn<String> physicalStatus = GeneratedColumn<String>(
+      'physical_status', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('pending'));
+  static const VerificationMeta _scheduledAtMeta =
+      const VerificationMeta('scheduledAt');
+  @override
+  late final GeneratedColumn<DateTime> scheduledAt = GeneratedColumn<DateTime>(
+      'scheduled_at', aliasedName, true,
+      type: DriftSqlType.dateTime, requiredDuringInsert: false);
+  static const VerificationMeta _contactNameSnapshotMeta =
+      const VerificationMeta('contactNameSnapshot');
+  @override
+  late final GeneratedColumn<String> contactNameSnapshot =
+      GeneratedColumn<String>('contact_name_snapshot', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _contactPhoneSnapshotMeta =
+      const VerificationMeta('contactPhoneSnapshot');
+  @override
+  late final GeneratedColumn<String> contactPhoneSnapshot =
+      GeneratedColumn<String>('contact_phone_snapshot', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _deliveryAddressSnapshotMeta =
+      const VerificationMeta('deliveryAddressSnapshot');
+  @override
+  late final GeneratedColumn<String> deliveryAddressSnapshot =
+      GeneratedColumn<String>('delivery_address_snapshot', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _fulfillmentInstructionsMeta =
+      const VerificationMeta('fulfillmentInstructions');
+  @override
+  late final GeneratedColumn<String> fulfillmentInstructions =
+      GeneratedColumn<String>('fulfillment_instructions', aliasedName, true,
+          type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _deliveryFeeCentsMeta =
+      const VerificationMeta('deliveryFeeCents');
+  @override
+  late final GeneratedColumn<int> deliveryFeeCents = GeneratedColumn<int>(
+      'delivery_fee_cents', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _recipientNameMeta =
+      const VerificationMeta('recipientName');
+  @override
+  late final GeneratedColumn<String> recipientName = GeneratedColumn<String>(
+      'recipient_name', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _physicalCompletedAtMeta =
+      const VerificationMeta('physicalCompletedAt');
+  @override
+  late final GeneratedColumn<DateTime> physicalCompletedAt =
+      GeneratedColumn<DateTime>('physical_completed_at', aliasedName, true,
+          type: DriftSqlType.dateTime, requiredDuringInsert: false);
   static const VerificationMeta _requestedDateMeta =
       const VerificationMeta('requestedDate');
   @override
@@ -26161,6 +26261,15 @@ class $SalesOrdersTable extends SalesOrders
         status,
         sourceQuotationId,
         fulfillmentMethod,
+        physicalStatus,
+        scheduledAt,
+        contactNameSnapshot,
+        contactPhoneSnapshot,
+        deliveryAddressSnapshot,
+        fulfillmentInstructions,
+        deliveryFeeCents,
+        recipientName,
+        physicalCompletedAt,
         requestedDate,
         notes,
         subtotalCents,
@@ -26220,6 +26329,61 @@ class $SalesOrdersTable extends SalesOrders
           _fulfillmentMethodMeta,
           fulfillmentMethod.isAcceptableOrUnknown(
               data['fulfillment_method']!, _fulfillmentMethodMeta));
+    }
+    if (data.containsKey('physical_status')) {
+      context.handle(
+          _physicalStatusMeta,
+          physicalStatus.isAcceptableOrUnknown(
+              data['physical_status']!, _physicalStatusMeta));
+    }
+    if (data.containsKey('scheduled_at')) {
+      context.handle(
+          _scheduledAtMeta,
+          scheduledAt.isAcceptableOrUnknown(
+              data['scheduled_at']!, _scheduledAtMeta));
+    }
+    if (data.containsKey('contact_name_snapshot')) {
+      context.handle(
+          _contactNameSnapshotMeta,
+          contactNameSnapshot.isAcceptableOrUnknown(
+              data['contact_name_snapshot']!, _contactNameSnapshotMeta));
+    }
+    if (data.containsKey('contact_phone_snapshot')) {
+      context.handle(
+          _contactPhoneSnapshotMeta,
+          contactPhoneSnapshot.isAcceptableOrUnknown(
+              data['contact_phone_snapshot']!, _contactPhoneSnapshotMeta));
+    }
+    if (data.containsKey('delivery_address_snapshot')) {
+      context.handle(
+          _deliveryAddressSnapshotMeta,
+          deliveryAddressSnapshot.isAcceptableOrUnknown(
+              data['delivery_address_snapshot']!,
+              _deliveryAddressSnapshotMeta));
+    }
+    if (data.containsKey('fulfillment_instructions')) {
+      context.handle(
+          _fulfillmentInstructionsMeta,
+          fulfillmentInstructions.isAcceptableOrUnknown(
+              data['fulfillment_instructions']!, _fulfillmentInstructionsMeta));
+    }
+    if (data.containsKey('delivery_fee_cents')) {
+      context.handle(
+          _deliveryFeeCentsMeta,
+          deliveryFeeCents.isAcceptableOrUnknown(
+              data['delivery_fee_cents']!, _deliveryFeeCentsMeta));
+    }
+    if (data.containsKey('recipient_name')) {
+      context.handle(
+          _recipientNameMeta,
+          recipientName.isAcceptableOrUnknown(
+              data['recipient_name']!, _recipientNameMeta));
+    }
+    if (data.containsKey('physical_completed_at')) {
+      context.handle(
+          _physicalCompletedAtMeta,
+          physicalCompletedAt.isAcceptableOrUnknown(
+              data['physical_completed_at']!, _physicalCompletedAtMeta));
     }
     if (data.containsKey('requested_date')) {
       context.handle(
@@ -26291,6 +26455,28 @@ class $SalesOrdersTable extends SalesOrders
           DriftSqlType.string, data['${effectivePrefix}source_quotation_id']),
       fulfillmentMethod: attachedDatabase.typeMapping.read(
           DriftSqlType.string, data['${effectivePrefix}fulfillment_method']),
+      physicalStatus: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}physical_status'])!,
+      scheduledAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}scheduled_at']),
+      contactNameSnapshot: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}contact_name_snapshot']),
+      contactPhoneSnapshot: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}contact_phone_snapshot']),
+      deliveryAddressSnapshot: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}delivery_address_snapshot']),
+      fulfillmentInstructions: attachedDatabase.typeMapping.read(
+          DriftSqlType.string,
+          data['${effectivePrefix}fulfillment_instructions']),
+      deliveryFeeCents: attachedDatabase.typeMapping.read(
+          DriftSqlType.int, data['${effectivePrefix}delivery_fee_cents'])!,
+      recipientName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}recipient_name']),
+      physicalCompletedAt: attachedDatabase.typeMapping.read(
+          DriftSqlType.dateTime,
+          data['${effectivePrefix}physical_completed_at']),
       requestedDate: attachedDatabase.typeMapping.read(
           DriftSqlType.dateTime, data['${effectivePrefix}requested_date']),
       notes: attachedDatabase.typeMapping
@@ -26324,6 +26510,15 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
   final String status;
   final String? sourceQuotationId;
   final String? fulfillmentMethod;
+  final String physicalStatus;
+  final DateTime? scheduledAt;
+  final String? contactNameSnapshot;
+  final String? contactPhoneSnapshot;
+  final String? deliveryAddressSnapshot;
+  final String? fulfillmentInstructions;
+  final int deliveryFeeCents;
+  final String? recipientName;
+  final DateTime? physicalCompletedAt;
   final DateTime? requestedDate;
   final String? notes;
   final int subtotalCents;
@@ -26340,6 +26535,15 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
       required this.status,
       this.sourceQuotationId,
       this.fulfillmentMethod,
+      required this.physicalStatus,
+      this.scheduledAt,
+      this.contactNameSnapshot,
+      this.contactPhoneSnapshot,
+      this.deliveryAddressSnapshot,
+      this.fulfillmentInstructions,
+      required this.deliveryFeeCents,
+      this.recipientName,
+      this.physicalCompletedAt,
       this.requestedDate,
       this.notes,
       required this.subtotalCents,
@@ -26361,6 +26565,31 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
     }
     if (!nullToAbsent || fulfillmentMethod != null) {
       map['fulfillment_method'] = Variable<String>(fulfillmentMethod);
+    }
+    map['physical_status'] = Variable<String>(physicalStatus);
+    if (!nullToAbsent || scheduledAt != null) {
+      map['scheduled_at'] = Variable<DateTime>(scheduledAt);
+    }
+    if (!nullToAbsent || contactNameSnapshot != null) {
+      map['contact_name_snapshot'] = Variable<String>(contactNameSnapshot);
+    }
+    if (!nullToAbsent || contactPhoneSnapshot != null) {
+      map['contact_phone_snapshot'] = Variable<String>(contactPhoneSnapshot);
+    }
+    if (!nullToAbsent || deliveryAddressSnapshot != null) {
+      map['delivery_address_snapshot'] =
+          Variable<String>(deliveryAddressSnapshot);
+    }
+    if (!nullToAbsent || fulfillmentInstructions != null) {
+      map['fulfillment_instructions'] =
+          Variable<String>(fulfillmentInstructions);
+    }
+    map['delivery_fee_cents'] = Variable<int>(deliveryFeeCents);
+    if (!nullToAbsent || recipientName != null) {
+      map['recipient_name'] = Variable<String>(recipientName);
+    }
+    if (!nullToAbsent || physicalCompletedAt != null) {
+      map['physical_completed_at'] = Variable<DateTime>(physicalCompletedAt);
     }
     if (!nullToAbsent || requestedDate != null) {
       map['requested_date'] = Variable<DateTime>(requestedDate);
@@ -26390,6 +26619,29 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
       fulfillmentMethod: fulfillmentMethod == null && nullToAbsent
           ? const Value.absent()
           : Value(fulfillmentMethod),
+      physicalStatus: Value(physicalStatus),
+      scheduledAt: scheduledAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(scheduledAt),
+      contactNameSnapshot: contactNameSnapshot == null && nullToAbsent
+          ? const Value.absent()
+          : Value(contactNameSnapshot),
+      contactPhoneSnapshot: contactPhoneSnapshot == null && nullToAbsent
+          ? const Value.absent()
+          : Value(contactPhoneSnapshot),
+      deliveryAddressSnapshot: deliveryAddressSnapshot == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deliveryAddressSnapshot),
+      fulfillmentInstructions: fulfillmentInstructions == null && nullToAbsent
+          ? const Value.absent()
+          : Value(fulfillmentInstructions),
+      deliveryFeeCents: Value(deliveryFeeCents),
+      recipientName: recipientName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(recipientName),
+      physicalCompletedAt: physicalCompletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(physicalCompletedAt),
       requestedDate: requestedDate == null && nullToAbsent
           ? const Value.absent()
           : Value(requestedDate),
@@ -26418,6 +26670,20 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
           serializer.fromJson<String?>(json['sourceQuotationId']),
       fulfillmentMethod:
           serializer.fromJson<String?>(json['fulfillmentMethod']),
+      physicalStatus: serializer.fromJson<String>(json['physicalStatus']),
+      scheduledAt: serializer.fromJson<DateTime?>(json['scheduledAt']),
+      contactNameSnapshot:
+          serializer.fromJson<String?>(json['contactNameSnapshot']),
+      contactPhoneSnapshot:
+          serializer.fromJson<String?>(json['contactPhoneSnapshot']),
+      deliveryAddressSnapshot:
+          serializer.fromJson<String?>(json['deliveryAddressSnapshot']),
+      fulfillmentInstructions:
+          serializer.fromJson<String?>(json['fulfillmentInstructions']),
+      deliveryFeeCents: serializer.fromJson<int>(json['deliveryFeeCents']),
+      recipientName: serializer.fromJson<String?>(json['recipientName']),
+      physicalCompletedAt:
+          serializer.fromJson<DateTime?>(json['physicalCompletedAt']),
       requestedDate: serializer.fromJson<DateTime?>(json['requestedDate']),
       notes: serializer.fromJson<String?>(json['notes']),
       subtotalCents: serializer.fromJson<int>(json['subtotalCents']),
@@ -26439,6 +26705,17 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
       'status': serializer.toJson<String>(status),
       'sourceQuotationId': serializer.toJson<String?>(sourceQuotationId),
       'fulfillmentMethod': serializer.toJson<String?>(fulfillmentMethod),
+      'physicalStatus': serializer.toJson<String>(physicalStatus),
+      'scheduledAt': serializer.toJson<DateTime?>(scheduledAt),
+      'contactNameSnapshot': serializer.toJson<String?>(contactNameSnapshot),
+      'contactPhoneSnapshot': serializer.toJson<String?>(contactPhoneSnapshot),
+      'deliveryAddressSnapshot':
+          serializer.toJson<String?>(deliveryAddressSnapshot),
+      'fulfillmentInstructions':
+          serializer.toJson<String?>(fulfillmentInstructions),
+      'deliveryFeeCents': serializer.toJson<int>(deliveryFeeCents),
+      'recipientName': serializer.toJson<String?>(recipientName),
+      'physicalCompletedAt': serializer.toJson<DateTime?>(physicalCompletedAt),
       'requestedDate': serializer.toJson<DateTime?>(requestedDate),
       'notes': serializer.toJson<String?>(notes),
       'subtotalCents': serializer.toJson<int>(subtotalCents),
@@ -26458,6 +26735,15 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
           String? status,
           Value<String?> sourceQuotationId = const Value.absent(),
           Value<String?> fulfillmentMethod = const Value.absent(),
+          String? physicalStatus,
+          Value<DateTime?> scheduledAt = const Value.absent(),
+          Value<String?> contactNameSnapshot = const Value.absent(),
+          Value<String?> contactPhoneSnapshot = const Value.absent(),
+          Value<String?> deliveryAddressSnapshot = const Value.absent(),
+          Value<String?> fulfillmentInstructions = const Value.absent(),
+          int? deliveryFeeCents,
+          Value<String?> recipientName = const Value.absent(),
+          Value<DateTime?> physicalCompletedAt = const Value.absent(),
           Value<DateTime?> requestedDate = const Value.absent(),
           Value<String?> notes = const Value.absent(),
           int? subtotalCents,
@@ -26478,6 +26764,26 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
         fulfillmentMethod: fulfillmentMethod.present
             ? fulfillmentMethod.value
             : this.fulfillmentMethod,
+        physicalStatus: physicalStatus ?? this.physicalStatus,
+        scheduledAt: scheduledAt.present ? scheduledAt.value : this.scheduledAt,
+        contactNameSnapshot: contactNameSnapshot.present
+            ? contactNameSnapshot.value
+            : this.contactNameSnapshot,
+        contactPhoneSnapshot: contactPhoneSnapshot.present
+            ? contactPhoneSnapshot.value
+            : this.contactPhoneSnapshot,
+        deliveryAddressSnapshot: deliveryAddressSnapshot.present
+            ? deliveryAddressSnapshot.value
+            : this.deliveryAddressSnapshot,
+        fulfillmentInstructions: fulfillmentInstructions.present
+            ? fulfillmentInstructions.value
+            : this.fulfillmentInstructions,
+        deliveryFeeCents: deliveryFeeCents ?? this.deliveryFeeCents,
+        recipientName:
+            recipientName.present ? recipientName.value : this.recipientName,
+        physicalCompletedAt: physicalCompletedAt.present
+            ? physicalCompletedAt.value
+            : this.physicalCompletedAt,
         requestedDate:
             requestedDate.present ? requestedDate.value : this.requestedDate,
         notes: notes.present ? notes.value : this.notes,
@@ -26504,6 +26810,32 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
       fulfillmentMethod: data.fulfillmentMethod.present
           ? data.fulfillmentMethod.value
           : this.fulfillmentMethod,
+      physicalStatus: data.physicalStatus.present
+          ? data.physicalStatus.value
+          : this.physicalStatus,
+      scheduledAt:
+          data.scheduledAt.present ? data.scheduledAt.value : this.scheduledAt,
+      contactNameSnapshot: data.contactNameSnapshot.present
+          ? data.contactNameSnapshot.value
+          : this.contactNameSnapshot,
+      contactPhoneSnapshot: data.contactPhoneSnapshot.present
+          ? data.contactPhoneSnapshot.value
+          : this.contactPhoneSnapshot,
+      deliveryAddressSnapshot: data.deliveryAddressSnapshot.present
+          ? data.deliveryAddressSnapshot.value
+          : this.deliveryAddressSnapshot,
+      fulfillmentInstructions: data.fulfillmentInstructions.present
+          ? data.fulfillmentInstructions.value
+          : this.fulfillmentInstructions,
+      deliveryFeeCents: data.deliveryFeeCents.present
+          ? data.deliveryFeeCents.value
+          : this.deliveryFeeCents,
+      recipientName: data.recipientName.present
+          ? data.recipientName.value
+          : this.recipientName,
+      physicalCompletedAt: data.physicalCompletedAt.present
+          ? data.physicalCompletedAt.value
+          : this.physicalCompletedAt,
       requestedDate: data.requestedDate.present
           ? data.requestedDate.value
           : this.requestedDate,
@@ -26532,6 +26864,15 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
           ..write('status: $status, ')
           ..write('sourceQuotationId: $sourceQuotationId, ')
           ..write('fulfillmentMethod: $fulfillmentMethod, ')
+          ..write('physicalStatus: $physicalStatus, ')
+          ..write('scheduledAt: $scheduledAt, ')
+          ..write('contactNameSnapshot: $contactNameSnapshot, ')
+          ..write('contactPhoneSnapshot: $contactPhoneSnapshot, ')
+          ..write('deliveryAddressSnapshot: $deliveryAddressSnapshot, ')
+          ..write('fulfillmentInstructions: $fulfillmentInstructions, ')
+          ..write('deliveryFeeCents: $deliveryFeeCents, ')
+          ..write('recipientName: $recipientName, ')
+          ..write('physicalCompletedAt: $physicalCompletedAt, ')
           ..write('requestedDate: $requestedDate, ')
           ..write('notes: $notes, ')
           ..write('subtotalCents: $subtotalCents, ')
@@ -26545,22 +26886,32 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
   }
 
   @override
-  int get hashCode => Object.hash(
-      id,
-      reference,
-      customerId,
-      customerNameSnapshot,
-      status,
-      sourceQuotationId,
-      fulfillmentMethod,
-      requestedDate,
-      notes,
-      subtotalCents,
-      discountCents,
-      totalCents,
-      createdBy,
-      createdAt,
-      updatedAt);
+  int get hashCode => Object.hashAll([
+        id,
+        reference,
+        customerId,
+        customerNameSnapshot,
+        status,
+        sourceQuotationId,
+        fulfillmentMethod,
+        physicalStatus,
+        scheduledAt,
+        contactNameSnapshot,
+        contactPhoneSnapshot,
+        deliveryAddressSnapshot,
+        fulfillmentInstructions,
+        deliveryFeeCents,
+        recipientName,
+        physicalCompletedAt,
+        requestedDate,
+        notes,
+        subtotalCents,
+        discountCents,
+        totalCents,
+        createdBy,
+        createdAt,
+        updatedAt
+      ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -26572,6 +26923,15 @@ class SalesOrder extends DataClass implements Insertable<SalesOrder> {
           other.status == this.status &&
           other.sourceQuotationId == this.sourceQuotationId &&
           other.fulfillmentMethod == this.fulfillmentMethod &&
+          other.physicalStatus == this.physicalStatus &&
+          other.scheduledAt == this.scheduledAt &&
+          other.contactNameSnapshot == this.contactNameSnapshot &&
+          other.contactPhoneSnapshot == this.contactPhoneSnapshot &&
+          other.deliveryAddressSnapshot == this.deliveryAddressSnapshot &&
+          other.fulfillmentInstructions == this.fulfillmentInstructions &&
+          other.deliveryFeeCents == this.deliveryFeeCents &&
+          other.recipientName == this.recipientName &&
+          other.physicalCompletedAt == this.physicalCompletedAt &&
           other.requestedDate == this.requestedDate &&
           other.notes == this.notes &&
           other.subtotalCents == this.subtotalCents &&
@@ -26590,6 +26950,15 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
   final Value<String> status;
   final Value<String?> sourceQuotationId;
   final Value<String?> fulfillmentMethod;
+  final Value<String> physicalStatus;
+  final Value<DateTime?> scheduledAt;
+  final Value<String?> contactNameSnapshot;
+  final Value<String?> contactPhoneSnapshot;
+  final Value<String?> deliveryAddressSnapshot;
+  final Value<String?> fulfillmentInstructions;
+  final Value<int> deliveryFeeCents;
+  final Value<String?> recipientName;
+  final Value<DateTime?> physicalCompletedAt;
   final Value<DateTime?> requestedDate;
   final Value<String?> notes;
   final Value<int> subtotalCents;
@@ -26607,6 +26976,15 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
     this.status = const Value.absent(),
     this.sourceQuotationId = const Value.absent(),
     this.fulfillmentMethod = const Value.absent(),
+    this.physicalStatus = const Value.absent(),
+    this.scheduledAt = const Value.absent(),
+    this.contactNameSnapshot = const Value.absent(),
+    this.contactPhoneSnapshot = const Value.absent(),
+    this.deliveryAddressSnapshot = const Value.absent(),
+    this.fulfillmentInstructions = const Value.absent(),
+    this.deliveryFeeCents = const Value.absent(),
+    this.recipientName = const Value.absent(),
+    this.physicalCompletedAt = const Value.absent(),
     this.requestedDate = const Value.absent(),
     this.notes = const Value.absent(),
     this.subtotalCents = const Value.absent(),
@@ -26625,6 +27003,15 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
     this.status = const Value.absent(),
     this.sourceQuotationId = const Value.absent(),
     this.fulfillmentMethod = const Value.absent(),
+    this.physicalStatus = const Value.absent(),
+    this.scheduledAt = const Value.absent(),
+    this.contactNameSnapshot = const Value.absent(),
+    this.contactPhoneSnapshot = const Value.absent(),
+    this.deliveryAddressSnapshot = const Value.absent(),
+    this.fulfillmentInstructions = const Value.absent(),
+    this.deliveryFeeCents = const Value.absent(),
+    this.recipientName = const Value.absent(),
+    this.physicalCompletedAt = const Value.absent(),
     this.requestedDate = const Value.absent(),
     this.notes = const Value.absent(),
     required int subtotalCents,
@@ -26648,6 +27035,15 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
     Expression<String>? status,
     Expression<String>? sourceQuotationId,
     Expression<String>? fulfillmentMethod,
+    Expression<String>? physicalStatus,
+    Expression<DateTime>? scheduledAt,
+    Expression<String>? contactNameSnapshot,
+    Expression<String>? contactPhoneSnapshot,
+    Expression<String>? deliveryAddressSnapshot,
+    Expression<String>? fulfillmentInstructions,
+    Expression<int>? deliveryFeeCents,
+    Expression<String>? recipientName,
+    Expression<DateTime>? physicalCompletedAt,
     Expression<DateTime>? requestedDate,
     Expression<String>? notes,
     Expression<int>? subtotalCents,
@@ -26667,6 +27063,20 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
       if (status != null) 'status': status,
       if (sourceQuotationId != null) 'source_quotation_id': sourceQuotationId,
       if (fulfillmentMethod != null) 'fulfillment_method': fulfillmentMethod,
+      if (physicalStatus != null) 'physical_status': physicalStatus,
+      if (scheduledAt != null) 'scheduled_at': scheduledAt,
+      if (contactNameSnapshot != null)
+        'contact_name_snapshot': contactNameSnapshot,
+      if (contactPhoneSnapshot != null)
+        'contact_phone_snapshot': contactPhoneSnapshot,
+      if (deliveryAddressSnapshot != null)
+        'delivery_address_snapshot': deliveryAddressSnapshot,
+      if (fulfillmentInstructions != null)
+        'fulfillment_instructions': fulfillmentInstructions,
+      if (deliveryFeeCents != null) 'delivery_fee_cents': deliveryFeeCents,
+      if (recipientName != null) 'recipient_name': recipientName,
+      if (physicalCompletedAt != null)
+        'physical_completed_at': physicalCompletedAt,
       if (requestedDate != null) 'requested_date': requestedDate,
       if (notes != null) 'notes': notes,
       if (subtotalCents != null) 'subtotal_cents': subtotalCents,
@@ -26687,6 +27097,15 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
       Value<String>? status,
       Value<String?>? sourceQuotationId,
       Value<String?>? fulfillmentMethod,
+      Value<String>? physicalStatus,
+      Value<DateTime?>? scheduledAt,
+      Value<String?>? contactNameSnapshot,
+      Value<String?>? contactPhoneSnapshot,
+      Value<String?>? deliveryAddressSnapshot,
+      Value<String?>? fulfillmentInstructions,
+      Value<int>? deliveryFeeCents,
+      Value<String?>? recipientName,
+      Value<DateTime?>? physicalCompletedAt,
       Value<DateTime?>? requestedDate,
       Value<String?>? notes,
       Value<int>? subtotalCents,
@@ -26704,6 +27123,17 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
       status: status ?? this.status,
       sourceQuotationId: sourceQuotationId ?? this.sourceQuotationId,
       fulfillmentMethod: fulfillmentMethod ?? this.fulfillmentMethod,
+      physicalStatus: physicalStatus ?? this.physicalStatus,
+      scheduledAt: scheduledAt ?? this.scheduledAt,
+      contactNameSnapshot: contactNameSnapshot ?? this.contactNameSnapshot,
+      contactPhoneSnapshot: contactPhoneSnapshot ?? this.contactPhoneSnapshot,
+      deliveryAddressSnapshot:
+          deliveryAddressSnapshot ?? this.deliveryAddressSnapshot,
+      fulfillmentInstructions:
+          fulfillmentInstructions ?? this.fulfillmentInstructions,
+      deliveryFeeCents: deliveryFeeCents ?? this.deliveryFeeCents,
+      recipientName: recipientName ?? this.recipientName,
+      physicalCompletedAt: physicalCompletedAt ?? this.physicalCompletedAt,
       requestedDate: requestedDate ?? this.requestedDate,
       notes: notes ?? this.notes,
       subtotalCents: subtotalCents ?? this.subtotalCents,
@@ -26740,6 +27170,38 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
     }
     if (fulfillmentMethod.present) {
       map['fulfillment_method'] = Variable<String>(fulfillmentMethod.value);
+    }
+    if (physicalStatus.present) {
+      map['physical_status'] = Variable<String>(physicalStatus.value);
+    }
+    if (scheduledAt.present) {
+      map['scheduled_at'] = Variable<DateTime>(scheduledAt.value);
+    }
+    if (contactNameSnapshot.present) {
+      map['contact_name_snapshot'] =
+          Variable<String>(contactNameSnapshot.value);
+    }
+    if (contactPhoneSnapshot.present) {
+      map['contact_phone_snapshot'] =
+          Variable<String>(contactPhoneSnapshot.value);
+    }
+    if (deliveryAddressSnapshot.present) {
+      map['delivery_address_snapshot'] =
+          Variable<String>(deliveryAddressSnapshot.value);
+    }
+    if (fulfillmentInstructions.present) {
+      map['fulfillment_instructions'] =
+          Variable<String>(fulfillmentInstructions.value);
+    }
+    if (deliveryFeeCents.present) {
+      map['delivery_fee_cents'] = Variable<int>(deliveryFeeCents.value);
+    }
+    if (recipientName.present) {
+      map['recipient_name'] = Variable<String>(recipientName.value);
+    }
+    if (physicalCompletedAt.present) {
+      map['physical_completed_at'] =
+          Variable<DateTime>(physicalCompletedAt.value);
     }
     if (requestedDate.present) {
       map['requested_date'] = Variable<DateTime>(requestedDate.value);
@@ -26781,6 +27243,15 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
           ..write('status: $status, ')
           ..write('sourceQuotationId: $sourceQuotationId, ')
           ..write('fulfillmentMethod: $fulfillmentMethod, ')
+          ..write('physicalStatus: $physicalStatus, ')
+          ..write('scheduledAt: $scheduledAt, ')
+          ..write('contactNameSnapshot: $contactNameSnapshot, ')
+          ..write('contactPhoneSnapshot: $contactPhoneSnapshot, ')
+          ..write('deliveryAddressSnapshot: $deliveryAddressSnapshot, ')
+          ..write('fulfillmentInstructions: $fulfillmentInstructions, ')
+          ..write('deliveryFeeCents: $deliveryFeeCents, ')
+          ..write('recipientName: $recipientName, ')
+          ..write('physicalCompletedAt: $physicalCompletedAt, ')
           ..write('requestedDate: $requestedDate, ')
           ..write('notes: $notes, ')
           ..write('subtotalCents: $subtotalCents, ')
@@ -26789,6 +27260,409 @@ class SalesOrdersCompanion extends UpdateCompanion<SalesOrder> {
           ..write('createdBy: $createdBy, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $SalesOrderPhysicalEventsTable extends SalesOrderPhysicalEvents
+    with TableInfo<$SalesOrderPhysicalEventsTable, SalesOrderPhysicalEvent> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SalesOrderPhysicalEventsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      clientDefault: () => _uuid());
+  static const VerificationMeta _salesOrderIdMeta =
+      const VerificationMeta('salesOrderId');
+  @override
+  late final GeneratedColumn<String> salesOrderId = GeneratedColumn<String>(
+      'sales_order_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('REFERENCES sales_orders (id)'));
+  static const VerificationMeta _previousStatusMeta =
+      const VerificationMeta('previousStatus');
+  @override
+  late final GeneratedColumn<String> previousStatus = GeneratedColumn<String>(
+      'previous_status', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _newStatusMeta =
+      const VerificationMeta('newStatus');
+  @override
+  late final GeneratedColumn<String> newStatus = GeneratedColumn<String>(
+      'new_status', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _actorIdMeta =
+      const VerificationMeta('actorId');
+  @override
+  late final GeneratedColumn<String> actorId = GeneratedColumn<String>(
+      'actor_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('REFERENCES users (id)'));
+  static const VerificationMeta _occurredAtMeta =
+      const VerificationMeta('occurredAt');
+  @override
+  late final GeneratedColumn<DateTime> occurredAt = GeneratedColumn<DateTime>(
+      'occurred_at', aliasedName, false,
+      type: DriftSqlType.dateTime,
+      requiredDuringInsert: false,
+      clientDefault: () => DateTime.now());
+  static const VerificationMeta _notesMeta = const VerificationMeta('notes');
+  @override
+  late final GeneratedColumn<String> notes = GeneratedColumn<String>(
+      'notes', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, salesOrderId, previousStatus, newStatus, actorId, occurredAt, notes];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'sales_order_physical_events';
+  @override
+  VerificationContext validateIntegrity(
+      Insertable<SalesOrderPhysicalEvent> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('sales_order_id')) {
+      context.handle(
+          _salesOrderIdMeta,
+          salesOrderId.isAcceptableOrUnknown(
+              data['sales_order_id']!, _salesOrderIdMeta));
+    } else if (isInserting) {
+      context.missing(_salesOrderIdMeta);
+    }
+    if (data.containsKey('previous_status')) {
+      context.handle(
+          _previousStatusMeta,
+          previousStatus.isAcceptableOrUnknown(
+              data['previous_status']!, _previousStatusMeta));
+    } else if (isInserting) {
+      context.missing(_previousStatusMeta);
+    }
+    if (data.containsKey('new_status')) {
+      context.handle(_newStatusMeta,
+          newStatus.isAcceptableOrUnknown(data['new_status']!, _newStatusMeta));
+    } else if (isInserting) {
+      context.missing(_newStatusMeta);
+    }
+    if (data.containsKey('actor_id')) {
+      context.handle(_actorIdMeta,
+          actorId.isAcceptableOrUnknown(data['actor_id']!, _actorIdMeta));
+    } else if (isInserting) {
+      context.missing(_actorIdMeta);
+    }
+    if (data.containsKey('occurred_at')) {
+      context.handle(
+          _occurredAtMeta,
+          occurredAt.isAcceptableOrUnknown(
+              data['occurred_at']!, _occurredAtMeta));
+    }
+    if (data.containsKey('notes')) {
+      context.handle(
+          _notesMeta, notes.isAcceptableOrUnknown(data['notes']!, _notesMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  SalesOrderPhysicalEvent map(Map<String, dynamic> data,
+      {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SalesOrderPhysicalEvent(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      salesOrderId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sales_order_id'])!,
+      previousStatus: attachedDatabase.typeMapping.read(
+          DriftSqlType.string, data['${effectivePrefix}previous_status'])!,
+      newStatus: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}new_status'])!,
+      actorId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}actor_id'])!,
+      occurredAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.dateTime, data['${effectivePrefix}occurred_at'])!,
+      notes: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}notes']),
+    );
+  }
+
+  @override
+  $SalesOrderPhysicalEventsTable createAlias(String alias) {
+    return $SalesOrderPhysicalEventsTable(attachedDatabase, alias);
+  }
+}
+
+class SalesOrderPhysicalEvent extends DataClass
+    implements Insertable<SalesOrderPhysicalEvent> {
+  final String id;
+  final String salesOrderId;
+  final String previousStatus;
+  final String newStatus;
+  final String actorId;
+  final DateTime occurredAt;
+  final String? notes;
+  const SalesOrderPhysicalEvent(
+      {required this.id,
+      required this.salesOrderId,
+      required this.previousStatus,
+      required this.newStatus,
+      required this.actorId,
+      required this.occurredAt,
+      this.notes});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['sales_order_id'] = Variable<String>(salesOrderId);
+    map['previous_status'] = Variable<String>(previousStatus);
+    map['new_status'] = Variable<String>(newStatus);
+    map['actor_id'] = Variable<String>(actorId);
+    map['occurred_at'] = Variable<DateTime>(occurredAt);
+    if (!nullToAbsent || notes != null) {
+      map['notes'] = Variable<String>(notes);
+    }
+    return map;
+  }
+
+  SalesOrderPhysicalEventsCompanion toCompanion(bool nullToAbsent) {
+    return SalesOrderPhysicalEventsCompanion(
+      id: Value(id),
+      salesOrderId: Value(salesOrderId),
+      previousStatus: Value(previousStatus),
+      newStatus: Value(newStatus),
+      actorId: Value(actorId),
+      occurredAt: Value(occurredAt),
+      notes:
+          notes == null && nullToAbsent ? const Value.absent() : Value(notes),
+    );
+  }
+
+  factory SalesOrderPhysicalEvent.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SalesOrderPhysicalEvent(
+      id: serializer.fromJson<String>(json['id']),
+      salesOrderId: serializer.fromJson<String>(json['salesOrderId']),
+      previousStatus: serializer.fromJson<String>(json['previousStatus']),
+      newStatus: serializer.fromJson<String>(json['newStatus']),
+      actorId: serializer.fromJson<String>(json['actorId']),
+      occurredAt: serializer.fromJson<DateTime>(json['occurredAt']),
+      notes: serializer.fromJson<String?>(json['notes']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'salesOrderId': serializer.toJson<String>(salesOrderId),
+      'previousStatus': serializer.toJson<String>(previousStatus),
+      'newStatus': serializer.toJson<String>(newStatus),
+      'actorId': serializer.toJson<String>(actorId),
+      'occurredAt': serializer.toJson<DateTime>(occurredAt),
+      'notes': serializer.toJson<String?>(notes),
+    };
+  }
+
+  SalesOrderPhysicalEvent copyWith(
+          {String? id,
+          String? salesOrderId,
+          String? previousStatus,
+          String? newStatus,
+          String? actorId,
+          DateTime? occurredAt,
+          Value<String?> notes = const Value.absent()}) =>
+      SalesOrderPhysicalEvent(
+        id: id ?? this.id,
+        salesOrderId: salesOrderId ?? this.salesOrderId,
+        previousStatus: previousStatus ?? this.previousStatus,
+        newStatus: newStatus ?? this.newStatus,
+        actorId: actorId ?? this.actorId,
+        occurredAt: occurredAt ?? this.occurredAt,
+        notes: notes.present ? notes.value : this.notes,
+      );
+  SalesOrderPhysicalEvent copyWithCompanion(
+      SalesOrderPhysicalEventsCompanion data) {
+    return SalesOrderPhysicalEvent(
+      id: data.id.present ? data.id.value : this.id,
+      salesOrderId: data.salesOrderId.present
+          ? data.salesOrderId.value
+          : this.salesOrderId,
+      previousStatus: data.previousStatus.present
+          ? data.previousStatus.value
+          : this.previousStatus,
+      newStatus: data.newStatus.present ? data.newStatus.value : this.newStatus,
+      actorId: data.actorId.present ? data.actorId.value : this.actorId,
+      occurredAt:
+          data.occurredAt.present ? data.occurredAt.value : this.occurredAt,
+      notes: data.notes.present ? data.notes.value : this.notes,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SalesOrderPhysicalEvent(')
+          ..write('id: $id, ')
+          ..write('salesOrderId: $salesOrderId, ')
+          ..write('previousStatus: $previousStatus, ')
+          ..write('newStatus: $newStatus, ')
+          ..write('actorId: $actorId, ')
+          ..write('occurredAt: $occurredAt, ')
+          ..write('notes: $notes')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      id, salesOrderId, previousStatus, newStatus, actorId, occurredAt, notes);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SalesOrderPhysicalEvent &&
+          other.id == this.id &&
+          other.salesOrderId == this.salesOrderId &&
+          other.previousStatus == this.previousStatus &&
+          other.newStatus == this.newStatus &&
+          other.actorId == this.actorId &&
+          other.occurredAt == this.occurredAt &&
+          other.notes == this.notes);
+}
+
+class SalesOrderPhysicalEventsCompanion
+    extends UpdateCompanion<SalesOrderPhysicalEvent> {
+  final Value<String> id;
+  final Value<String> salesOrderId;
+  final Value<String> previousStatus;
+  final Value<String> newStatus;
+  final Value<String> actorId;
+  final Value<DateTime> occurredAt;
+  final Value<String?> notes;
+  final Value<int> rowid;
+  const SalesOrderPhysicalEventsCompanion({
+    this.id = const Value.absent(),
+    this.salesOrderId = const Value.absent(),
+    this.previousStatus = const Value.absent(),
+    this.newStatus = const Value.absent(),
+    this.actorId = const Value.absent(),
+    this.occurredAt = const Value.absent(),
+    this.notes = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  SalesOrderPhysicalEventsCompanion.insert({
+    this.id = const Value.absent(),
+    required String salesOrderId,
+    required String previousStatus,
+    required String newStatus,
+    required String actorId,
+    this.occurredAt = const Value.absent(),
+    this.notes = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : salesOrderId = Value(salesOrderId),
+        previousStatus = Value(previousStatus),
+        newStatus = Value(newStatus),
+        actorId = Value(actorId);
+  static Insertable<SalesOrderPhysicalEvent> custom({
+    Expression<String>? id,
+    Expression<String>? salesOrderId,
+    Expression<String>? previousStatus,
+    Expression<String>? newStatus,
+    Expression<String>? actorId,
+    Expression<DateTime>? occurredAt,
+    Expression<String>? notes,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (salesOrderId != null) 'sales_order_id': salesOrderId,
+      if (previousStatus != null) 'previous_status': previousStatus,
+      if (newStatus != null) 'new_status': newStatus,
+      if (actorId != null) 'actor_id': actorId,
+      if (occurredAt != null) 'occurred_at': occurredAt,
+      if (notes != null) 'notes': notes,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  SalesOrderPhysicalEventsCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? salesOrderId,
+      Value<String>? previousStatus,
+      Value<String>? newStatus,
+      Value<String>? actorId,
+      Value<DateTime>? occurredAt,
+      Value<String?>? notes,
+      Value<int>? rowid}) {
+    return SalesOrderPhysicalEventsCompanion(
+      id: id ?? this.id,
+      salesOrderId: salesOrderId ?? this.salesOrderId,
+      previousStatus: previousStatus ?? this.previousStatus,
+      newStatus: newStatus ?? this.newStatus,
+      actorId: actorId ?? this.actorId,
+      occurredAt: occurredAt ?? this.occurredAt,
+      notes: notes ?? this.notes,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (salesOrderId.present) {
+      map['sales_order_id'] = Variable<String>(salesOrderId.value);
+    }
+    if (previousStatus.present) {
+      map['previous_status'] = Variable<String>(previousStatus.value);
+    }
+    if (newStatus.present) {
+      map['new_status'] = Variable<String>(newStatus.value);
+    }
+    if (actorId.present) {
+      map['actor_id'] = Variable<String>(actorId.value);
+    }
+    if (occurredAt.present) {
+      map['occurred_at'] = Variable<DateTime>(occurredAt.value);
+    }
+    if (notes.present) {
+      map['notes'] = Variable<String>(notes.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SalesOrderPhysicalEventsCompanion(')
+          ..write('id: $id, ')
+          ..write('salesOrderId: $salesOrderId, ')
+          ..write('previousStatus: $previousStatus, ')
+          ..write('newStatus: $newStatus, ')
+          ..write('actorId: $actorId, ')
+          ..write('occurredAt: $occurredAt, ')
+          ..write('notes: $notes, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -35698,6 +36572,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $QuotationsTable quotations = $QuotationsTable(this);
   late final $QuotationItemsTable quotationItems = $QuotationItemsTable(this);
   late final $SalesOrdersTable salesOrders = $SalesOrdersTable(this);
+  late final $SalesOrderPhysicalEventsTable salesOrderPhysicalEvents =
+      $SalesOrderPhysicalEventsTable(this);
   late final $SalesOrderLinesTable salesOrderLines =
       $SalesOrderLinesTable(this);
   late final $StockReservationsTable stockReservations =
@@ -35790,6 +36666,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         quotations,
         quotationItems,
         salesOrders,
+        salesOrderPhysicalEvents,
         salesOrderLines,
         stockReservations,
         salesOrderFulfillments,
@@ -39636,6 +40513,25 @@ final class $$UsersTableReferences
         manager.$state.copyWith(prefetchedData: cache));
   }
 
+  static MultiTypedResultKey<$SalesOrderPhysicalEventsTable,
+      List<SalesOrderPhysicalEvent>> _salesOrderPhysicalEventsRefsTable(
+          _$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(db.salesOrderPhysicalEvents,
+          aliasName: $_aliasNameGenerator(
+              db.users.id, db.salesOrderPhysicalEvents.actorId));
+
+  $$SalesOrderPhysicalEventsTableProcessedTableManager
+      get salesOrderPhysicalEventsRefs {
+    final manager = $$SalesOrderPhysicalEventsTableTableManager(
+            $_db, $_db.salesOrderPhysicalEvents)
+        .filter((f) => f.actorId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache =
+        $_typedResult.readTableOrNull(_salesOrderPhysicalEventsRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+
   static MultiTypedResultKey<$SalesOrderFulfillmentsTable,
       List<SalesOrderFulfillment>> _salesOrderFulfillmentsRefsTable(
           _$AppDatabase db) =>
@@ -40125,6 +41021,29 @@ class $$UsersTableFilterComposer extends Composer<_$AppDatabase, $UsersTable> {
               $removeJoinBuilderFromRootComposer:
                   $removeJoinBuilderFromRootComposer,
             ));
+    return f(composer);
+  }
+
+  Expression<bool> salesOrderPhysicalEventsRefs(
+      Expression<bool> Function($$SalesOrderPhysicalEventsTableFilterComposer f)
+          f) {
+    final $$SalesOrderPhysicalEventsTableFilterComposer composer =
+        $composerBuilder(
+            composer: this,
+            getCurrentColumn: (t) => t.id,
+            referencedTable: $db.salesOrderPhysicalEvents,
+            getReferencedColumn: (t) => t.actorId,
+            builder: (joinBuilder,
+                    {$addJoinBuilderToRootComposer,
+                    $removeJoinBuilderFromRootComposer}) =>
+                $$SalesOrderPhysicalEventsTableFilterComposer(
+                  $db: $db,
+                  $table: $db.salesOrderPhysicalEvents,
+                  $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                  joinBuilder: joinBuilder,
+                  $removeJoinBuilderFromRootComposer:
+                      $removeJoinBuilderFromRootComposer,
+                ));
     return f(composer);
   }
 
@@ -40695,6 +41614,30 @@ class $$UsersTableAnnotationComposer
     return f(composer);
   }
 
+  Expression<T> salesOrderPhysicalEventsRefs<T extends Object>(
+      Expression<T> Function(
+              $$SalesOrderPhysicalEventsTableAnnotationComposer a)
+          f) {
+    final $$SalesOrderPhysicalEventsTableAnnotationComposer composer =
+        $composerBuilder(
+            composer: this,
+            getCurrentColumn: (t) => t.id,
+            referencedTable: $db.salesOrderPhysicalEvents,
+            getReferencedColumn: (t) => t.actorId,
+            builder: (joinBuilder,
+                    {$addJoinBuilderToRootComposer,
+                    $removeJoinBuilderFromRootComposer}) =>
+                $$SalesOrderPhysicalEventsTableAnnotationComposer(
+                  $db: $db,
+                  $table: $db.salesOrderPhysicalEvents,
+                  $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                  joinBuilder: joinBuilder,
+                  $removeJoinBuilderFromRootComposer:
+                      $removeJoinBuilderFromRootComposer,
+                ));
+    return f(composer);
+  }
+
   Expression<T> salesOrderFulfillmentsRefs<T extends Object>(
       Expression<T> Function($$SalesOrderFulfillmentsTableAnnotationComposer a)
           f) {
@@ -40880,6 +41823,7 @@ class $$UsersTableTableManager extends RootTableManager<
         bool rmaLifecycleEventsRefs,
         bool quotationsRefs,
         bool salesOrdersRefs,
+        bool salesOrderPhysicalEventsRefs,
         bool salesOrderFulfillmentsRefs,
         bool quotationSourcingRequirementsRefs,
         bool purchaseOrderLineSourceLinksRefs,
@@ -40969,6 +41913,7 @@ class $$UsersTableTableManager extends RootTableManager<
               rmaLifecycleEventsRefs = false,
               quotationsRefs = false,
               salesOrdersRefs = false,
+              salesOrderPhysicalEventsRefs = false,
               salesOrderFulfillmentsRefs = false,
               quotationSourcingRequirementsRefs = false,
               purchaseOrderLineSourceLinksRefs = false,
@@ -40994,6 +41939,7 @@ class $$UsersTableTableManager extends RootTableManager<
                 if (rmaLifecycleEventsRefs) db.rmaLifecycleEvents,
                 if (quotationsRefs) db.quotations,
                 if (salesOrdersRefs) db.salesOrders,
+                if (salesOrderPhysicalEventsRefs) db.salesOrderPhysicalEvents,
                 if (salesOrderFulfillmentsRefs) db.salesOrderFulfillments,
                 if (quotationSourcingRequirementsRefs)
                   db.quotationSourcingRequirements,
@@ -41190,6 +42136,19 @@ class $$UsersTableTableManager extends RootTableManager<
                             (item, referencedItems) => referencedItems
                                 .where((e) => e.createdBy == item.id),
                         typedResults: items),
+                  if (salesOrderPhysicalEventsRefs)
+                    await $_getPrefetchedData<User, $UsersTable,
+                            SalesOrderPhysicalEvent>(
+                        currentTable: table,
+                        referencedTable: $$UsersTableReferences
+                            ._salesOrderPhysicalEventsRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$UsersTableReferences(db, table, p0)
+                                .salesOrderPhysicalEventsRefs,
+                        referencedItemsForCurrentItem: (item,
+                                referencedItems) =>
+                            referencedItems.where((e) => e.actorId == item.id),
+                        typedResults: items),
                   if (salesOrderFulfillmentsRefs)
                     await $_getPrefetchedData<User, $UsersTable,
                             SalesOrderFulfillment>(
@@ -41315,6 +42274,7 @@ typedef $$UsersTableProcessedTableManager = ProcessedTableManager<
         bool rmaLifecycleEventsRefs,
         bool quotationsRefs,
         bool salesOrdersRefs,
+        bool salesOrderPhysicalEventsRefs,
         bool salesOrderFulfillmentsRefs,
         bool quotationSourcingRequirementsRefs,
         bool purchaseOrderLineSourceLinksRefs,
@@ -47549,6 +48509,7 @@ typedef $$SalesTableCreateCompanionBuilder = SalesCompanion Function({
   Value<String?> walkInContact,
   Value<String?> heldReference,
   required int totalCents,
+  Value<int> deliveryFeeCents,
   Value<String> discountSource,
   Value<int?> birInvoiceNumber,
   Value<String> status,
@@ -47565,6 +48526,7 @@ typedef $$SalesTableUpdateCompanionBuilder = SalesCompanion Function({
   Value<String?> walkInContact,
   Value<String?> heldReference,
   Value<int> totalCents,
+  Value<int> deliveryFeeCents,
   Value<String> discountSource,
   Value<int?> birInvoiceNumber,
   Value<String> status,
@@ -47876,6 +48838,10 @@ class $$SalesTableFilterComposer extends Composer<_$AppDatabase, $SalesTable> {
 
   ColumnFilters<int> get totalCents => $composableBuilder(
       column: $table.totalCents, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get deliveryFeeCents => $composableBuilder(
+      column: $table.deliveryFeeCents,
+      builder: (column) => ColumnFilters(column));
 
   ColumnFilters<String> get discountSource => $composableBuilder(
       column: $table.discountSource,
@@ -48289,6 +49255,10 @@ class $$SalesTableOrderingComposer
   ColumnOrderings<int> get totalCents => $composableBuilder(
       column: $table.totalCents, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<int> get deliveryFeeCents => $composableBuilder(
+      column: $table.deliveryFeeCents,
+      builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<String> get discountSource => $composableBuilder(
       column: $table.discountSource,
       builder: (column) => ColumnOrderings(column));
@@ -48390,6 +49360,9 @@ class $$SalesTableAnnotationComposer
 
   GeneratedColumn<int> get totalCents => $composableBuilder(
       column: $table.totalCents, builder: (column) => column);
+
+  GeneratedColumn<int> get deliveryFeeCents => $composableBuilder(
+      column: $table.deliveryFeeCents, builder: (column) => column);
 
   GeneratedColumn<String> get discountSource => $composableBuilder(
       column: $table.discountSource, builder: (column) => column);
@@ -48822,6 +49795,7 @@ class $$SalesTableTableManager extends RootTableManager<
             Value<String?> walkInContact = const Value.absent(),
             Value<String?> heldReference = const Value.absent(),
             Value<int> totalCents = const Value.absent(),
+            Value<int> deliveryFeeCents = const Value.absent(),
             Value<String> discountSource = const Value.absent(),
             Value<int?> birInvoiceNumber = const Value.absent(),
             Value<String> status = const Value.absent(),
@@ -48838,6 +49812,7 @@ class $$SalesTableTableManager extends RootTableManager<
             walkInContact: walkInContact,
             heldReference: heldReference,
             totalCents: totalCents,
+            deliveryFeeCents: deliveryFeeCents,
             discountSource: discountSource,
             birInvoiceNumber: birInvoiceNumber,
             status: status,
@@ -48854,6 +49829,7 @@ class $$SalesTableTableManager extends RootTableManager<
             Value<String?> walkInContact = const Value.absent(),
             Value<String?> heldReference = const Value.absent(),
             required int totalCents,
+            Value<int> deliveryFeeCents = const Value.absent(),
             Value<String> discountSource = const Value.absent(),
             Value<int?> birInvoiceNumber = const Value.absent(),
             Value<String> status = const Value.absent(),
@@ -48870,6 +49846,7 @@ class $$SalesTableTableManager extends RootTableManager<
             walkInContact: walkInContact,
             heldReference: heldReference,
             totalCents: totalCents,
+            deliveryFeeCents: deliveryFeeCents,
             discountSource: discountSource,
             birInvoiceNumber: birInvoiceNumber,
             status: status,
@@ -69454,6 +70431,15 @@ typedef $$SalesOrdersTableCreateCompanionBuilder = SalesOrdersCompanion
   Value<String> status,
   Value<String?> sourceQuotationId,
   Value<String?> fulfillmentMethod,
+  Value<String> physicalStatus,
+  Value<DateTime?> scheduledAt,
+  Value<String?> contactNameSnapshot,
+  Value<String?> contactPhoneSnapshot,
+  Value<String?> deliveryAddressSnapshot,
+  Value<String?> fulfillmentInstructions,
+  Value<int> deliveryFeeCents,
+  Value<String?> recipientName,
+  Value<DateTime?> physicalCompletedAt,
   Value<DateTime?> requestedDate,
   Value<String?> notes,
   required int subtotalCents,
@@ -69473,6 +70459,15 @@ typedef $$SalesOrdersTableUpdateCompanionBuilder = SalesOrdersCompanion
   Value<String> status,
   Value<String?> sourceQuotationId,
   Value<String?> fulfillmentMethod,
+  Value<String> physicalStatus,
+  Value<DateTime?> scheduledAt,
+  Value<String?> contactNameSnapshot,
+  Value<String?> contactPhoneSnapshot,
+  Value<String?> deliveryAddressSnapshot,
+  Value<String?> fulfillmentInstructions,
+  Value<int> deliveryFeeCents,
+  Value<String?> recipientName,
+  Value<DateTime?> physicalCompletedAt,
   Value<DateTime?> requestedDate,
   Value<String?> notes,
   Value<int> subtotalCents,
@@ -69530,6 +70525,26 @@ final class $$SalesOrdersTableReferences
     if (item == null) return manager;
     return ProcessedTableManager(
         manager.$state.copyWith(prefetchedData: [item]));
+  }
+
+  static MultiTypedResultKey<$SalesOrderPhysicalEventsTable,
+      List<SalesOrderPhysicalEvent>> _salesOrderPhysicalEventsRefsTable(
+          _$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(db.salesOrderPhysicalEvents,
+          aliasName: $_aliasNameGenerator(
+              db.salesOrders.id, db.salesOrderPhysicalEvents.salesOrderId));
+
+  $$SalesOrderPhysicalEventsTableProcessedTableManager
+      get salesOrderPhysicalEventsRefs {
+    final manager = $$SalesOrderPhysicalEventsTableTableManager(
+            $_db, $_db.salesOrderPhysicalEvents)
+        .filter(
+            (f) => f.salesOrderId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache =
+        $_typedResult.readTableOrNull(_salesOrderPhysicalEventsRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
   }
 
   static MultiTypedResultKey<$SalesOrderLinesTable, List<SalesOrderLine>>
@@ -69614,6 +70629,40 @@ class $$SalesOrdersTableFilterComposer
       column: $table.fulfillmentMethod,
       builder: (column) => ColumnFilters(column));
 
+  ColumnFilters<String> get physicalStatus => $composableBuilder(
+      column: $table.physicalStatus,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get scheduledAt => $composableBuilder(
+      column: $table.scheduledAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get contactNameSnapshot => $composableBuilder(
+      column: $table.contactNameSnapshot,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get contactPhoneSnapshot => $composableBuilder(
+      column: $table.contactPhoneSnapshot,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get deliveryAddressSnapshot => $composableBuilder(
+      column: $table.deliveryAddressSnapshot,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get fulfillmentInstructions => $composableBuilder(
+      column: $table.fulfillmentInstructions,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get deliveryFeeCents => $composableBuilder(
+      column: $table.deliveryFeeCents,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get recipientName => $composableBuilder(
+      column: $table.recipientName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get physicalCompletedAt => $composableBuilder(
+      column: $table.physicalCompletedAt,
+      builder: (column) => ColumnFilters(column));
+
   ColumnFilters<DateTime> get requestedDate => $composableBuilder(
       column: $table.requestedDate, builder: (column) => ColumnFilters(column));
 
@@ -69693,6 +70742,29 @@ class $$SalesOrdersTableFilterComposer
                   $removeJoinBuilderFromRootComposer,
             ));
     return composer;
+  }
+
+  Expression<bool> salesOrderPhysicalEventsRefs(
+      Expression<bool> Function($$SalesOrderPhysicalEventsTableFilterComposer f)
+          f) {
+    final $$SalesOrderPhysicalEventsTableFilterComposer composer =
+        $composerBuilder(
+            composer: this,
+            getCurrentColumn: (t) => t.id,
+            referencedTable: $db.salesOrderPhysicalEvents,
+            getReferencedColumn: (t) => t.salesOrderId,
+            builder: (joinBuilder,
+                    {$addJoinBuilderToRootComposer,
+                    $removeJoinBuilderFromRootComposer}) =>
+                $$SalesOrderPhysicalEventsTableFilterComposer(
+                  $db: $db,
+                  $table: $db.salesOrderPhysicalEvents,
+                  $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                  joinBuilder: joinBuilder,
+                  $removeJoinBuilderFromRootComposer:
+                      $removeJoinBuilderFromRootComposer,
+                ));
+    return f(composer);
   }
 
   Expression<bool> salesOrderLinesRefs(
@@ -69785,6 +70857,41 @@ class $$SalesOrdersTableOrderingComposer
 
   ColumnOrderings<String> get fulfillmentMethod => $composableBuilder(
       column: $table.fulfillmentMethod,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get physicalStatus => $composableBuilder(
+      column: $table.physicalStatus,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get scheduledAt => $composableBuilder(
+      column: $table.scheduledAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get contactNameSnapshot => $composableBuilder(
+      column: $table.contactNameSnapshot,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get contactPhoneSnapshot => $composableBuilder(
+      column: $table.contactPhoneSnapshot,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get deliveryAddressSnapshot => $composableBuilder(
+      column: $table.deliveryAddressSnapshot,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get fulfillmentInstructions => $composableBuilder(
+      column: $table.fulfillmentInstructions,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get deliveryFeeCents => $composableBuilder(
+      column: $table.deliveryFeeCents,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get recipientName => $composableBuilder(
+      column: $table.recipientName,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get physicalCompletedAt => $composableBuilder(
+      column: $table.physicalCompletedAt,
       builder: (column) => ColumnOrderings(column));
 
   ColumnOrderings<DateTime> get requestedDate => $composableBuilder(
@@ -69896,6 +71003,33 @@ class $$SalesOrdersTableAnnotationComposer
   GeneratedColumn<String> get fulfillmentMethod => $composableBuilder(
       column: $table.fulfillmentMethod, builder: (column) => column);
 
+  GeneratedColumn<String> get physicalStatus => $composableBuilder(
+      column: $table.physicalStatus, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get scheduledAt => $composableBuilder(
+      column: $table.scheduledAt, builder: (column) => column);
+
+  GeneratedColumn<String> get contactNameSnapshot => $composableBuilder(
+      column: $table.contactNameSnapshot, builder: (column) => column);
+
+  GeneratedColumn<String> get contactPhoneSnapshot => $composableBuilder(
+      column: $table.contactPhoneSnapshot, builder: (column) => column);
+
+  GeneratedColumn<String> get deliveryAddressSnapshot => $composableBuilder(
+      column: $table.deliveryAddressSnapshot, builder: (column) => column);
+
+  GeneratedColumn<String> get fulfillmentInstructions => $composableBuilder(
+      column: $table.fulfillmentInstructions, builder: (column) => column);
+
+  GeneratedColumn<int> get deliveryFeeCents => $composableBuilder(
+      column: $table.deliveryFeeCents, builder: (column) => column);
+
+  GeneratedColumn<String> get recipientName => $composableBuilder(
+      column: $table.recipientName, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get physicalCompletedAt => $composableBuilder(
+      column: $table.physicalCompletedAt, builder: (column) => column);
+
   GeneratedColumn<DateTime> get requestedDate => $composableBuilder(
       column: $table.requestedDate, builder: (column) => column);
 
@@ -69975,6 +71109,30 @@ class $$SalesOrdersTableAnnotationComposer
                   $removeJoinBuilderFromRootComposer,
             ));
     return composer;
+  }
+
+  Expression<T> salesOrderPhysicalEventsRefs<T extends Object>(
+      Expression<T> Function(
+              $$SalesOrderPhysicalEventsTableAnnotationComposer a)
+          f) {
+    final $$SalesOrderPhysicalEventsTableAnnotationComposer composer =
+        $composerBuilder(
+            composer: this,
+            getCurrentColumn: (t) => t.id,
+            referencedTable: $db.salesOrderPhysicalEvents,
+            getReferencedColumn: (t) => t.salesOrderId,
+            builder: (joinBuilder,
+                    {$addJoinBuilderToRootComposer,
+                    $removeJoinBuilderFromRootComposer}) =>
+                $$SalesOrderPhysicalEventsTableAnnotationComposer(
+                  $db: $db,
+                  $table: $db.salesOrderPhysicalEvents,
+                  $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                  joinBuilder: joinBuilder,
+                  $removeJoinBuilderFromRootComposer:
+                      $removeJoinBuilderFromRootComposer,
+                ));
+    return f(composer);
   }
 
   Expression<T> salesOrderLinesRefs<T extends Object>(
@@ -70059,6 +71217,7 @@ class $$SalesOrdersTableTableManager extends RootTableManager<
         {bool customerId,
         bool sourceQuotationId,
         bool createdBy,
+        bool salesOrderPhysicalEventsRefs,
         bool salesOrderLinesRefs,
         bool stockReservationsRefs,
         bool salesOrderFulfillmentsRefs})> {
@@ -70080,6 +71239,15 @@ class $$SalesOrdersTableTableManager extends RootTableManager<
             Value<String> status = const Value.absent(),
             Value<String?> sourceQuotationId = const Value.absent(),
             Value<String?> fulfillmentMethod = const Value.absent(),
+            Value<String> physicalStatus = const Value.absent(),
+            Value<DateTime?> scheduledAt = const Value.absent(),
+            Value<String?> contactNameSnapshot = const Value.absent(),
+            Value<String?> contactPhoneSnapshot = const Value.absent(),
+            Value<String?> deliveryAddressSnapshot = const Value.absent(),
+            Value<String?> fulfillmentInstructions = const Value.absent(),
+            Value<int> deliveryFeeCents = const Value.absent(),
+            Value<String?> recipientName = const Value.absent(),
+            Value<DateTime?> physicalCompletedAt = const Value.absent(),
             Value<DateTime?> requestedDate = const Value.absent(),
             Value<String?> notes = const Value.absent(),
             Value<int> subtotalCents = const Value.absent(),
@@ -70098,6 +71266,15 @@ class $$SalesOrdersTableTableManager extends RootTableManager<
             status: status,
             sourceQuotationId: sourceQuotationId,
             fulfillmentMethod: fulfillmentMethod,
+            physicalStatus: physicalStatus,
+            scheduledAt: scheduledAt,
+            contactNameSnapshot: contactNameSnapshot,
+            contactPhoneSnapshot: contactPhoneSnapshot,
+            deliveryAddressSnapshot: deliveryAddressSnapshot,
+            fulfillmentInstructions: fulfillmentInstructions,
+            deliveryFeeCents: deliveryFeeCents,
+            recipientName: recipientName,
+            physicalCompletedAt: physicalCompletedAt,
             requestedDate: requestedDate,
             notes: notes,
             subtotalCents: subtotalCents,
@@ -70116,6 +71293,15 @@ class $$SalesOrdersTableTableManager extends RootTableManager<
             Value<String> status = const Value.absent(),
             Value<String?> sourceQuotationId = const Value.absent(),
             Value<String?> fulfillmentMethod = const Value.absent(),
+            Value<String> physicalStatus = const Value.absent(),
+            Value<DateTime?> scheduledAt = const Value.absent(),
+            Value<String?> contactNameSnapshot = const Value.absent(),
+            Value<String?> contactPhoneSnapshot = const Value.absent(),
+            Value<String?> deliveryAddressSnapshot = const Value.absent(),
+            Value<String?> fulfillmentInstructions = const Value.absent(),
+            Value<int> deliveryFeeCents = const Value.absent(),
+            Value<String?> recipientName = const Value.absent(),
+            Value<DateTime?> physicalCompletedAt = const Value.absent(),
             Value<DateTime?> requestedDate = const Value.absent(),
             Value<String?> notes = const Value.absent(),
             required int subtotalCents,
@@ -70134,6 +71320,15 @@ class $$SalesOrdersTableTableManager extends RootTableManager<
             status: status,
             sourceQuotationId: sourceQuotationId,
             fulfillmentMethod: fulfillmentMethod,
+            physicalStatus: physicalStatus,
+            scheduledAt: scheduledAt,
+            contactNameSnapshot: contactNameSnapshot,
+            contactPhoneSnapshot: contactPhoneSnapshot,
+            deliveryAddressSnapshot: deliveryAddressSnapshot,
+            fulfillmentInstructions: fulfillmentInstructions,
+            deliveryFeeCents: deliveryFeeCents,
+            recipientName: recipientName,
+            physicalCompletedAt: physicalCompletedAt,
             requestedDate: requestedDate,
             notes: notes,
             subtotalCents: subtotalCents,
@@ -70154,12 +71349,14 @@ class $$SalesOrdersTableTableManager extends RootTableManager<
               {customerId = false,
               sourceQuotationId = false,
               createdBy = false,
+              salesOrderPhysicalEventsRefs = false,
               salesOrderLinesRefs = false,
               stockReservationsRefs = false,
               salesOrderFulfillmentsRefs = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [
+                if (salesOrderPhysicalEventsRefs) db.salesOrderPhysicalEvents,
                 if (salesOrderLinesRefs) db.salesOrderLines,
                 if (stockReservationsRefs) db.stockReservations,
                 if (salesOrderFulfillmentsRefs) db.salesOrderFulfillments
@@ -70213,6 +71410,19 @@ class $$SalesOrdersTableTableManager extends RootTableManager<
               },
               getPrefetchedDataCallback: (items) async {
                 return [
+                  if (salesOrderPhysicalEventsRefs)
+                    await $_getPrefetchedData<SalesOrder, $SalesOrdersTable,
+                            SalesOrderPhysicalEvent>(
+                        currentTable: table,
+                        referencedTable: $$SalesOrdersTableReferences
+                            ._salesOrderPhysicalEventsRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$SalesOrdersTableReferences(db, table, p0)
+                                .salesOrderPhysicalEventsRefs,
+                        referencedItemsForCurrentItem:
+                            (item, referencedItems) => referencedItems
+                                .where((e) => e.salesOrderId == item.id),
+                        typedResults: items),
                   if (salesOrderLinesRefs)
                     await $_getPrefetchedData<SalesOrder, $SalesOrdersTable,
                             SalesOrderLine>(
@@ -70274,9 +71484,400 @@ typedef $$SalesOrdersTableProcessedTableManager = ProcessedTableManager<
         {bool customerId,
         bool sourceQuotationId,
         bool createdBy,
+        bool salesOrderPhysicalEventsRefs,
         bool salesOrderLinesRefs,
         bool stockReservationsRefs,
         bool salesOrderFulfillmentsRefs})>;
+typedef $$SalesOrderPhysicalEventsTableCreateCompanionBuilder
+    = SalesOrderPhysicalEventsCompanion Function({
+  Value<String> id,
+  required String salesOrderId,
+  required String previousStatus,
+  required String newStatus,
+  required String actorId,
+  Value<DateTime> occurredAt,
+  Value<String?> notes,
+  Value<int> rowid,
+});
+typedef $$SalesOrderPhysicalEventsTableUpdateCompanionBuilder
+    = SalesOrderPhysicalEventsCompanion Function({
+  Value<String> id,
+  Value<String> salesOrderId,
+  Value<String> previousStatus,
+  Value<String> newStatus,
+  Value<String> actorId,
+  Value<DateTime> occurredAt,
+  Value<String?> notes,
+  Value<int> rowid,
+});
+
+final class $$SalesOrderPhysicalEventsTableReferences extends BaseReferences<
+    _$AppDatabase, $SalesOrderPhysicalEventsTable, SalesOrderPhysicalEvent> {
+  $$SalesOrderPhysicalEventsTableReferences(
+      super.$_db, super.$_table, super.$_typedResult);
+
+  static $SalesOrdersTable _salesOrderIdTable(_$AppDatabase db) =>
+      db.salesOrders.createAlias($_aliasNameGenerator(
+          db.salesOrderPhysicalEvents.salesOrderId, db.salesOrders.id));
+
+  $$SalesOrdersTableProcessedTableManager get salesOrderId {
+    final $_column = $_itemColumn<String>('sales_order_id')!;
+
+    final manager = $$SalesOrdersTableTableManager($_db, $_db.salesOrders)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_salesOrderIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+
+  static $UsersTable _actorIdTable(_$AppDatabase db) => db.users.createAlias(
+      $_aliasNameGenerator(db.salesOrderPhysicalEvents.actorId, db.users.id));
+
+  $$UsersTableProcessedTableManager get actorId {
+    final $_column = $_itemColumn<String>('actor_id')!;
+
+    final manager = $$UsersTableTableManager($_db, $_db.users)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_actorIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
+
+class $$SalesOrderPhysicalEventsTableFilterComposer
+    extends Composer<_$AppDatabase, $SalesOrderPhysicalEventsTable> {
+  $$SalesOrderPhysicalEventsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get previousStatus => $composableBuilder(
+      column: $table.previousStatus,
+      builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get newStatus => $composableBuilder(
+      column: $table.newStatus, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<DateTime> get occurredAt => $composableBuilder(
+      column: $table.occurredAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get notes => $composableBuilder(
+      column: $table.notes, builder: (column) => ColumnFilters(column));
+
+  $$SalesOrdersTableFilterComposer get salesOrderId {
+    final $$SalesOrdersTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.salesOrderId,
+        referencedTable: $db.salesOrders,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SalesOrdersTableFilterComposer(
+              $db: $db,
+              $table: $db.salesOrders,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$UsersTableFilterComposer get actorId {
+    final $$UsersTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.actorId,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableFilterComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$SalesOrderPhysicalEventsTableOrderingComposer
+    extends Composer<_$AppDatabase, $SalesOrderPhysicalEventsTable> {
+  $$SalesOrderPhysicalEventsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get previousStatus => $composableBuilder(
+      column: $table.previousStatus,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get newStatus => $composableBuilder(
+      column: $table.newStatus, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<DateTime> get occurredAt => $composableBuilder(
+      column: $table.occurredAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get notes => $composableBuilder(
+      column: $table.notes, builder: (column) => ColumnOrderings(column));
+
+  $$SalesOrdersTableOrderingComposer get salesOrderId {
+    final $$SalesOrdersTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.salesOrderId,
+        referencedTable: $db.salesOrders,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SalesOrdersTableOrderingComposer(
+              $db: $db,
+              $table: $db.salesOrders,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$UsersTableOrderingComposer get actorId {
+    final $$UsersTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.actorId,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableOrderingComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$SalesOrderPhysicalEventsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SalesOrderPhysicalEventsTable> {
+  $$SalesOrderPhysicalEventsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get previousStatus => $composableBuilder(
+      column: $table.previousStatus, builder: (column) => column);
+
+  GeneratedColumn<String> get newStatus =>
+      $composableBuilder(column: $table.newStatus, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get occurredAt => $composableBuilder(
+      column: $table.occurredAt, builder: (column) => column);
+
+  GeneratedColumn<String> get notes =>
+      $composableBuilder(column: $table.notes, builder: (column) => column);
+
+  $$SalesOrdersTableAnnotationComposer get salesOrderId {
+    final $$SalesOrdersTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.salesOrderId,
+        referencedTable: $db.salesOrders,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$SalesOrdersTableAnnotationComposer(
+              $db: $db,
+              $table: $db.salesOrders,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  $$UsersTableAnnotationComposer get actorId {
+    final $$UsersTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.actorId,
+        referencedTable: $db.users,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$UsersTableAnnotationComposer(
+              $db: $db,
+              $table: $db.users,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$SalesOrderPhysicalEventsTableTableManager extends RootTableManager<
+    _$AppDatabase,
+    $SalesOrderPhysicalEventsTable,
+    SalesOrderPhysicalEvent,
+    $$SalesOrderPhysicalEventsTableFilterComposer,
+    $$SalesOrderPhysicalEventsTableOrderingComposer,
+    $$SalesOrderPhysicalEventsTableAnnotationComposer,
+    $$SalesOrderPhysicalEventsTableCreateCompanionBuilder,
+    $$SalesOrderPhysicalEventsTableUpdateCompanionBuilder,
+    (SalesOrderPhysicalEvent, $$SalesOrderPhysicalEventsTableReferences),
+    SalesOrderPhysicalEvent,
+    PrefetchHooks Function({bool salesOrderId, bool actorId})> {
+  $$SalesOrderPhysicalEventsTableTableManager(
+      _$AppDatabase db, $SalesOrderPhysicalEventsTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SalesOrderPhysicalEventsTableFilterComposer(
+                  $db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SalesOrderPhysicalEventsTableOrderingComposer(
+                  $db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SalesOrderPhysicalEventsTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> salesOrderId = const Value.absent(),
+            Value<String> previousStatus = const Value.absent(),
+            Value<String> newStatus = const Value.absent(),
+            Value<String> actorId = const Value.absent(),
+            Value<DateTime> occurredAt = const Value.absent(),
+            Value<String?> notes = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              SalesOrderPhysicalEventsCompanion(
+            id: id,
+            salesOrderId: salesOrderId,
+            previousStatus: previousStatus,
+            newStatus: newStatus,
+            actorId: actorId,
+            occurredAt: occurredAt,
+            notes: notes,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            required String salesOrderId,
+            required String previousStatus,
+            required String newStatus,
+            required String actorId,
+            Value<DateTime> occurredAt = const Value.absent(),
+            Value<String?> notes = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              SalesOrderPhysicalEventsCompanion.insert(
+            id: id,
+            salesOrderId: salesOrderId,
+            previousStatus: previousStatus,
+            newStatus: newStatus,
+            actorId: actorId,
+            occurredAt: occurredAt,
+            notes: notes,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$SalesOrderPhysicalEventsTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: ({salesOrderId = false, actorId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (salesOrderId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.salesOrderId,
+                    referencedTable: $$SalesOrderPhysicalEventsTableReferences
+                        ._salesOrderIdTable(db),
+                    referencedColumn: $$SalesOrderPhysicalEventsTableReferences
+                        ._salesOrderIdTable(db)
+                        .id,
+                  ) as T;
+                }
+                if (actorId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.actorId,
+                    referencedTable: $$SalesOrderPhysicalEventsTableReferences
+                        ._actorIdTable(db),
+                    referencedColumn: $$SalesOrderPhysicalEventsTableReferences
+                        ._actorIdTable(db)
+                        .id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$SalesOrderPhysicalEventsTableProcessedTableManager
+    = ProcessedTableManager<
+        _$AppDatabase,
+        $SalesOrderPhysicalEventsTable,
+        SalesOrderPhysicalEvent,
+        $$SalesOrderPhysicalEventsTableFilterComposer,
+        $$SalesOrderPhysicalEventsTableOrderingComposer,
+        $$SalesOrderPhysicalEventsTableAnnotationComposer,
+        $$SalesOrderPhysicalEventsTableCreateCompanionBuilder,
+        $$SalesOrderPhysicalEventsTableUpdateCompanionBuilder,
+        (SalesOrderPhysicalEvent, $$SalesOrderPhysicalEventsTableReferences),
+        SalesOrderPhysicalEvent,
+        PrefetchHooks Function({bool salesOrderId, bool actorId})>;
 typedef $$SalesOrderLinesTableCreateCompanionBuilder = SalesOrderLinesCompanion
     Function({
   Value<String> id,
@@ -78723,6 +80324,9 @@ class $AppDatabaseManager {
       $$QuotationItemsTableTableManager(_db, _db.quotationItems);
   $$SalesOrdersTableTableManager get salesOrders =>
       $$SalesOrdersTableTableManager(_db, _db.salesOrders);
+  $$SalesOrderPhysicalEventsTableTableManager get salesOrderPhysicalEvents =>
+      $$SalesOrderPhysicalEventsTableTableManager(
+          _db, _db.salesOrderPhysicalEvents);
   $$SalesOrderLinesTableTableManager get salesOrderLines =>
       $$SalesOrderLinesTableTableManager(_db, _db.salesOrderLines);
   $$StockReservationsTableTableManager get stockReservations =>

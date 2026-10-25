@@ -26,7 +26,7 @@ void main() {
     raw.execute('PRAGMA user_version = 46');
     raw.dispose();
     final db = AppDatabase.forTesting(NativeDatabase(file));
-    expect(db.schemaVersion, 49);
+    expect(db.schemaVersion, 50);
     expect((await db.select(db.categories).get()).single.name, 'Food');
     expect(await db.select(db.salesOrders).get(), isEmpty);
     expect(await db.select(db.salesOrderLines).get(), isEmpty);

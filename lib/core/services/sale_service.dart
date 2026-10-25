@@ -32,7 +32,7 @@ class SaleService {
   Future<SaleResult> checkoutCredit(
       Cart cart, String customerId, int cashPaidCents,
       {ManualDiscount? manualDiscount, String? heldReference,
-      String? salesOrderId}) async {
+      String? salesOrderId, int deliveryFeeCents = 0}) async {
     final user = auth.requireSession(PosPermission.sell);
     if (_inFlight) throw StateError('Checkout is already in progress');
     _inFlight = true;
@@ -51,7 +51,7 @@ class SaleService {
           ? await _promotionDiscount(user, cart, manualDiscount) : 0;
       if (cashPaidCents < 0 ||
           cashPaidCents >=
-              cart.totalCents - discountEffect - promotionDiscount) {
+              cart.totalCents + deliveryFeeCents - discountEffect - promotionDiscount) {
         throw StateError('Cash portion must be below the sale total');
       }
       final items = cart.lines
@@ -83,7 +83,7 @@ class SaleService {
       String? walkInName,
       String? walkInContact,
       String? heldReference,
-      String? salesOrderId}) async {
+      String? salesOrderId, int deliveryFeeCents = 0}) async {
     final user = auth.requireSession(PosPermission.sell);
     if (_inFlight) throw StateError('Checkout is already in progress');
     _inFlight = true;
@@ -103,7 +103,7 @@ class SaleService {
       final promotionDiscount = salesOrderId == null
           ? await _promotionDiscount(user, cart, manualDiscount) : 0;
       if (cashReceivedCents <
-          cart.totalCents -
+          cart.totalCents + deliveryFeeCents -
               rewardDiscountCents -
               discountEffect -
               promotionDiscount) {

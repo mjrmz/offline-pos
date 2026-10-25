@@ -156,7 +156,15 @@ class GlobalSearchRepository {
         GlobalSearchKind.quotation),
       group(user.can(PosPermission.viewSalesOrders), '''
         SELECT o.id, o.reference AS title,
-          o.customer_name_snapshot AS subtitle,
+          o.customer_name_snapshot || ' • ' ||
+            CASE o.fulfillment_method WHEN 'pickup' THEN 'Pickup'
+              WHEN 'delivery' THEN 'Delivery' ELSE 'No method' END ||
+            ' • ' || CASE o.physical_status
+              WHEN 'out_for_delivery' THEN 'Out for delivery'
+              WHEN 'failed_delivery' THEN 'Failed delivery'
+              WHEN 'picked_up' THEN 'Picked up'
+              ELSE upper(substr(o.physical_status,1,1)) || substr(o.physical_status,2)
+            END AS subtitle,
           o.reference, o.status,
           CASE WHEN lower(o.reference) = ? THEN 0
             WHEN lower(o.reference) LIKE ? THEN 1 ELSE 2 END AS score

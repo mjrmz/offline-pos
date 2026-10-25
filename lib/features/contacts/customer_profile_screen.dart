@@ -19,6 +19,7 @@ import '../../shared/widgets/app_workspace.dart';
 import 'customer_credit_panel.dart';
 import 'customer_purchases_panel.dart';
 import 'customer_profile_ui.dart';
+import 'sales_order_presentation.dart';
 import 'rma_screen.dart';
 import 'quotation_screen.dart';
 import '../sales_history/sales_history_screen.dart';
@@ -739,8 +740,8 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
                             itemBuilder: (context, index) {
                               final order = result.items[index];
                               return ListTile(title: Text(order.reference),
-                                subtitle: Text('${order.createdAt.toLocal().toString().split(' ').first}  •  ${order.status}  •  ${states[order.id] ?? 'Unfulfilled'}  •  ${order.fulfillmentMethod ?? 'No intent'}'),
-                                trailing: Text(formatPeso(order.totalCents)));
+                                subtitle: Text('${orderDate(order.createdAt)} • ${order.status} • Inventory: ${states[order.id] ?? 'Unfulfilled'} • ${methodLabel(order.fulfillmentMethod)}: ${physicalLabel(order.physicalStatus)}${order.scheduledAt == null ? '' : ' • ${orderSchedule(context, order.scheduledAt)}'}'),
+                                trailing: Text(formatPeso(order.totalCents + order.deliveryFeeCents)));
                             }));
                       }),
                   ListView(padding: const EdgeInsets.all(24), children: [

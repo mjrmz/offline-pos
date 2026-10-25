@@ -68,7 +68,7 @@ class BackupService {
         'ok');
   }
 
-  static int verify(File file, {int maxSchemaVersion = 49}) {
+  static int verify(File file, {int maxSchemaVersion = 50}) {
     if (!file.existsSync() || file.lengthSync() == 0) {
       throw StateError('Backup is missing or empty');
     }
@@ -156,6 +156,7 @@ class BackupService {
           'cash_expense_categories',
           'business_cash_movements'
         ],
+        if (version >= 50) 'sales_order_physical_events',
       };
       for (final name in requiredTables) {
         final rows = connection.select(

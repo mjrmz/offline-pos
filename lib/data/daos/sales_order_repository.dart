@@ -20,6 +20,179 @@ class SalesOrderRepository {
   final AppDatabase db;
   const SalesOrderRepository(this.db);
 
+  Future<List<SalesOrderPhysicalEvent>> physicalEvents(String orderId) =>
+      (db.select(db.salesOrderPhysicalEvents)
+        ..where((e) => e.salesOrderId.equals(orderId))
+        ..orderBy([(e) => OrderingTerm(expression: e.occurredAt)]))
+          .get();
+
+  Future<Map<String, int>> workspaceMetrics() async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final row = await db.customSelect('''
+      WITH fulfilled AS (
+        SELECT fl.sales_order_line_id, SUM(fl.quantity_milli) AS quantity
+        FROM sales_order_fulfillment_lines fl
+        JOIN sales_order_fulfillments f ON f.id = fl.fulfillment_id
+        JOIN sales s ON s.id = f.sale_id AND s.status != 'voided'
+        GROUP BY fl.sales_order_line_id
+      )
+      SELECT
+        SUM(CASE WHEN o.status = 'confirmed' THEN 1 ELSE 0 END) AS open_orders,
+        SUM(CASE WHEN o.status = 'confirmed' AND EXISTS (
+          SELECT 1 FROM sales_order_lines l LEFT JOIN fulfilled f ON f.sales_order_line_id = l.id
+          WHERE l.sales_order_id = o.id AND COALESCE(f.quantity,0) > 0)
+          AND EXISTS (SELECT 1 FROM sales_order_lines l LEFT JOIN fulfilled f ON f.sales_order_line_id = l.id
+          WHERE l.sales_order_id = o.id AND COALESCE(f.quantity,0) < l.quantity_milli)
+          THEN 1 ELSE 0 END) AS partial_orders,
+        SUM(CASE WHEN o.status = 'confirmed' AND o.physical_status = 'ready' THEN 1 ELSE 0 END) AS ready,
+        SUM(CASE WHEN o.status = 'confirmed' AND o.physical_status = 'out_for_delivery' THEN 1 ELSE 0 END) AS out_for_delivery,
+        SUM(CASE WHEN o.status = 'confirmed' AND o.scheduled_at >= ? AND o.scheduled_at < ?
+          AND o.physical_status NOT IN ('delivered','picked_up','cancelled') THEN 1 ELSE 0 END) AS today,
+        SUM(CASE WHEN o.status = 'confirmed' AND
+          (o.physical_status = 'failed_delivery' OR
+          (o.scheduled_at < ? AND o.physical_status NOT IN ('delivered','picked_up','cancelled')))
+          THEN 1 ELSE 0 END) AS attention
+      FROM sales_orders o
+    ''', variables: [Variable.withDateTime(today),
+      Variable.withDateTime(today.add(const Duration(days: 1))),
+      Variable.withDateTime(now)]).getSingle();
+    return {for (final name in ['open_orders','partial_orders','ready',
+      'out_for_delivery','today','attention'])
+        name: row.readNullable<int>(name) ?? 0};
+  }
+
+  Future<PagedResult<SalesOrder>> physicalQueue({int page = 0,
+      String method = 'all', String status = 'active'}) async {
+    if (page < 0) throw ArgumentError.value(page, 'page');
+    final clauses = <String>["status = 'confirmed'", 'fulfillment_method IS NOT NULL'];
+    final args = <Variable>[];
+    if (method != 'all') {
+      if (!{'pickup', 'delivery'}.contains(method)) throw ArgumentError.value(method);
+      clauses.add('fulfillment_method = ?'); args.add(Variable.withString(method));
+    }
+    if (status == 'active') {
+      clauses.add("physical_status NOT IN ('delivered','picked_up','cancelled')");
+    } else if (status == 'today') {
+      clauses.add("physical_status NOT IN ('delivered','picked_up','cancelled')");
+      final now = DateTime.now();
+      final start = DateTime(now.year, now.month, now.day);
+      clauses.add('scheduled_at >= ? AND scheduled_at < ?');
+      args.addAll([Variable.withDateTime(start),
+        Variable.withDateTime(start.add(const Duration(days: 1)))]);
+    } else if (status == 'attention') {
+      clauses.add("(physical_status = 'failed_delivery' OR (scheduled_at < ? AND physical_status NOT IN ('delivered','picked_up','cancelled')))");
+      args.add(Variable.withDateTime(DateTime.now()));
+    } else if (status != 'all') {
+      if (!{'pending','scheduled','ready','out_for_delivery','failed_delivery','delivered','picked_up'}.contains(status)) throw ArgumentError.value(status);
+      clauses.add('physical_status = ?'); args.add(Variable.withString(status));
+    }
+    final where = clauses.join(' AND ');
+    final count = (await db.customSelect('SELECT COUNT(*) AS n FROM sales_orders WHERE $where', variables: args).getSingle()).read<int>('n');
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final ids = (await db.customSelect('''SELECT id FROM sales_orders WHERE $where
+      ORDER BY CASE WHEN physical_status = 'failed_delivery' THEN 0
+        WHEN scheduled_at < ? THEN 1
+        WHEN scheduled_at >= ? AND scheduled_at < ? THEN 2
+        WHEN physical_status = 'ready' THEN 3
+        WHEN physical_status = 'out_for_delivery' THEN 4
+        WHEN scheduled_at IS NULL THEN 6 ELSE 5 END,
+        scheduled_at ASC, created_at ASC LIMIT 50 OFFSET ?''',
+      variables: [...args, Variable.withDateTime(today),
+        Variable.withDateTime(today),
+        Variable.withDateTime(today.add(const Duration(days: 1))),
+        Variable.withInt(page * 50)]).get())
+      .map((r) => r.read<String>('id')).toList();
+    if (ids.isEmpty) return PagedResult(items: <SalesOrder>[], totalCount: count, page: page);
+    final rows = await (db.select(db.salesOrders)..where((o) => o.id.isIn(ids))).get();
+    final byId = {for (final row in rows) row.id: row};
+    return PagedResult(items: [for (final id in ids) byId[id]!], totalCount: count, page: page);
+  }
+
+  Future<SalesOrder> configurePhysical(ActiveUser actor, String id,
+      {required String method, required String contactName,
+      String? contactPhone, String? address, String? instructions,
+      int deliveryFeeCents = 0}) => db.transaction(() async {
+    final live = await AuthRepository(db).requireActive(actor.id);
+    live.require(PosPermission.manageSalesOrders);
+    final order = await (db.select(db.salesOrders)..where((o) => o.id.equals(id))).getSingleOrNull();
+    if (order == null || order.status == 'cancelled' ||
+        !{'pending','scheduled','failed_delivery'}.contains(order.physicalStatus)) {
+      throw StateError('Physical fulfillment cannot be configured now');
+    }
+    if (!{'pickup','delivery'}.contains(method)) throw StateError('Choose pickup or delivery');
+    if (contactName.trim().isEmpty) throw StateError('Enter a contact name');
+    if (method == 'delivery' && (address?.trim().isEmpty ?? true)) throw StateError('Enter a delivery address');
+    if (deliveryFeeCents < 0 || (method == 'pickup' && deliveryFeeCents != 0)) throw StateError('Delivery fee requires Delivery');
+    final charged = (await db.customSelect('''SELECT COUNT(*) AS n FROM sales_order_fulfillments f
+      JOIN sales s ON s.id = f.sale_id WHERE f.sales_order_id = ?
+      AND s.status != 'voided' AND s.delivery_fee_cents > 0''',
+      variables: [Variable.withString(id)]).getSingle()).read<int>('n');
+    if (charged > 0 && (deliveryFeeCents != order.deliveryFeeCents ||
+        method != order.fulfillmentMethod)) {
+      throw StateError('Delivery fee and method cannot change after collection');
+    }
+    if (order.status == 'confirmed' &&
+        (await fulfillmentStates([id]))[id] == 'Fulfilled' &&
+        deliveryFeeCents > 0 && charged == 0) {
+      throw StateError('Delivery fee cannot be added after the final Sale');
+    }
+    await (db.update(db.salesOrders)..where((o) => o.id.equals(id))).write(
+      SalesOrdersCompanion(fulfillmentMethod: Value(method),
+        contactNameSnapshot: Value(contactName.trim()),
+        contactPhoneSnapshot: Value(contactPhone?.trim()),
+        deliveryAddressSnapshot: Value(method == 'delivery' ? address?.trim() : null),
+        fulfillmentInstructions: Value(instructions?.trim()),
+        deliveryFeeCents: Value(deliveryFeeCents), updatedAt: Value(DateTime.now())));
+    await AuthRepository(db).audit(live.id, 'sales_order.physical_configured', id);
+    return (db.select(db.salesOrders)..where((o) => o.id.equals(id))).getSingle();
+  });
+
+  Future<SalesOrder> transitionPhysical(ActiveUser actor, String id,
+      String next, {DateTime? scheduledAt, String? recipientName,
+      String? notes}) => db.transaction(() async {
+    final live = await AuthRepository(db).requireActive(actor.id);
+    live.require(PosPermission.manageSalesOrders);
+    final order = await (db.select(db.salesOrders)..where((o) => o.id.equals(id))).getSingleOrNull();
+    if (order == null || order.status != 'confirmed' || order.fulfillmentMethod == null) {
+      throw StateError('Confirm an order and configure Pickup or Delivery first');
+    }
+    final allowed = <String, Set<String>>{
+      'pending': {'scheduled','cancelled'},
+      'scheduled': {'ready','scheduled','cancelled'},
+      'ready': order.fulfillmentMethod == 'delivery'
+          ? {'out_for_delivery','cancelled'} : {'picked_up','cancelled'},
+      'out_for_delivery': {'delivered','failed_delivery','cancelled'},
+      'failed_delivery': {'scheduled','cancelled'},
+    };
+    if (!(allowed[order.physicalStatus]?.contains(next) ?? false) ||
+        (order.fulfillmentMethod == 'pickup' && {'out_for_delivery','delivered','failed_delivery'}.contains(next)) ||
+        (order.fulfillmentMethod == 'delivery' && next == 'picked_up')) {
+      throw StateError('Invalid physical fulfillment status change');
+    }
+    if (next == 'scheduled' && scheduledAt == null) throw StateError('Choose a schedule');
+    if (next == 'failed_delivery' && (notes?.trim().isEmpty ?? true)) throw StateError('Enter a failure reason');
+    if ({'delivered','picked_up'}.contains(next) && (recipientName?.trim().isEmpty ?? true)) throw StateError('Enter the recipient or released-to name');
+    if ({'ready','delivered','picked_up'}.contains(next)) {
+      final states = await fulfillmentStates([id]);
+      if (states[id] != 'Fulfilled') throw StateError('Complete inventory and Sale fulfillment before $next');
+    }
+    final now = DateTime.now();
+    await (db.update(db.salesOrders)..where((o) => o.id.equals(id))).write(
+      SalesOrdersCompanion(physicalStatus: Value(next),
+        scheduledAt: next == 'scheduled' ? Value(scheduledAt) : const Value.absent(),
+        recipientName: {'delivered','picked_up'}.contains(next) ? Value(recipientName!.trim()) : const Value.absent(),
+        physicalCompletedAt: {'delivered','picked_up'}.contains(next) ? Value(now) : const Value.absent(),
+        updatedAt: Value(now)));
+    await db.into(db.salesOrderPhysicalEvents).insert(
+      SalesOrderPhysicalEventsCompanion.insert(salesOrderId: id,
+        previousStatus: order.physicalStatus, newStatus: next, actorId: live.id,
+        occurredAt: Value(now), notes: Value(notes?.trim())));
+    await AuthRepository(db).audit(live.id, 'sales_order.physical_$next', id);
+    return (db.select(db.salesOrders)..where((o) => o.id.equals(id))).getSingle();
+  });
+
   Future<SalesOrder?> byReference(String reference) =>
       (db.select(db.salesOrders)..where((o) => o.reference.equals(reference)))
           .getSingleOrNull();
@@ -100,7 +273,9 @@ class SalesOrderRepository {
           .getSingleOrNull();
 
   Future<PagedResult<SalesOrder>> page({int page = 0, String search = '',
-      String status = 'all', String? customerId}) async {
+      String status = 'all', String? customerId,
+      String method = 'all', String physicalStatus = 'all',
+      DateTime? createdOn}) async {
     if (page < 0) throw ArgumentError.value(page, 'page');
     if (!{'all', 'draft', 'confirmed', 'cancelled'}.contains(status)) {
       throw ArgumentError.value(status, 'status');
@@ -114,6 +289,20 @@ class SalesOrderRepository {
     if (customerId != null) {
       clauses.add('customer_id = ?');
       args.add(Variable.withString(customerId));
+    }
+    if (method != 'all') {
+      if (!{'pickup','delivery'}.contains(method)) throw ArgumentError.value(method);
+      clauses.add('fulfillment_method = ?'); args.add(Variable.withString(method));
+    }
+    if (physicalStatus != 'all') {
+      if (!{'pending','scheduled','ready','out_for_delivery','delivered','picked_up','failed_delivery','cancelled'}.contains(physicalStatus)) throw ArgumentError.value(physicalStatus);
+      clauses.add('physical_status = ?'); args.add(Variable.withString(physicalStatus));
+    }
+    if (createdOn != null) {
+      final start = DateTime(createdOn.year, createdOn.month, createdOn.day);
+      clauses.add('created_at >= ? AND created_at < ?');
+      args.addAll([Variable.withDateTime(start),
+        Variable.withDateTime(start.add(const Duration(days: 1)))]);
     }
     final term = search.trim().toLowerCase();
     if (term.isNotEmpty) {
@@ -211,6 +400,9 @@ class SalesOrderRepository {
             totalCents: subtotal - discounts,
             notes: Value(notes?.trim()),
             fulfillmentMethod: Value(fulfillmentMethod),
+            contactNameSnapshot: Value(fulfillmentMethod == null ? null : customer.name),
+            contactPhoneSnapshot: Value(fulfillmentMethod == null ? null : customer.phone),
+            deliveryAddressSnapshot: Value(fulfillmentMethod == 'delivery' ? customer.address : null),
             requestedDate: Value(requestedDate == null ? null :
                 DateTime(requestedDate.year, requestedDate.month,
                     requestedDate.day))));
@@ -265,6 +457,9 @@ class SalesOrderRepository {
             createdBy: live.id, subtotalCents: total, totalCents: total,
             notes: Value(quote.notes),
             fulfillmentMethod: Value(fulfillmentMethod),
+            contactNameSnapshot: Value(fulfillmentMethod == null ? null : customer.name),
+            contactPhoneSnapshot: Value(fulfillmentMethod == null ? null : customer.phone),
+            deliveryAddressSnapshot: Value(fulfillmentMethod == 'delivery' ? customer.address : null),
             requestedDate: Value(requestedDate)));
         for (var i = 0; i < items.length; i++) {
           final item = items[i];
@@ -359,6 +554,9 @@ class SalesOrderRepository {
               totalCents: Value(subtotal - discount),
               notes: Value(notes?.trim()),
               fulfillmentMethod: Value(fulfillmentMethod),
+              contactNameSnapshot: Value(fulfillmentMethod == null ? null : customer.name),
+              contactPhoneSnapshot: Value(fulfillmentMethod == null ? null : customer.phone),
+              deliveryAddressSnapshot: Value(fulfillmentMethod == 'delivery' ? customer.address : null),
               requestedDate: Value(requestedDate),
               updatedAt: Value(DateTime.now())));
         await AuthRepository(db).audit(live.id,
@@ -378,6 +576,10 @@ class SalesOrderRepository {
             (order.status == 'confirmed' && status == 'cancelled'))) {
           throw StateError('Invalid Sales Order status change');
         }
+        if (status == 'cancelled' &&
+            {'delivered','picked_up'}.contains(order.physicalStatus)) {
+          throw StateError('Completed physical fulfillment cannot be cancelled');
+        }
         if (status == 'confirmed') {
           final orderLines = await lines(id);
           if (order.customerId.isEmpty || orderLines.isEmpty ||
@@ -394,6 +596,17 @@ class SalesOrderRepository {
             .write(SalesOrdersCompanion(
                 status: Value(status), updatedAt: Value(DateTime.now())));
         if (status == 'cancelled') {
+          if (order.physicalStatus != 'cancelled' &&
+              order.physicalStatus != 'delivered' &&
+              order.physicalStatus != 'picked_up') {
+            await (db.update(db.salesOrders)..where((o) => o.id.equals(id)))
+                .write(const SalesOrdersCompanion(
+                    physicalStatus: Value('cancelled')));
+            await db.into(db.salesOrderPhysicalEvents).insert(
+                SalesOrderPhysicalEventsCompanion.insert(
+                    salesOrderId: id, previousStatus: order.physicalStatus,
+                    newStatus: 'cancelled', actorId: live.id));
+          }
           await (db.update(db.stockReservations)
             ..where((r) => r.salesOrderId.equals(id) &
                 r.status.equals('active'))).write(StockReservationsCompanion(

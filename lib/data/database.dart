@@ -89,6 +89,7 @@ class Sales extends Table {
   TextColumn get walkInContact => text().nullable()();
   TextColumn get heldReference => text().nullable()();
   IntColumn get totalCents => integer()();
+  IntColumn get deliveryFeeCents => integer().withDefault(const Constant(0))();
   TextColumn get discountSource => text().withDefault(const Constant('none'))();
   IntColumn get birInvoiceNumber => integer().nullable().unique()();
   TextColumn get status => text().withDefault(
@@ -898,6 +899,15 @@ class SalesOrders extends Table {
   TextColumn get status => text().withDefault(const Constant('draft'))();
   TextColumn get sourceQuotationId => text().nullable().references(Quotations, #id)();
   TextColumn get fulfillmentMethod => text().nullable()();
+  TextColumn get physicalStatus => text().withDefault(const Constant('pending'))();
+  DateTimeColumn get scheduledAt => dateTime().nullable()();
+  TextColumn get contactNameSnapshot => text().nullable()();
+  TextColumn get contactPhoneSnapshot => text().nullable()();
+  TextColumn get deliveryAddressSnapshot => text().nullable()();
+  TextColumn get fulfillmentInstructions => text().nullable()();
+  IntColumn get deliveryFeeCents => integer().withDefault(const Constant(0))();
+  TextColumn get recipientName => text().nullable()();
+  DateTimeColumn get physicalCompletedAt => dateTime().nullable()();
   DateTimeColumn get requestedDate => dateTime().nullable()();
   TextColumn get notes => text().nullable()();
   IntColumn get subtotalCents => integer()();
@@ -906,6 +916,18 @@ class SalesOrders extends Table {
   TextColumn get createdBy => text().references(Users, #id)();
   DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
   DateTimeColumn get updatedAt => dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class SalesOrderPhysicalEvents extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get salesOrderId => text().references(SalesOrders, #id)();
+  TextColumn get previousStatus => text()();
+  TextColumn get newStatus => text()();
+  TextColumn get actorId => text().references(Users, #id)();
+  DateTimeColumn get occurredAt => dateTime().clientDefault(() => DateTime.now())();
+  TextColumn get notes => text().nullable()();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -1200,6 +1222,7 @@ class ZReadings extends Table {
   Quotations,
   QuotationItems,
   SalesOrders,
+  SalesOrderPhysicalEvents,
   SalesOrderLines,
   StockReservations,
   SalesOrderFulfillments,
@@ -1231,7 +1254,7 @@ class AppDatabase extends _$AppDatabase {
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 49;
+  int get schemaVersion => 50;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -1253,6 +1276,8 @@ class AppDatabase extends _$AppDatabase {
               'CREATE INDEX IF NOT EXISTS promotions_updated ON promotions (updated_at DESC, id DESC)');
           await customStatement(
               'CREATE INDEX IF NOT EXISTS sales_orders_customer_date ON sales_orders (customer_id, created_at DESC)');
+          await customStatement('CREATE INDEX IF NOT EXISTS sales_orders_physical_queue ON sales_orders (physical_status, scheduled_at)');
+          await customStatement('CREATE INDEX IF NOT EXISTS sales_order_physical_events_order ON sales_order_physical_events (sales_order_id, occurred_at)');
           await customStatement(
               'CREATE INDEX IF NOT EXISTS sales_order_lines_order ON sales_order_lines (sales_order_id, sort_order)');
           await customStatement(
@@ -2114,6 +2139,28 @@ class AppDatabase extends _$AppDatabase {
                 'CREATE INDEX IF NOT EXISTS sales_order_fulfillments_order ON sales_order_fulfillments (sales_order_id, created_at DESC)');
             await customStatement(
                 'CREATE INDEX IF NOT EXISTS sales_order_fulfillment_lines_order_line ON sales_order_fulfillment_lines (sales_order_line_id)');
+          }
+          if (from < 50) {
+            final saleColumns = (await customSelect('PRAGMA table_info(sales)').get())
+                .map((row) => row.read<String>('name')).toSet();
+            if (!saleColumns.contains('delivery_fee_cents')) {
+              await m.addColumn(sales, sales.deliveryFeeCents);
+            }
+            final orderColumns = (await customSelect('PRAGMA table_info(sales_orders)').get())
+                .map((row) => row.read<String>('name')).toSet();
+            if (!orderColumns.contains('physical_status')) await m.addColumn(salesOrders, salesOrders.physicalStatus);
+            if (!orderColumns.contains('scheduled_at')) await m.addColumn(salesOrders, salesOrders.scheduledAt);
+            if (!orderColumns.contains('contact_name_snapshot')) await m.addColumn(salesOrders, salesOrders.contactNameSnapshot);
+            if (!orderColumns.contains('contact_phone_snapshot')) await m.addColumn(salesOrders, salesOrders.contactPhoneSnapshot);
+            if (!orderColumns.contains('delivery_address_snapshot')) await m.addColumn(salesOrders, salesOrders.deliveryAddressSnapshot);
+            if (!orderColumns.contains('fulfillment_instructions')) await m.addColumn(salesOrders, salesOrders.fulfillmentInstructions);
+            if (!orderColumns.contains('delivery_fee_cents')) await m.addColumn(salesOrders, salesOrders.deliveryFeeCents);
+            if (!orderColumns.contains('recipient_name')) await m.addColumn(salesOrders, salesOrders.recipientName);
+            if (!orderColumns.contains('physical_completed_at')) await m.addColumn(salesOrders, salesOrders.physicalCompletedAt);
+            final physicalTables = await customSelect("SELECT name FROM sqlite_master WHERE type='table' AND name='sales_order_physical_events'").get();
+            if (physicalTables.isEmpty) await m.createTable(salesOrderPhysicalEvents);
+            await customStatement('CREATE INDEX IF NOT EXISTS sales_orders_physical_queue ON sales_orders (physical_status, scheduled_at)');
+            await customStatement('CREATE INDEX IF NOT EXISTS sales_order_physical_events_order ON sales_order_physical_events (sales_order_id, occurred_at)');
           }
         },
         beforeOpen: (details) async {

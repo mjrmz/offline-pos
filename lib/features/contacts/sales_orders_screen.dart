@@ -10,9 +10,13 @@ import '../../data/daos/pos_repository.dart';
 import '../../data/daos/sales_order_repository.dart';
 import '../../data/daos/stock_reservation_repository.dart';
 import '../../shared/utils/money.dart';
+import '../../shared/utils/safe_message.dart';
+import '../../shared/widgets/app_feedback.dart';
 import '../../shared/widgets/app_workspace.dart';
+import '../../shared/widgets/record_details_drawer.dart';
 import '../../hardware/printer/receipt_service.dart';
 import '../pos_checkout/checkout_screen.dart';
+import 'sales_order_presentation.dart';
 
 class SalesOrdersScreen extends StatefulWidget {
   final SalesOrderRepository repository;
@@ -34,8 +38,13 @@ class SalesOrdersScreen extends StatefulWidget {
 class _SalesOrdersScreenState extends State<SalesOrdersScreen> {
   List<SalesOrder> orders = [];
   Map<String, String> fulfillmentStates = {};
+  Map<String, int> metrics = {};
+  bool queue = false;
+  String physicalFilter = 'active', methodFilter = 'all',
+      queueMethodFilter = 'all', orderPhysicalFilter = 'all';
   int total = 0, page = 0;
   String search = '', status = 'all';
+  DateTime? createdOn;
   bool loading = false;
   String? error;
   Timer? debounce;
@@ -65,127 +74,106 @@ class _SalesOrdersScreenState extends State<SalesOrdersScreen> {
   Future<void> refresh() async {
     setState(() { loading = true; error = null; });
     try {
-      final result = await widget.repository.page(
-          page: page, search: search, status: status);
+      final result = queue
+          ? await widget.repository.physicalQueue(page: page,
+              method: queueMethodFilter, status: physicalFilter)
+          : await widget.repository.page(page: page, search: search,
+              status: status, method: methodFilter,
+              physicalStatus: orderPhysicalFilter, createdOn: createdOn);
       final states = await widget.repository.fulfillmentStates(
           result.items.map((order) => order.id));
+      final counts = await widget.repository.workspaceMetrics();
       if (mounted) {
         setState(() {
           orders = result.items; total = result.totalCount; loading = false;
           fulfillmentStates = states;
+          metrics = counts;
         });
       }
     } catch (e) {
-      if (mounted) setState(() { error = e.toString(); loading = false; });
+      if (mounted) setState(() { error = safeMessage(e); loading = false; });
     }
   }
   Future<void> detail(SalesOrder order) async {
+    order = await widget.repository.byReference(order.reference) ?? order;
     final lines = await widget.repository.lines(order.id);
-    final fulfilledByLine = await widget.repository.fulfilledByLine(order.id);
-    final fulfillmentSales = await widget.repository.fulfillmentSales(order.id);
+    final fulfilled = await widget.repository.fulfilledByLine(order.id);
+    final sales = await widget.repository.fulfillmentSales(order.id);
     final reservations = await StockReservationRepository(widget.repository.db)
         .forOrder(order.id);
-    final reservedByLine = await StockReservationRepository(widget.repository.db)
+    final reserved = await StockReservationRepository(widget.repository.db)
         .activeByLine(order.id);
+    final events = await widget.repository.physicalEvents(order.id);
+    final actorIds = events.map((event) => event.actorId).toSet();
+    final users = actorIds.isEmpty ? <User>[] : await (
+      widget.repository.db.select(widget.repository.db.users)
+        ..where((user) => user.id.isIn(actorIds))).get();
     if (!mounted) return;
-    showDialog<void>(context: context, builder: (context) => Dialog(
-      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 780,
-          maxHeight: 700), child: Padding(padding: const EdgeInsets.all(24),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [Expanded(child: Text(order.reference,
-            style: Theme.of(context).textTheme.headlineSmall)),
-            IconButton(onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close))]),
-          Text('${order.customerNameSnapshot}  •  ${order.status}'),
-          Text('Fulfillment: ${fulfilledByLine.values.fold<int>(0, (sum, quantity) => sum + quantity) == 0 ? 'Unfulfilled' : lines.every((line) => (fulfilledByLine[line.id] ?? 0) >= line.quantityMilli) ? 'Fulfilled' : 'Partially fulfilled'}'),
-          Text('Created ${order.createdAt.toLocal().toString().split(' ').first}'),
-          if (order.requestedDate != null)
-            Text('Requested ${order.requestedDate!.toLocal().toString().split(' ').first}'),
-          Text('Intent: ${order.fulfillmentMethod ?? 'Not set'}'),
-          if (order.sourceQuotationId != null)
-            FutureBuilder<Quotation?>(future: (widget.repository.db
-                .select(widget.repository.db.quotations)
-                  ..where((q) => q.id.equals(order.sourceQuotationId!)))
-                .getSingleOrNull(), builder: (context, snapshot) =>
-                  Text('Source quotation: ${snapshot.data?.reference ?? '…'}')),
-          const Divider(),
-          Expanded(child: ListView(children: [for (final line in lines) ...[
-            ListTile(title: Text(line.descriptionSnapshot),
-              subtitle: Text('${line.skuSnapshot ?? ''}  •  ${Quantity.format(line.quantityMilli)} ${line.unitSnapshot} × ${formatPeso(line.unitPriceCents)}'),
-              trailing: Text(formatPeso(line.lineTotalCents))),
-            Padding(padding: const EdgeInsets.only(left: 16, bottom: 8),
-              child: Row(children: [
-                Expanded(child: Text('Ordered ${Quantity.format(line.quantityMilli)}  •  Fulfilled ${Quantity.format(fulfilledByLine[line.id] ?? 0)}  •  Remaining ${Quantity.format(line.quantityMilli - (fulfilledByLine[line.id] ?? 0))}  •  Reserved ${Quantity.format(reservedByLine[line.id] ?? 0)}')),
-                if (order.status == 'confirmed' && line.productId != null &&
-                    line.quantityMilli > (reservedByLine[line.id] ?? 0) +
-                        (fulfilledByLine[line.id] ?? 0) &&
-                    widget.user.can(PosPermission.manageStockReservations))
-                  TextButton(onPressed: () async {
-                    Navigator.pop(context);
-                    await _reserveLine(order, line);
-                  }, child: const Text('Reserve stock')),
-              ])),
-            for (final reservation in reservations.where((r) =>
-                r.salesOrderLineId == line.id && r.status == 'active'))
-              Padding(padding: const EdgeInsets.only(left: 32),
-                child: Row(children: [
-                  Expanded(child: Text('${reservation.reference}  •  ${Quantity.format(reservation.quantityMilli)} reserved')),
-                  if (widget.user.can(PosPermission.manageStockReservations))
-                    TextButton(onPressed: () async {
-                      Navigator.pop(context);
-                      await StockReservationRepository(widget.repository.db)
-                          .release(widget.user, reservation.id,
-                              reason: 'Manual release');
-                      await refresh();
-                      if (mounted) detail(order);
-                    }, child: const Text('Release reservation')),
-                ])),
-          ]])),
-          if (fulfillmentSales.isNotEmpty) ...[
-            const Divider(),
-            Text('Fulfillment history',
-                style: Theme.of(context).textTheme.titleMedium),
-            SizedBox(height: 90, child: ListView(children: [
-              for (final sale in fulfillmentSales)
-                ListTile(dense: true,
-                  title: Text(sale.receiptNumber ?? 'Sale'),
-                  subtitle: Text(sale.createdAt.toLocal().toString().split(' ').first),
-                  trailing: Text(formatPeso(sale.totalCents)))
-            ])),
-          ],
-          const Divider(),
-          Text('Subtotal ${formatPeso(order.subtotalCents)}'),
-          if (order.discountCents > 0)
-            Text('Discount ${formatPeso(order.discountCents)}'),
-          Text('Total ${formatPeso(order.totalCents)}',
-              style: Theme.of(context).textTheme.titleLarge),
-          if (order.notes?.isNotEmpty == true) Text('Notes: ${order.notes}'),
-          if (widget.user.can(PosPermission.manageSalesOrders))
-            Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-              if (order.status == 'confirmed' &&
-                  lines.any((line) => line.quantityMilli >
-                      (fulfilledByLine[line.id] ?? 0)) &&
-                  widget.user.can(PosPermission.sell) && widget.auth != null)
-                FilledButton(onPressed: () async {
-                  Navigator.pop(context);
-                  await _startFulfillment(order, lines, fulfilledByLine);
-                }, child: const Text('Fulfill Order')),
-              if (order.status == 'draft' &&
-                  lines.every((line) => line.productId != null)) TextButton(
-                onPressed: () { Navigator.pop(context); create(existing: order); },
-                child: const Text('Edit draft')),
-              if (order.status == 'draft') FilledButton(
-                onPressed: () async { Navigator.pop(context);
-                  await widget.repository.transition(widget.user, order.id,
-                      'confirmed'); await refresh(); },
-                child: const Text('Confirm')),
-              if (order.status == 'confirmed') TextButton(
-                onPressed: () async { Navigator.pop(context);
-                  await widget.repository.transition(widget.user, order.id,
-                      'cancelled'); await refresh(); },
-                child: const Text('Cancel order')),
-            ])
-        ])))));
+    void openAction(String next) {
+      Navigator.pop(context);
+      _physicalAction(order, next);
+    }
+    await showRecordDetailsDrawer<void>(context: context,
+      builder: (context) => SalesOrderDetailView(
+        order: order, lines: lines, fulfilledByLine: fulfilled,
+        reservedByLine: reserved, reservations: reservations,
+        fulfillmentSales: sales, physicalEvents: events,
+        actorNames: {for (final user in users) user.id: user.name},
+        user: widget.user, physicalActions: _physicalActions(order),
+        onPhysicalAction: openAction,
+        onConfigure: () { Navigator.pop(context); _configurePhysical(order); },
+        onReserve: (line) { Navigator.pop(context); _reserveLine(order, line); },
+        onRelease: (reservation) async {
+          Navigator.pop(context);
+          try {
+            await StockReservationRepository(widget.repository.db)
+                .release(widget.user, reservation.id, reason: 'Manual release');
+            if (mounted) showAppFeedback(this.context, 'Reservation released');
+            await refresh();
+            if (mounted) detail(order);
+          } catch (error) {
+            if (mounted) showAppFeedback(this.context, safeMessage(error));
+          }
+        },
+        onFulfill: order.status == 'confirmed' &&
+            lines.any((line) => line.quantityMilli > (fulfilled[line.id] ?? 0)) &&
+            widget.user.can(PosPermission.manageSalesOrders) &&
+            widget.user.can(PosPermission.sell) && widget.auth != null
+            ? () { Navigator.pop(context); _startFulfillment(order, lines, fulfilled); }
+            : null,
+        onEditDraft: () { Navigator.pop(context); create(existing: order); },
+        onConfirm: () async {
+          Navigator.pop(context);
+          try {
+            await widget.repository.transition(widget.user, order.id, 'confirmed');
+            if (mounted) showAppFeedback(this.context, 'Order confirmed');
+            await refresh();
+          } catch (error) {
+            if (mounted) showAppFeedback(this.context, safeMessage(error));
+          }
+        },
+        onCancelOrder: () => _confirmCancelOrder(order),
+      ));
+  }
+  Future<void> _confirmCancelOrder(SalesOrder order) async {
+    final confirmed = await showDialog<bool>(context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Cancel ${order.reference}?'),
+        content: const Text('This ends the order and active handoff. Completed Sales are not voided or refunded.'),
+        actions: [TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('Keep order')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Cancel order'))]));
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.repository.transition(widget.user, order.id, 'cancelled');
+      if (!mounted) return;
+      Navigator.pop(context);
+      showAppFeedback(context, 'Order cancelled');
+      await refresh();
+    } catch (error) {
+      if (mounted) showAppFeedback(context, safeMessage(error));
+    }
   }
   Future<void> _reserveLine(SalesOrder order, SalesOrderLine line) async {
     final repository = StockReservationRepository(widget.repository.db);
@@ -217,17 +205,247 @@ class _SalesOrdersScreenState extends State<SalesOrdersScreen> {
           try {
             await repository.reserve(widget.user, line.id, quantity);
             if (context.mounted) Navigator.pop(context);
+            if (mounted) showAppFeedback(this.context, 'Stock reserved');
             await refresh();
             if (mounted) detail(order);
           } catch (e) {
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(e.toString())));
+              showAppFeedback(context, safeMessage(e));
             }
           }
         }, child: const Text('Reserve'))],
     ));
     controller.dispose();
+  }
+  List<String> _physicalActions(SalesOrder order) {
+    if (order.status != 'confirmed' || order.fulfillmentMethod == null) return [];
+    switch (order.physicalStatus) {
+      case 'pending': return ['scheduled', 'cancelled'];
+      case 'scheduled': return ['scheduled', 'ready', 'cancelled'];
+      case 'ready': return order.fulfillmentMethod == 'delivery'
+          ? ['out_for_delivery', 'cancelled'] : ['picked_up', 'cancelled'];
+      case 'out_for_delivery': return ['delivered', 'failed_delivery', 'cancelled'];
+      case 'failed_delivery': return ['scheduled', 'cancelled'];
+      default: return [];
+    }
+  }
+  String _actionLabel(String next, String current) => switch (next) {
+    'scheduled' => current == 'pending' ? 'Schedule' : 'Reschedule',
+    'ready' => 'Mark Ready',
+    'out_for_delivery' => 'Mark Out for Delivery',
+    'delivered' => 'Mark Delivered',
+    'picked_up' => 'Mark Picked Up',
+    'failed_delivery' => 'Record Failed Delivery',
+    'cancelled' => 'Cancel handoff',
+    _ => next,
+  };
+  Future<void> _configurePhysical(SalesOrder order) async {
+    final customer = await (widget.repository.db.select(widget.repository.db.customers)
+      ..where((c) => c.id.equals(order.customerId))).getSingle();
+    if (!mounted) return;
+    var method = order.fulfillmentMethod ?? 'pickup';
+    final name = TextEditingController(text: order.contactNameSnapshot ?? customer.name);
+    final phone = TextEditingController(text: order.contactPhoneSnapshot ?? customer.phone);
+    final address = TextEditingController(text: order.deliveryAddressSnapshot ?? customer.address);
+    final instructions = TextEditingController(text: order.fulfillmentInstructions);
+    final fee = TextEditingController(text: (order.deliveryFeeCents / 100).toStringAsFixed(2));
+    await showDialog<void>(context: context, builder: (context) => StatefulBuilder(
+      builder: (context, update) => AlertDialog(title: Text('Delivery / Pickup - ${order.reference}'),
+        content: SizedBox(width: 480, child: SingleChildScrollView(child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('Method', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 6),
+          DropdownButtonFormField<String>(initialValue: method,
+            decoration: const InputDecoration(labelText: 'Method'),
+            items: const [DropdownMenuItem(value: 'pickup', child: Text('Pickup')),
+              DropdownMenuItem(value: 'delivery', child: Text('Delivery'))],
+            onChanged: (v) { if (v != null) update(() => method = v); }),
+          const SizedBox(height: 16),
+          Text(method == 'pickup' ? 'Pickup contact' : 'Delivery contact',
+            style: Theme.of(context).textTheme.titleSmall),
+          TextField(controller: name, decoration: const InputDecoration(labelText: 'Contact name')),
+          TextField(controller: phone, decoration: const InputDecoration(labelText: 'Phone')),
+          if (method == 'delivery') ...[
+            const SizedBox(height: 16),
+            Text('Delivery address', style: Theme.of(context).textTheme.titleSmall),
+            Text('Copied to this order; changes here do not update the customer profile.',
+              style: Theme.of(context).textTheme.bodySmall),
+            TextField(controller: address, minLines: 2, maxLines: 4,
+              decoration: const InputDecoration(labelText: 'Delivery address')),
+            const SizedBox(height: 16),
+            Text('Delivery fee', style: Theme.of(context).textTheme.titleSmall),
+            TextField(controller: fee, keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Amount',
+                helperText: 'Charged once on the final fulfillment Sale.')),
+          ],
+          const SizedBox(height: 16),
+          TextField(controller: instructions, maxLines: 2,
+            decoration: const InputDecoration(labelText: 'Instructions')),
+        ]))), actions: [TextButton(onPressed: () => Navigator.pop(context),
+          child: const Text('Close')),
+          FilledButton(onPressed: () async {
+            try {
+              final cents = method == 'delivery' ? _parseMoney(fee.text) : 0;
+              if (cents == null) throw StateError('Enter a valid delivery fee');
+              if (method == 'pickup' && order.deliveryFeeCents > 0) {
+                final confirmed = await showDialog<bool>(context: context,
+                  builder: (dialogContext) => AlertDialog(
+                    title: const Text('Remove delivery fee?'),
+                    content: Text('Changing to Pickup removes the ${formatPeso(order.deliveryFeeCents)} delivery fee from this order.'),
+                    actions: [TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+                      child: const Text('Keep Delivery')),
+                      FilledButton(onPressed: () => Navigator.pop(dialogContext, true),
+                        child: const Text('Change to Pickup'))]));
+                if (confirmed != true) return;
+              }
+              await widget.repository.configurePhysical(widget.user, order.id,
+                method: method, contactName: name.text, contactPhone: phone.text,
+                address: address.text, instructions: instructions.text,
+                deliveryFeeCents: cents);
+              if (context.mounted) Navigator.pop(context);
+              if (mounted) showAppFeedback(this.context, 'Handoff details saved');
+              await refresh();
+              if (mounted) detail(order);
+            } catch (e) {
+              if (context.mounted) {
+                showAppFeedback(context, safeMessage(e));
+              }
+            }
+          }, child: const Text('Save'))])));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    name.dispose(); phone.dispose(); address.dispose(); instructions.dispose(); fee.dispose();
+  }
+  Future<void> _physicalAction(SalesOrder order, String next) async {
+    DateTime? scheduledAt = order.scheduledAt;
+    final recipient = TextEditingController();
+    final notes = TextEditingController();
+    final isSchedule = next == 'scheduled';
+    final isCompletion = next == 'delivered' || next == 'picked_up';
+    final isFailure = next == 'failed_delivery';
+    final isCancel = next == 'cancelled';
+    if (!mounted) return;
+    await showDialog<void>(context: context, builder: (dialogContext) =>
+      StatefulBuilder(builder: (dialogContext, update) => AlertDialog(
+        title: Text(_actionLabel(next, order.physicalStatus)),
+        content: SizedBox(width: 480, child: SingleChildScrollView(child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${order.reference} - ${order.customerNameSnapshot}',
+            style: Theme.of(dialogContext).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          Text(methodLabel(order.fulfillmentMethod)),
+          if (order.contactNameSnapshot != null)
+            Text('Contact: ${order.contactNameSnapshot}${order.contactPhoneSnapshot?.isNotEmpty == true ? ' - ${order.contactPhoneSnapshot}' : ''}'),
+          if (order.fulfillmentMethod == 'delivery' &&
+              order.deliveryAddressSnapshot?.isNotEmpty == true) ...[
+            const SizedBox(height: 8),
+            Text('Delivery address', style: Theme.of(dialogContext).textTheme.labelMedium),
+            Text(order.deliveryAddressSnapshot!),
+          ],
+          if (order.fulfillmentInstructions?.isNotEmpty == true)
+            Padding(padding: const EdgeInsets.only(top: 8),
+              child: Text('Instructions: ${order.fulfillmentInstructions}')),
+          if (order.scheduledAt != null && !isSchedule)
+            Padding(padding: const EdgeInsets.only(top: 8),
+              child: Text('Scheduled: ${orderSchedule(dialogContext, order.scheduledAt)}')),
+          if (isSchedule) ...[
+            const SizedBox(height: 12),
+            const Text('Choose a date and time for this handoff.'),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, children: [
+              OutlinedButton.icon(icon: const Icon(Icons.calendar_today, size: 18),
+                label: Text(scheduledAt == null ? 'Choose date' : orderDate(scheduledAt!)),
+                onPressed: () async {
+                  final picked = await showDatePicker(context: dialogContext,
+                    initialDate: scheduledAt ?? DateTime.now(),
+                    firstDate: DateTime(2000), lastDate: DateTime(2100));
+                  if (picked == null || !dialogContext.mounted) return;
+                  final previous = scheduledAt ?? DateTime.now();
+                  update(() => scheduledAt = DateTime(picked.year, picked.month,
+                    picked.day, previous.hour, previous.minute));
+                }),
+              OutlinedButton.icon(icon: const Icon(Icons.schedule, size: 18),
+                label: Text(scheduledAt == null ? 'Choose time' :
+                  TimeOfDay.fromDateTime(scheduledAt!).format(dialogContext)),
+                onPressed: () async {
+                  final picked = await showTimePicker(context: dialogContext,
+                    initialTime: scheduledAt == null ? TimeOfDay.now() :
+                      TimeOfDay.fromDateTime(scheduledAt!));
+                  if (picked == null || !dialogContext.mounted) return;
+                  final previous = scheduledAt ?? DateTime.now();
+                  update(() => scheduledAt = DateTime(previous.year,
+                    previous.month, previous.day, picked.hour, picked.minute));
+                }),
+            ]),
+            if (order.fulfillmentMethod == 'delivery' &&
+                order.deliveryFeeCents > 0)
+              Padding(padding: const EdgeInsets.only(top: 8),
+                child: Text('Delivery fee: ${formatPeso(order.deliveryFeeCents)}')),
+            TextButton(onPressed: () {
+              Navigator.pop(dialogContext);
+              _configurePhysical(order);
+            }, child: const Text('Edit contact and address')),
+          ],
+          if (next == 'ready')
+            const Padding(padding: EdgeInsets.only(top: 12),
+              child: Text('Mark this order ready for handoff?')),
+          if (next == 'out_for_delivery')
+            const Padding(padding: EdgeInsets.only(top: 12),
+              child: Text('Record that this order has left for delivery.')),
+          if (isCompletion) ...[
+            const SizedBox(height: 12),
+            TextField(controller: recipient, autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(labelText: next == 'delivered' ?
+                'Recipient name *' : 'Released to *')),
+          ],
+          if (isFailure) ...[
+            const SizedBox(height: 12),
+            Text('Attempted: ${orderSchedule(dialogContext, DateTime.now())}'),
+          ],
+          if (isCancel)
+            const Padding(padding: EdgeInsets.only(top: 12),
+              child: Text('This handoff cannot be restarted after cancellation. Completed Sales remain unchanged.')),
+          if (!isCancel) ...[
+            const SizedBox(height: 12),
+            TextField(controller: notes, maxLines: 2,
+              decoration: InputDecoration(labelText: isFailure ?
+                'Failure reason *' : 'Notes (optional)')),
+          ],
+        ]))),
+        actions: [TextButton(onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Close')),
+          FilledButton(onPressed: isSchedule && scheduledAt == null ? null : () async {
+            try {
+              await widget.repository.transitionPhysical(widget.user,
+                order.id, next, scheduledAt: scheduledAt,
+                recipientName: recipient.text, notes: notes.text);
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
+              if (mounted) {
+                showAppFeedback(context, switch (next) {
+                'scheduled' => order.physicalStatus == 'pending' ?
+                  'Handoff scheduled' : 'Schedule updated',
+                'ready' => 'Order marked ready',
+                'out_for_delivery' => 'Delivery started',
+                'delivered' => 'Order delivered',
+                'picked_up' => 'Pickup completed',
+                'failed_delivery' => 'Failed delivery recorded',
+                _ => 'Handoff cancelled',
+                });
+              }
+              await refresh();
+              if (mounted) detail(order);
+            } catch (error) {
+              if (dialogContext.mounted) {
+                showAppFeedback(dialogContext, safeMessage(error));
+              }
+            }
+          }, child: Text(_actionLabel(next, order.physicalStatus)))],
+      )));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    recipient.dispose();
+    notes.dispose();
   }
   Future<void> _startFulfillment(SalesOrder order,
       List<SalesOrderLine> lines, Map<String, int> fulfilled) async {
@@ -360,7 +578,7 @@ class _SalesOrdersScreenState extends State<SalesOrdersScreen> {
               })]),
             if (productId != null)
               Align(alignment: Alignment.centerLeft,
-                child: Text('On hand: ${Quantity.format(stock[productId]?.$1 ?? 0)}  •  Requested: ${qty.text}')),
+                child: Text('On hand: ${Quantity.format(stock[productId]?.$1 ?? 0)}  -  Requested: ${qty.text}')),
             Expanded(child: ListView(children: [for (var i = 0; i < lines.length; i++)
               ListTile(title: Text(products.firstWhere((p) =>
                   p.id == lines[i].productId).name),
@@ -390,37 +608,135 @@ class _SalesOrdersScreenState extends State<SalesOrdersScreen> {
           ]))))));
     qty.dispose(); price.dispose(); notes.dispose();
   }
+  Widget _metric(String label, String key, IconData icon) => AppMetricTile(
+    label: label, value: '${metrics[key] ?? 0}', icon: icon);
+
+  Widget _orderFilters() => Wrap(spacing: 10, runSpacing: 8,
+    crossAxisAlignment: WrapCrossAlignment.center, children: [
+    SizedBox(width: 280, height: 48, child: TextField(
+      decoration: const InputDecoration(prefixIcon: Icon(Icons.search),
+        hintText: 'Reference or customer', isDense: true),
+      onChanged: (value) {
+        debounce?.cancel();
+        debounce = Timer(const Duration(milliseconds: 250), () {
+          search = value; page = 0; refresh();
+        });
+      })),
+    SizedBox(width: 140, child: DropdownButtonFormField<String>(
+      key: ValueKey('order-status-$status'),
+      isExpanded: true,
+      initialValue: status, decoration: const InputDecoration(
+        labelText: 'Order status', isDense: true),
+      items: const [DropdownMenuItem(value: 'all', child: Text('All')),
+        DropdownMenuItem(value: 'draft', child: Text('Draft')),
+        DropdownMenuItem(value: 'confirmed', child: Text('Confirmed')),
+        DropdownMenuItem(value: 'cancelled', child: Text('Cancelled'))],
+      onChanged: (value) { if (value != null) {
+        setState(() { status = value; page = 0; }); refresh();
+      } })),
+    SizedBox(width: 150, child: DropdownButtonFormField<String>(
+      key: ValueKey('method-$methodFilter'),
+      isExpanded: true,
+      initialValue: methodFilter, decoration: const InputDecoration(
+        labelText: 'Method', isDense: true),
+      items: const [DropdownMenuItem(value: 'all', child: Text('All methods')),
+        DropdownMenuItem(value: 'pickup', child: Text('Pickup')),
+        DropdownMenuItem(value: 'delivery', child: Text('Delivery'))],
+      onChanged: (value) { if (value != null) {
+        setState(() { methodFilter = value; page = 0; }); refresh();
+      } })),
+    SizedBox(width: 185, child: DropdownButtonFormField<String>(
+      key: ValueKey('physical-$orderPhysicalFilter'),
+      isExpanded: true,
+      initialValue: orderPhysicalFilter,
+      decoration: const InputDecoration(labelText: 'Physical status', isDense: true),
+      items: const [DropdownMenuItem(value: 'all', child: Text('All states')),
+        DropdownMenuItem(value: 'pending', child: Text('Pending')),
+        DropdownMenuItem(value: 'scheduled', child: Text('Scheduled')),
+        DropdownMenuItem(value: 'ready', child: Text('Ready')),
+        DropdownMenuItem(value: 'out_for_delivery', child: Text('Out for delivery')),
+        DropdownMenuItem(value: 'failed_delivery', child: Text('Failed delivery')),
+        DropdownMenuItem(value: 'delivered', child: Text('Delivered')),
+        DropdownMenuItem(value: 'picked_up', child: Text('Picked up'))],
+      onChanged: (value) { if (value != null) {
+        setState(() { orderPhysicalFilter = value; page = 0; }); refresh();
+      } })),
+    OutlinedButton.icon(icon: const Icon(Icons.calendar_today_outlined, size: 18),
+      label: Text(createdOn == null ? 'Created date' : orderDate(createdOn!)),
+      onPressed: () async {
+        final picked = await showDatePicker(context: context,
+          initialDate: createdOn ?? DateTime.now(),
+          firstDate: DateTime(2000), lastDate: DateTime(2100));
+        if (picked == null || !mounted) return;
+        setState(() { createdOn = picked; page = 0; }); refresh();
+      }),
+    if (createdOn != null) IconButton(
+      tooltip: 'Clear date filter', icon: const Icon(Icons.close),
+      onPressed: () { setState(() { createdOn = null; page = 0; }); refresh(); }),
+  ]);
+
+  Widget _queueFilters() => Wrap(spacing: 6, runSpacing: 2, children: [
+    AppFilterChip(label: 'All Active', selected: physicalFilter == 'active' && queueMethodFilter == 'all',
+      onSelected: () { setState(() { physicalFilter = 'active'; queueMethodFilter = 'all'; page = 0; }); refresh(); }),
+    AppFilterChip(label: 'Today', selected: physicalFilter == 'today',
+      onSelected: () { setState(() { physicalFilter = 'today'; page = 0; }); refresh(); }),
+    AppFilterChip(label: 'Pickup', selected: queueMethodFilter == 'pickup',
+      onSelected: () { setState(() { queueMethodFilter = queueMethodFilter == 'pickup' ? 'all' : 'pickup'; page = 0; }); refresh(); }),
+    AppFilterChip(label: 'Delivery', selected: queueMethodFilter == 'delivery',
+      onSelected: () { setState(() { queueMethodFilter = queueMethodFilter == 'delivery' ? 'all' : 'delivery'; page = 0; }); refresh(); }),
+    AppFilterChip(label: 'Ready', selected: physicalFilter == 'ready',
+      onSelected: () { setState(() { physicalFilter = 'ready'; page = 0; }); refresh(); }),
+    AppFilterChip(label: 'Out for Delivery', selected: physicalFilter == 'out_for_delivery',
+      onSelected: () { setState(() { physicalFilter = 'out_for_delivery'; page = 0; }); refresh(); }),
+    AppFilterChip(label: 'Needs Attention', selected: physicalFilter == 'attention',
+      onSelected: () { setState(() { physicalFilter = 'attention'; page = 0; }); refresh(); }),
+  ]);
+
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.all(24), child: Column(children: [
-      AppPageHeader(title: 'Sales Orders',
-        subtitle: 'Track confirmed customer orders before fulfillment.',
-        action: widget.user.can(PosPermission.manageSalesOrders) ?
-          FilledButton.icon(onPressed: create, icon: const Icon(Icons.add),
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, bounds) =>
+    AppWorkspacePadding(child: Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    AppPageHeader(title: 'Sales Orders',
+      subtitle: 'Track customer orders, fulfillment, pickup, and delivery.',
+      action: widget.user.can(PosPermission.manageSalesOrders)
+        ? FilledButton.icon(onPressed: create, icon: const Icon(Icons.add),
             label: const Text('New Sales Order')) : null),
-      Row(children: [Expanded(child: TextField(
-        decoration: const InputDecoration(prefixIcon: Icon(Icons.search),
-            hintText: 'Search reference or customer'),
-        onChanged: (v) { debounce?.cancel(); debounce = Timer(
-          const Duration(milliseconds: 250), () { search = v; page = 0; refresh(); }); })),
-        const SizedBox(width: 12),
-        DropdownButton<String>(value: status, items: const [
-          DropdownMenuItem(value: 'all', child: Text('All')),
-          DropdownMenuItem(value: 'draft', child: Text('Draft')),
-          DropdownMenuItem(value: 'confirmed', child: Text('Confirmed')),
-          DropdownMenuItem(value: 'cancelled', child: Text('Cancelled'))],
-          onChanged: (v) { if (v == null) return;
-            setState(() { status = v; page = 0; }); refresh(); })]),
-      const SizedBox(height: 16),
-      Expanded(child: AppPagedListPanel(title: 'Orders', total: total,
-        count: orders.length, page: page, loading: loading, error: error,
-        onRetry: refresh,
-        onPrevious: page > 0 ? () { page--; refresh(); } : null,
-        onNext: (page + 1) * 50 < total ? () { page++; refresh(); } : null,
-        itemBuilder: (context, i) { final o = orders[i];
-          return Material(color: Colors.transparent, child: ListTile(
-            onTap: () => detail(o), title: Text(o.reference),
-            subtitle: Text('${o.customerNameSnapshot}  •  ${o.createdAt.toLocal().toString().split(' ').first}  •  ${o.status}  •  ${fulfillmentStates[o.id] ?? 'Unfulfilled'}  •  ${o.fulfillmentMethod ?? 'No intent'}'),
-            trailing: Text(formatPeso(o.totalCents)))); }))
-    ]));
+    AppWorkspaceTabs(labels: const ['Orders', 'Fulfillment Queue'],
+      selectedIndex: queue ? 1 : 0,
+      onSelected: (index) {
+        if (queue == (index == 1)) return;
+        setState(() { queue = index == 1; page = 0; }); refresh();
+      }),
+    const SizedBox(height: 8),
+    if (bounds.maxHeight >= 720) AppMetricGrid(children: queue ? [
+      _metric('Scheduled Today', 'today', Icons.today_outlined),
+      _metric('Ready', 'ready', Icons.inventory_2_outlined),
+      _metric('Out for Delivery', 'out_for_delivery', Icons.local_shipping_outlined),
+      _metric('Needs Attention', 'attention', Icons.priority_high_outlined),
+    ] : [
+      _metric('Open Orders', 'open_orders', Icons.assignment_outlined),
+      _metric('Partially Fulfilled', 'partial_orders', Icons.pie_chart_outline),
+      _metric('Ready for Handoff', 'ready', Icons.inventory_2_outlined),
+      _metric('Needs Attention', 'attention', Icons.priority_high_outlined),
+    ]),
+    const SizedBox(height: 12),
+    queue ? _queueFilters() : _orderFilters(),
+    const SizedBox(height: 12),
+    Expanded(child: AppPagedListPanel(
+      title: queue ? 'Fulfillment Queue' : 'Orders', total: total,
+      count: orders.length, page: page, loading: loading, error: error,
+      emptyTitle: queue ? 'Nothing needs fulfillment right now' : 'No sales orders yet',
+      emptyMessage: queue ? 'Scheduled, ready, and delivery orders will appear here.' :
+        'Create a Sales Order when a customer needs items prepared or fulfilled later.',
+      onRetry: refresh,
+      onPrevious: page > 0 ? () { page--; refresh(); } : null,
+      onNext: (page + 1) * 50 < total ? () { page++; refresh(); } : null,
+      itemBuilder: (context, index) {
+        final order = orders[index];
+        return SalesOrderListRow(order: order, queue: queue,
+          inventoryState: fulfillmentStates[order.id] ?? 'Unfulfilled',
+          onOpen: () => detail(order));
+      },
+    )),
+  ])));
 }

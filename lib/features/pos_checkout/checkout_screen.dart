@@ -297,6 +297,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   String? heldReference;
   SaleCompletion? completion;
   int redeemPoints = 0;
+  int salesOrderDeliveryFeeCents = 0;
   int rewardDiscountCents = 0;
   int get manualDiscountCents {
     final discount = manualDiscount;
@@ -315,7 +316,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   int get payableCents =>
-      cart.totalCents - manualDiscountCents - promotionDiscountCents - rewardDiscountCents;
+      cart.totalCents + salesOrderDeliveryFeeCents - manualDiscountCents - promotionDiscountCents - rewardDiscountCents;
 
   Widget _promotionRow(BuildContext context) {
     final preview = promotionPreview!;
@@ -494,6 +495,14 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       final lines = await (db.select(db.salesOrderLines)
         ..where((l) => l.salesOrderId.equals(orderId))).get();
       final fulfilled = await SalesOrderRepository(db).fulfilledByLine(orderId);
+      final selectedFinal = lines.every((line) =>
+        (fulfilled[line.id] ?? 0) + (widget.salesOrderQuantities?[line.id] ?? 0) >= line.quantityMilli);
+      final chargedFee = (await db.customSelect('''SELECT COUNT(*) AS n FROM sales_order_fulfillments f
+        JOIN sales s ON s.id = f.sale_id WHERE f.sales_order_id = ?
+        AND s.status != 'voided' AND s.delivery_fee_cents > 0''',
+        variables: [Variable.withString(orderId)]).getSingle()).read<int>('n');
+      salesOrderDeliveryFeeCents = selectedFinal && chargedFee == 0 &&
+          order.fulfillmentMethod == 'delivery' ? order.deliveryFeeCents : 0;
       if (!mounted) return;
       customerId = order.customerId;
       for (final line in lines) {
@@ -1167,7 +1176,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       final result = credit
           ? await sales.checkoutCredit(cart, customerId!, cashCents,
               manualDiscount: manualDiscount, heldReference: heldReference,
-              salesOrderId: widget.salesOrderId)
+              salesOrderId: widget.salesOrderId,
+              deliveryFeeCents: salesOrderDeliveryFeeCents)
           : await sales.checkout(cart, cashCents,
               quotationId: widget.quotationId,
               customerId: customerId,
@@ -1177,7 +1187,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
               walkInName: walkInName,
               walkInContact: walkInContact,
               heldReference: heldReference,
-              salesOrderId: widget.salesOrderId);
+              salesOrderId: widget.salesOrderId,
+              deliveryFeeCents: salesOrderDeliveryFeeCents);
       lastSaleId = result.saleId;
       final completedSale =
           await (widget.repository.db.select(widget.repository.db.sales)
@@ -3873,6 +3884,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(),
       _amountRow(context, 'Subtotal', cart.subtotalCents),
+      if (salesOrderDeliveryFeeCents > 0)
+        _amountRow(context, 'Delivery fee', salesOrderDeliveryFeeCents),
       if (promotionDiscountCents > 0) _promotionRow(context),
       if (customerId != null && !credit)
         TextButton.icon(

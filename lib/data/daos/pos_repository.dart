@@ -893,6 +893,7 @@ class PosRepository {
         final orderPrices = <String, int>{};
         final orderExtras = <String, int>{};
         final previousFulfilled = <String, int>{};
+        var deliveryFeeForSale = 0;
         if (salesOrderId != null) {
           actor.require(PosPermission.manageSalesOrders);
           if (layawayId != null || quotationId != null ||
@@ -940,6 +941,18 @@ class PosRepository {
                 line.saleMode != request.mode) {
               throw StateError('Sales Order lines or remaining quantity changed');
             }
+          }
+          final quantities = <String, int>{for (final request in items)
+            request.lineKey!: request.quantityMilli ?? request.quantity * Quantity.scale};
+          final finalFulfillment = orderLines.values.every((line) =>
+            (previousFulfilled[line.id] ?? 0) + (quantities[line.id] ?? 0) >= line.quantityMilli);
+          if (finalFulfillment && salesOrder.fulfillmentMethod == 'delivery' &&
+              salesOrder.deliveryFeeCents > 0) {
+            final charged = (await db.customSelect('''SELECT COUNT(*) AS n FROM sales_order_fulfillments f
+              JOIN sales s ON s.id = f.sale_id WHERE f.sales_order_id = ?
+              AND s.status != 'voided' AND s.delivery_fee_cents > 0''',
+              variables: [Variable.withString(salesOrderId)]).getSingle()).read<int>('n');
+            if (charged == 0) deliveryFeeForSale = salesOrder.deliveryFeeCents;
           }
         }
         if (exchangeCreditCents < 0 ||
@@ -1300,6 +1313,7 @@ class PosRepository {
             throw StateError('Layaway total changed');
           }
         }
+        total += deliveryFeeForSale;
         final linkedCustomerId =
             creditCustomerId ?? quotationCustomerId ?? customerId;
         if (linkedCustomerId != null) {
@@ -1409,6 +1423,7 @@ class PosRepository {
                     : null),
                 heldReference: Value(heldReference),
                 totalCents: total,
+                deliveryFeeCents: Value(deliveryFeeForSale),
                 discountSource: Value(salesOrderId != null &&
                         detailDiscounts.values.any((value) => value > 0)
                     ? 'sales_order'

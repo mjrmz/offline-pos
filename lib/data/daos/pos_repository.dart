@@ -4,6 +4,9 @@ import '../../core/models/business_product.dart';
 import '../../core/models/business_feature.dart';
 import '../../core/models/quantity.dart';
 import '../../core/models/manual_discount.dart';
+import '../../core/models/promotion_evaluation.dart';
+import '../../core/services/promotion_engine.dart';
+import 'promotion_repository.dart';
 import 'business_feature_repository.dart';
 import 'inventory_layer_repository.dart';
 import '../../core/models/active_user.dart';
@@ -120,6 +123,39 @@ class PosRepository {
     ];
   }
 
+  /// Bounded catalog search for label picking; never reads the full catalog.
+  Future<List<PosProduct>> searchProductsForLabels(String search,
+      {int limit = 30}) async {
+    final term = search.trim().toLowerCase();
+    if (term.isEmpty) return [];
+    final rows = await (db.select(db.products)
+          ..where((p) => p.name.lower().contains(term) |
+              p.sku.lower().contains(term) |
+              p.barcode.lower().contains(term))
+          ..orderBy([(p) => OrderingTerm(expression: p.name)])
+          ..limit(limit))
+        .get();
+    final ids = rows.map((row) => row.id).toList();
+    final configs = await BusinessFeatureRepository(db)
+        .allProductConfigurations(productIds: ids);
+    return [for (final row in rows)
+      _product(row, configs[row.id] ?? const BusinessProduct())];
+  }
+
+  /// Loads only products shown on a record page, including their unit settings.
+  Future<List<PosProduct>> productsByIds(Iterable<String> productIds) async {
+    final ids = productIds.toSet().toList();
+    if (ids.isEmpty) return [];
+    final rows =
+        await (db.select(db.products)..where((p) => p.id.isIn(ids))).get();
+    final configs = await BusinessFeatureRepository(db)
+        .allProductConfigurations(productIds: ids);
+    return [
+      for (final row in rows)
+        _product(row, configs[row.id] ?? const BusinessProduct())
+    ];
+  }
+
   Future<List<InventoryLayer>> layersForProduct(String productId,
       {bool includeDepleted = true}) {
     final query = db.select(db.inventoryLayers)
@@ -162,6 +198,16 @@ class PosRepository {
     for (final row in reserved) {
       final id = row.read<String>('product_id');
       map[id] = (map[id]?.$1 ?? 0, row.read<int>('reserved_milli'));
+    }
+    final orderReservations = await db.customSelect('''
+      SELECT product_id, SUM(quantity_milli) AS reserved_milli
+      FROM stock_reservations WHERE status = 'active'
+      GROUP BY product_id
+    ''').get();
+    for (final row in orderReservations) {
+      final id = row.read<String>('product_id');
+      final current = map[id] ?? (0, 0);
+      map[id] = (current.$1, current.$2 + row.read<int>('reserved_milli'));
     }
     for (final serial in await (db.select(db.serialUnits)
           ..where((s) => s.status.equals('rma_reserved')))
@@ -615,7 +661,7 @@ class PosRepository {
           .get();
 
   Future<int> reservedStockMilli(String productId,
-      {String? exceptLayawayId}) async {
+      {String? exceptLayawayId, String? exceptSalesOrderId}) async {
     var total = (await (db.select(db.serialUnits)
                   ..where((s) =>
                       s.productId.equals(productId) &
@@ -633,6 +679,15 @@ class PosRepository {
           .getSingle();
       if (layaway.status == 'active') total += item.quantityMilli;
     }
+    final orderReservations = await db.customSelect('''
+      SELECT COALESCE(SUM(quantity_milli), 0) AS reserved
+      FROM stock_reservations
+      WHERE product_id = ? AND status = 'active'
+        ${exceptSalesOrderId == null ? '' : 'AND sales_order_id != ?'}
+    ''', variables: [Variable.withString(productId),
+      if (exceptSalesOrderId != null)
+        Variable.withString(exceptSalesOrderId)]).getSingle();
+    total += orderReservations.read<int>('reserved');
     return total;
   }
 
@@ -738,7 +793,8 @@ class PosRepository {
       String? walkInName,
       String? walkInContact,
       String? heldReference,
-      ManualDiscount? manualDiscount}) async {
+      ManualDiscount? manualDiscount,
+      String? salesOrderId}) async {
     if (birReady) {
       if (protection == null) {
         throw StateError('Compliance protection is unavailable');
@@ -752,7 +808,8 @@ class PosRepository {
           walkInName: walkInName,
           walkInContact: walkInContact,
           heldReference: heldReference,
-          manualDiscount: manualDiscount));
+          manualDiscount: manualDiscount,
+          salesOrderId: salesOrderId));
     }
     return _completeCashSale(items, cashReceivedCents, cashierId,
         quotationId: quotationId,
@@ -762,7 +819,8 @@ class PosRepository {
         walkInName: walkInName,
         walkInContact: walkInContact,
         heldReference: heldReference,
-        manualDiscount: manualDiscount);
+        manualDiscount: manualDiscount,
+        salesOrderId: salesOrderId);
   }
 
   Future<CommittedSale> completeExchangeSale(List<SaleLineRequest> items,
@@ -780,7 +838,8 @@ class PosRepository {
       int cashPaidCents, String customerId, String cashierId,
       {String? quotationId,
       ManualDiscount? manualDiscount,
-      String? heldReference}) async {
+      String? heldReference,
+      String? salesOrderId}) async {
     if (birReady) {
       if (protection == null) {
         throw StateError('Compliance protection is unavailable');
@@ -790,13 +849,15 @@ class PosRepository {
           creditCustomerId: customerId,
           quotationId: quotationId,
           manualDiscount: manualDiscount,
-          heldReference: heldReference));
+          heldReference: heldReference,
+          salesOrderId: salesOrderId));
     }
     return _completeCashSale(items, cashPaidCents, cashierId,
         creditCustomerId: customerId,
         quotationId: quotationId,
         manualDiscount: manualDiscount,
-        heldReference: heldReference);
+        heldReference: heldReference,
+        salesOrderId: salesOrderId);
   }
 
   Future<CommittedSale> _completeCashSale(
@@ -810,7 +871,8 @@ class PosRepository {
       String? walkInName,
       String? walkInContact,
       String? heldReference,
-      ManualDiscount? manualDiscount}) async {
+      ManualDiscount? manualDiscount,
+      String? salesOrderId}) async {
     if (birReady) {
       if (protection == null) {
         throw StateError('Compliance protection is unavailable');
@@ -826,6 +888,60 @@ class PosRepository {
           throw StateError('Not authorized to sell');
         }
         if (items.isEmpty) throw StateError('Cart is empty');
+        SalesOrder? salesOrder;
+        final orderLines = <String, SalesOrderLine>{};
+        final orderPrices = <String, int>{};
+        final orderExtras = <String, int>{};
+        final previousFulfilled = <String, int>{};
+        if (salesOrderId != null) {
+          actor.require(PosPermission.manageSalesOrders);
+          if (layawayId != null || quotationId != null ||
+              exchangeCreditCents != 0 || manualDiscount != null ||
+              redeemPoints != 0 || heldReference != null) {
+            throw StateError('Sales Order checkout cannot combine with another source or discount');
+          }
+          salesOrder = await (db.select(db.salesOrders)
+            ..where((o) => o.id.equals(salesOrderId))).getSingleOrNull();
+          if (salesOrder == null || salesOrder.status != 'confirmed') {
+            throw StateError('Only confirmed Sales Orders can be fulfilled');
+          }
+          if ((creditCustomerId ?? customerId) != salesOrder.customerId) {
+            throw StateError('Sales Order customer must match checkout');
+          }
+          final lines = await (db.select(db.salesOrderLines)
+            ..where((l) => l.salesOrderId.equals(salesOrderId))).get();
+          for (final line in lines) {
+            orderLines[line.id] = line;
+            orderPrices[line.id] = line.unitPriceCents - line.extraCents;
+            orderExtras[line.id] = line.extraCents;
+          }
+          final prior = await db.customSelect('''
+            SELECT fl.sales_order_line_id, SUM(fl.quantity_milli) AS fulfilled
+            FROM sales_order_fulfillment_lines fl
+            JOIN sales_order_fulfillments f ON f.id = fl.fulfillment_id
+            JOIN sales s ON s.id = f.sale_id
+            WHERE f.sales_order_id = ? AND s.status != 'voided'
+            GROUP BY fl.sales_order_line_id
+          ''', variables: [Variable.withString(salesOrderId)]).get();
+          for (final row in prior) {
+            previousFulfilled[row.read<String>('sales_order_line_id')] =
+                row.read<int>('fulfilled');
+          }
+          final seen = <String>{};
+          for (final request in items) {
+            final line = orderLines[request.lineKey];
+            final quantity = request.quantityMilli ??
+                request.quantity * Quantity.scale;
+            if (line == null || line.productId == null ||
+                line.productId != request.productId || quantity <= 0 ||
+                !seen.add(line.id) ||
+                quantity > line.quantityMilli -
+                    (previousFulfilled[line.id] ?? 0) ||
+                line.saleMode != request.mode) {
+              throw StateError('Sales Order lines or remaining quantity changed');
+            }
+          }
+        }
         if (exchangeCreditCents < 0 ||
             (exchangeCreditCents > 0 &&
                 (creditCustomerId != null ||
@@ -1039,11 +1155,13 @@ class PosRepository {
           if (!config.madeToOrder &&
               current -
                       await reservedStockMilli(product.id,
-                          exceptLayawayId: layawayId) <
+                          exceptLayawayId: layawayId,
+                          exceptSalesOrderId: salesOrderId) <
                   milli) {
             throw StateError('Insufficient stock for ${product.name}');
           }
-          final extra = quotedExtras[product.id] ??
+          final extra = orderExtras[request.lineKey] ??
+              quotedExtras[product.id] ??
               (mode == 'deposit'
                   ? config.depositCents
                   : mode == 'container'
@@ -1062,10 +1180,11 @@ class PosRepository {
                 ifAbsent: () => part.quantityMilli);
           }
           final useLayerPrice = product.pricingPolicy == 'layer' &&
-              !quotedPrices.containsKey(product.id);
+              !quotedPrices.containsKey(product.id) && salesOrderId == null;
           final line = !useLayerPrice
               ? Quantity.lineCents(
-                      quotedPrices[product.id] ?? product.priceCents, milli) +
+                      orderPrices[request.lineKey] ??
+                          quotedPrices[product.id] ?? product.priceCents, milli) +
                   Quantity.lineCents(extra, milli)
               : layers.fold<int>(
                   0,
@@ -1075,7 +1194,8 @@ class PosRepository {
                           useLayerPrice
                               ? part.layer.unitSellingPriceCents ??
                                   product.priceCents
-                              : quotedPrices[product.id] ?? product.priceCents,
+                              : orderPrices[request.lineKey] ??
+                                  quotedPrices[product.id] ?? product.priceCents,
                           part.quantityMilli) +
                       Quantity.lineCents(extra, part.quantityMilli));
           details.add(_ResolvedLine(product, config, milli, mode, batch, extra,
@@ -1083,7 +1203,20 @@ class PosRepository {
           total += line;
         }
         final detailDiscounts = <_ResolvedLine, int>{};
+        final promotionDiscounts = <_ResolvedLine, int>{};
+        PromotionEvaluationResult? promotionEvaluation;
         var manualDiscountEffect = 0;
+        if (salesOrder != null) {
+          for (final detail in details) {
+            final line = orderLines[detail.lineKey]!;
+            final before = previousFulfilled[line.id] ?? 0;
+            final after = before + detail.quantityMilli;
+            final allocated = line.discountCents * after ~/ line.quantityMilli -
+                line.discountCents * before ~/ line.quantityMilli;
+            detailDiscounts[detail] = allocated;
+            total -= allocated;
+          }
+        }
         if (manualDiscount != null) {
           if (layawayId != null || exchangeCreditCents != 0) {
             throw StateError('Manual discount is unavailable for this sale');
@@ -1122,6 +1255,42 @@ class PosRepository {
             remaining -= allocated;
           }
           total -= manualDiscountEffect;
+        }
+        if (manualDiscount == null && layawayId == null &&
+            salesOrderId == null &&
+            exchangeCreditCents == 0) {
+          final at = DateTime.now();
+          final candidates = await PromotionRepository(db)
+              .getPromotionCandidates(actor, at);
+          if (candidates.isNotEmpty) {
+            promotionEvaluation = const PromotionEngine().evaluate(
+                PromotionEvaluationContext(
+                    at: at,
+                    lines: [
+                      for (var i = 0; i < details.length; i++)
+                        PromotionCartLine(
+                            id: 'line-$i',
+                            productId: details[i].product.id,
+                            categoryId: details[i].product.categoryId,
+                            quantityMilli: details[i].quantityMilli,
+                            unitPriceCents: details[i].product.priceCents,
+                            subtotalCents: details[i].lineCents,
+                            merchandise: details[i].mode == 'ordinary')
+                    ],
+                    subtotalCents: total),
+                candidates);
+            for (final application
+                in promotionEvaluation.recommendedApplications) {
+              for (var i = 0; i < details.length; i++) {
+                final cents = application.lineDiscountCents['line-$i'] ?? 0;
+                if (cents > 0) {
+                  promotionDiscounts.update(details[i], (value) => value + cents,
+                      ifAbsent: () => cents);
+                }
+              }
+            }
+            total -= promotionEvaluation.totalDiscountCents;
+          }
         }
         if (layawayId != null) {
           final layaway = await (db.select(db.layaways)
@@ -1240,7 +1409,39 @@ class PosRepository {
                     : null),
                 heldReference: Value(heldReference),
                 totalCents: total,
+                discountSource: Value(salesOrderId != null &&
+                        detailDiscounts.values.any((value) => value > 0)
+                    ? 'sales_order'
+                    : manualDiscount != null
+                    ? 'manual'
+                    : promotionEvaluation?.totalDiscountCents == 0 ||
+                            promotionEvaluation == null
+                        ? 'none'
+                        : 'promotion'),
                 birInvoiceNumber: Value(invoiceNumber)));
+        final fulfillment = salesOrder == null
+            ? null
+            : await db.into(db.salesOrderFulfillments).insertReturning(
+                SalesOrderFulfillmentsCompanion.insert(
+                  salesOrderId: salesOrder.id,
+                  saleId: sale.id,
+                  createdBy: actor.id));
+        if (promotionEvaluation != null) {
+          for (final application
+              in promotionEvaluation.recommendedApplications) {
+            await db.into(db.salePromotionApplications).insert(
+                SalePromotionApplicationsCompanion.insert(
+                    saleId: sale.id,
+                    promotionId: Value(application.promotionId),
+                    promotionReference: application.reference,
+                    promotionName: application.name,
+                    promotionType: application.type,
+                    stackingMode: application.stackingMode,
+                    priority: application.priority,
+                    eligibleSubtotalCents: application.eligibleSubtotalCents,
+                    discountCents: application.discountCents));
+          }
+        }
         if (manualDiscount != null) {
           await db.into(db.saleManualDiscounts).insert(
               SaleManualDiscountsCompanion.insert(
@@ -1267,18 +1468,49 @@ class PosRepository {
                   batchNumber: detail.batch?.batchNumber,
                   serials: detail.serials);
           final layerPrice = product.pricingPolicy == 'layer' &&
-              !quotedPrices.containsKey(product.id);
+              !quotedPrices.containsKey(product.id) && salesOrderId == null;
           final groups =
               layerPrice ? consumed.map((part) => [part]).toList() : [consumed];
           if (groups.isEmpty) groups.add(<LayerConsumption>[]);
           final detailDiscount = detailDiscounts[detail] ?? 0;
           var discountRemaining = detailDiscount;
+          final promotionDiscount = promotionDiscounts[detail] ?? 0;
+          final promotionByGroup = List<int>.filled(groups.length, 0);
+          if (promotionDiscount > 0) {
+            final grossByGroup = <int>[
+              for (final group in groups)
+                layerPrice
+                    ? Quantity.lineCents(
+                            group.single.layer.unitSellingPriceCents ??
+                                product.priceCents,
+                            group.single.quantityMilli) +
+                        Quantity.lineCents(
+                            detail.extraCents, group.single.quantityMilli)
+                    : detail.lineCents
+            ];
+            var remaining = promotionDiscount;
+            for (var i = 0; i < groups.length; i++) {
+              promotionByGroup[i] =
+                  promotionDiscount * grossByGroup[i] ~/ detail.lineCents;
+              remaining -= promotionByGroup[i];
+            }
+            for (var i = 0; i < groups.length && remaining > 0; i++) {
+              final spare = grossByGroup[i] - promotionByGroup[i];
+              final extra = spare < remaining ? spare : remaining;
+              promotionByGroup[i] += extra;
+              remaining -= extra;
+            }
+            if (remaining != 0) {
+              throw StateError('Promotion allocation exceeds line value');
+            }
+          }
           var groupIndex = 0;
           for (final group in groups) {
             final groupMilli = layerPrice ? group.single.quantityMilli : milli;
             final unitPrice = layerPrice
                 ? group.single.layer.unitSellingPriceCents ?? product.priceCents
-                : quotedPrices[product.id] ?? product.priceCents;
+                : orderPrices[detail.lineKey] ??
+                    quotedPrices[product.id] ?? product.priceCents;
             final grossGroupTotal = layerPrice
                 ? Quantity.lineCents(unitPrice, groupMilli) +
                     Quantity.lineCents(detail.extraCents, groupMilli)
@@ -1289,7 +1521,9 @@ class PosRepository {
                     ? 0
                     : detailDiscount * grossGroupTotal ~/ detail.lineCents;
             discountRemaining -= groupDiscount;
-            final groupTotal = grossGroupTotal - groupDiscount;
+            final groupPromotionDiscount = promotionByGroup[groupIndex - 1];
+            final groupTotal =
+                grossGroupTotal - groupDiscount - groupPromotionDiscount;
             final saleItem = await db.into(db.saleItems).insertReturning(
                 SaleItemsCompanion.insert(
                     saleId: sale.id,
@@ -1304,7 +1538,16 @@ class PosRepository {
                     extraCents: Value(detail.extraCents),
                     unitPriceCents: unitPrice,
                     lineTotalCents: Value(groupTotal),
-                    manualDiscountCents: Value(groupDiscount)));
+                    manualDiscountCents: Value(groupDiscount),
+                    promotionDiscountCents: Value(groupPromotionDiscount)));
+            if (fulfillment != null) {
+              await db.into(db.salesOrderFulfillmentLines).insert(
+                  SalesOrderFulfillmentLinesCompanion.insert(
+                    fulfillmentId: fulfillment.id,
+                    salesOrderLineId: detail.lineKey!,
+                    saleItemId: saleItem.id,
+                    quantityMilli: groupMilli));
+            }
             for (final part in group) {
               await db
                   .into(db.saleItemInventoryAllocations)
@@ -1470,6 +1713,47 @@ class PosRepository {
           if (updated != 1) throw StateError('Layaway already completed');
           await AuthRepository(db)
               .audit(cashierId, 'layaway.completed', '$layawayId:${sale.id}');
+        }
+        if (salesOrder != null) {
+          for (final detail in details) {
+            var remaining = detail.quantityMilli;
+            final claims = await (db.select(db.stockReservations)
+              ..where((r) => r.salesOrderLineId.equals(detail.lineKey!) &
+                  r.status.equals('active'))
+              ..orderBy([(r) => OrderingTerm(expression: r.createdAt),
+                (r) => OrderingTerm(expression: r.id)])).get();
+            for (final claim in claims) {
+              if (remaining == 0) break;
+              final used = remaining < claim.quantityMilli
+                  ? remaining : claim.quantityMilli;
+              final balance = claim.quantityMilli - used;
+              await (db.update(db.stockReservations)
+                ..where((r) => r.id.equals(claim.id)))
+                  .write(StockReservationsCompanion(
+                    quantityMilli: Value(balance),
+                    consumedMilli: Value(claim.consumedMilli + used),
+                    status: Value(balance == 0 ? 'released' : 'active'),
+                    releasedBy: balance == 0 ? Value(cashierId) :
+                        const Value.absent(),
+                    releasedAt: balance == 0 ? Value(DateTime.now()) :
+                        const Value.absent(),
+                    releaseReason: balance == 0 ?
+                        const Value('Fulfilled') : const Value.absent()));
+              remaining -= used;
+            }
+          }
+          final nowFulfilled = <String, int>{...previousFulfilled};
+          for (final detail in details) {
+            nowFulfilled.update(detail.lineKey!,
+                (quantity) => quantity + detail.quantityMilli,
+                ifAbsent: () => detail.quantityMilli);
+          }
+          final state = orderLines.values.every((line) =>
+              (nowFulfilled[line.id] ?? 0) >= line.quantityMilli)
+              ? 'full' : 'partial';
+          await AuthRepository(db).audit(cashierId,
+              'sales_order.fulfilled',
+              '${salesOrder.reference}:${sale.receiptNumber}:$state:${details.fold<int>(0, (sum, d) => sum + d.quantityMilli)}');
         }
         return CommittedSale(sale.id, total, invoiceNumber);
       });

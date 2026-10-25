@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../../core/models/active_user.dart';
 import '../../data/daos/cash_activity_repository.dart';
 import '../../data/daos/cash_session_repository.dart';
 import '../../data/daos/petty_cash_repository.dart';
+import '../../data/daos/paged_result.dart';
 import '../../data/database.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/utils/safe_message.dart';
@@ -26,6 +29,9 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
   String? categoryId, userId;
   DateTimeRange? dates;
   int revision = 0;
+  int recordPage = 0;
+  Timer? recordSearchDebounce;
+  Future<PagedResult<CashRecord>>? recordData;
   Future<_Data>? data;
   @override
   void initState() {
@@ -35,6 +41,7 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
 
   @override
   void dispose() {
+    recordSearchDebounce?.cancel();
     search.dispose();
     super.dispose();
   }
@@ -42,17 +49,46 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
   void refresh() => setState(() {
         revision++;
         data = _load();
+        recordData = _loadRecords();
+      });
+
+  Future<PagedResult<CashRecord>> _loadRecords() async {
+    final category = categoryId == null
+        ? null
+        : await (widget.repository.db
+                .select(widget.repository.db.cashExpenseCategories)
+              ..where((row) => row.id.equals(categoryId!)))
+            .getSingleOrNull();
+    return cash.recordsPage(
+        page: recordPage,
+        expensesOnly: tab == 1,
+        search: tab == 2 ? '' : search.text,
+        fund: tab == 2 ? 'petty' : fund,
+        type: tab == 2 ? 'all' : type,
+        categoryId: tab == 2 ? null : categoryId,
+        categoryName: category?.name,
+        userId: tab == 2 ? null : userId,
+        from: tab == 2 ? null : dates?.start,
+        until: tab == 2 ? null : dates?.end.add(const Duration(days: 1)));
+  }
+
+  void refreshRecords({bool resetPage = false}) => setState(() {
+        if (resetPage) recordPage = 0;
+        recordData = _loadRecords();
       });
   Future<_Data> _load() async {
     final db = widget.repository.db;
-    final rows = await cash.history();
-    final legacy = await widget.repository.history();
+    final legacy = await widget.repository.history(limit: 3);
+    final recentExpenses =
+        (await cash.page(expensesOnly: true)).items.take(6).toList();
+    final overview = await cash.expenseOverview(DateTime.now());
     final categories = await cash.categories();
     final users = await db.select(db.users).get();
     final session = await CashSessionRepository(db).active();
     return _Data(
-        rows,
         legacy,
+        recentExpenses,
+        overview,
         categories,
         {for (final u in users) u.id: u.name},
         session,
@@ -376,7 +412,8 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
   }
 
   Future<void> detail(BusinessCashMovement row, _Data d) async {
-    final reversed = d.rows.any((m) => m.reversalOfId == row.id);
+    final reversed = await cash.hasReversal(row.id);
+    if (!mounted) return;
     await showGeneralDialog<void>(
         context: context,
         barrierDismissible: true,
@@ -485,16 +522,10 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
       }
       return null;
     }
-    var before = 0;
-    for (final movement in d.rows.reversed) {
-      final delta = (movement.destination == fund ? movement.amountCents : 0) -
-          (movement.source == fund ? movement.amountCents : 0);
-      if (movement.id == row.id) {
-        return '${formatPeso(before)}  →  ${formatPeso(before + delta)}';
-      }
-      before += delta;
-    }
-    return null;
+    final before = await cash.fundBalanceBefore(row, fund);
+    final delta = (row.destination == fund ? row.amountCents : 0) -
+        (row.source == fund ? row.amountCents : 0);
+    return '${formatPeso(before)}  →  ${formatPeso(before + delta)}';
   }
 
   Widget _fact(String label, String value) => Padding(
@@ -677,17 +708,9 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
               return const Center(child: CircularProgressIndicator());
             }
             final d = snapshot.data!;
-            final now = DateTime.now();
-            final expenses = d.rows.where((m) => m.type == 'expense').toList();
-            final month = expenses
-                .where((m) =>
-                    m.createdAt.toLocal().year == now.year &&
-                    m.createdAt.toLocal().month == now.month)
-                .toList();
-            final today = expenses
-                .where((m) => DateUtils.isSameDay(m.createdAt.toLocal(), now))
-                .toList();
-            return ListView(padding: const EdgeInsets.all(20), children: [
+            final overview = d.overview;
+            return AppWorkspacePadding(
+                child: ListView(padding: EdgeInsets.zero, children: [
               AppPageHeader(
                 title: 'Expenses',
                 subtitle: 'Track business spending and cash-funded expenses.',
@@ -724,26 +747,21 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
                   'Cash Activity'
                 ],
                 selectedIndex: tab,
-                onSelected: (index) => setState(() => tab = index),
+                onSelected: (index) {
+                  setState(() => tab = index);
+                  if (index == 1 || index == 2 || index == 3) {
+                    refreshRecords(resetPage: true);
+                  }
+                },
               ),
               const Divider(),
               if (tab == 0) ...[
                 _section('THIS MONTH'),
                 Wrap(spacing: 12, runSpacing: 10, children: [
-                  _metric('Expenses',
-                      month.fold<int>(0, (s, m) => s + m.amountCents)),
-                  _metric(
-                      'Today', today.fold<int>(0, (s, m) => s + m.amountCents)),
-                  _metric(
-                      'Petty cash spent',
-                      month
-                          .where((m) => m.source == 'petty')
-                          .fold<int>(0, (s, m) => s + m.amountCents)),
-                  _metric(
-                      'Drawer expenses',
-                      month
-                          .where((m) => m.source == 'drawer')
-                          .fold<int>(0, (s, m) => s + m.amountCents)),
+                  _metric('Expenses', overview.month),
+                  _metric('Today', overview.today),
+                  _metric('Petty cash spent', overview.petty),
+                  _metric('Drawer expenses', overview.drawer),
                 ]),
                 const SizedBox(height: 20),
                 _section('CURRENT SHIFT'),
@@ -759,13 +777,13 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
                 Text('Reimbursements due · ${formatPeso(d.due)}'),
                 const SizedBox(height: 24),
                 _section('RECENT EXPENSES'),
-                if (expenses.isEmpty && d.legacy.isEmpty)
+                if (d.recentExpenses.isEmpty && d.legacy.isEmpty)
                   const Text('No expenses recorded yet.'),
-                ...expenses.take(6).map((m) => _movementTile(m, d)),
+                ...d.recentExpenses.map((m) => _movementTile(m, d)),
                 ...d.legacy.take(3).map((m) => _legacyTile(m, d)),
                 const SizedBox(height: 20),
                 _section('SPENDING BY CATEGORY'),
-                ..._categoryTotals(month).entries.take(5).map((e) => ListTile(
+                ...overview.categoryTotals.entries.take(5).map((e) => ListTile(
                     dense: true,
                     title: Text(e.key),
                     trailing: Text(formatPeso(e.value)))),
@@ -790,36 +808,92 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
                         label: const Text('Add cash')),
                 ]),
                 const SizedBox(height: 16),
-                Text(
-                    'This month spent · ${formatPeso(month.where((m) => m.source == 'petty').fold<int>(0, (s, m) => s + m.amountCents))}'),
+                Text('This month spent · ${formatPeso(overview.petty)}'),
                 Text('Last cash added · ${_lastCashAdded(d)}'),
                 const SizedBox(height: 20),
                 _section('PETTY CASH ACTIVITY'),
-                ...d.rows
-                    .where(
-                        (m) => m.source == 'petty' || m.destination == 'petty')
-                    .map((m) => _movementTile(m, d)),
-                if (!d.rows.any(
-                    (m) => m.source == 'petty' || m.destination == 'petty'))
-                  const Text('No petty cash activity yet.'),
+                SizedBox(
+                  height: (MediaQuery.sizeOf(context).height - 300)
+                      .clamp(350, 900)
+                      .toDouble(),
+                  child: FutureBuilder<PagedResult<CashRecord>>(
+                    future: recordData,
+                    builder: (context, snapshot) {
+                      final result = snapshot.data;
+                      return AppPagedListPanel(
+                        title: 'Petty Cash Activity',
+                        total: result?.totalCount ?? 0,
+                        count: result?.items.length ?? 0,
+                        page: recordPage,
+                        loading:
+                            snapshot.connectionState != ConnectionState.done,
+                        error: snapshot.hasError
+                            ? safeMessage(snapshot.error!)
+                            : null,
+                        onRetry: refreshRecords,
+                        emptyTitle: 'No petty cash activity yet',
+                        onPrevious: () {
+                          setState(() => recordPage--);
+                          refreshRecords();
+                        },
+                        onNext: () {
+                          setState(() => recordPage++);
+                          refreshRecords();
+                        },
+                        itemBuilder: (context, index) {
+                          final record = result!.items[index];
+                          return _movementTile(record.movement!, d);
+                        },
+                      );
+                    },
+                  ),
+                ),
               ] else ...[
                 _section(tab == 1 ? 'EXPENSE RECORDS' : 'CASH ACTIVITY'),
                 _filters(d),
                 const SizedBox(height: 12),
-                ..._visibleRows(d, expensesOnly: tab == 1)
-                    .map((m) => _movementTile(m, d)),
-                if (tab == 1 || tab == 3)
-                  ...d.legacy
-                      .where((m) => _legacyVisible(
-                          m, d, search.text.trim().toLowerCase()))
-                      .map((m) => _legacyTile(m, d)),
-                if (_visibleRows(d, expensesOnly: tab == 1).isEmpty &&
-                    (tab != 1 || d.legacy.isEmpty))
-                  const Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text('No matching records.')),
+                SizedBox(
+                  height: (MediaQuery.sizeOf(context).height - 300)
+                      .clamp(350, 900)
+                      .toDouble(),
+                  child: FutureBuilder<PagedResult<CashRecord>>(
+                    future: recordData,
+                    builder: (context, snapshot) {
+                      final result = snapshot.data;
+                      return AppPagedListPanel(
+                        title: tab == 1 ? 'Expense Records' : 'Cash Activity',
+                        total: result?.totalCount ?? 0,
+                        count: result?.items.length ?? 0,
+                        page: recordPage,
+                        loading:
+                            snapshot.connectionState != ConnectionState.done,
+                        error: snapshot.hasError
+                            ? safeMessage(snapshot.error!)
+                            : null,
+                        onRetry: refreshRecords,
+                        emptyTitle: search.text.trim().isNotEmpty
+                            ? 'No records match your search'
+                            : 'No records match these filters',
+                        onPrevious: () {
+                          setState(() => recordPage--);
+                          refreshRecords();
+                        },
+                        onNext: () {
+                          setState(() => recordPage++);
+                          refreshRecords();
+                        },
+                        itemBuilder: (context, index) {
+                          final record = result!.items[index];
+                          return record.movement != null
+                              ? _movementTile(record.movement!, d)
+                              : _legacyTile(record.legacy!, d);
+                        },
+                      );
+                    },
+                  ),
+                ),
               ],
-            ]);
+            ]));
           }));
 
   Widget _section(String label) => Padding(
@@ -830,22 +904,11 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
         value: formatPeso(amount),
         width: 180,
       );
-  Map<String, int> _categoryTotals(List<BusinessCashMovement> rows) {
-    final totals = <String, int>{};
-    for (final row in rows) {
-      final key = row.categoryName ?? 'Uncategorized';
-      totals[key] = (totals[key] ?? 0) + row.amountCents;
-    }
-    return Map.fromEntries(
-        totals.entries.toList()..sort((a, b) => b.value.compareTo(a.value)));
-  }
-
   String _lastCashAdded(_Data d) {
-    final items = d.rows
-        .where((m) => m.destination == 'petty' && m.type == 'replenishment');
-    return items.isEmpty
+    final latest = d.overview.lastPettyCashAdded;
+    return latest == null
         ? 'None yet'
-        : '${when(items.first.createdAt)} · ${formatPeso(items.first.amountCents)}';
+        : '${when(latest.createdAt)} · ${formatPeso(latest.amountCents)}';
   }
 
   String _typeName(BusinessCashMovement m) => switch (m.type) {
@@ -874,33 +937,6 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
           subtitle: Text(
               '${when(m.createdAt)} · Historical drawer · Legacy · ${name(m.userId, d)}'),
           trailing: Text('−${formatPeso(m.amountCents)}')));
-  List<BusinessCashMovement> _visibleRows(_Data d,
-      {required bool expensesOnly}) {
-    final query = search.text.trim().toLowerCase();
-    return d.rows.where((m) {
-      if (expensesOnly && m.type != 'expense') return false;
-      if (query.isNotEmpty &&
-          ![m.categoryName, m.payee, m.note, m.reference]
-              .join(' ')
-              .toLowerCase()
-              .contains(query)) {
-        return false;
-      }
-      if (fund != 'all' && m.source != fund && m.destination != fund) {
-        return false;
-      }
-      if (!expensesOnly && type != 'all' && m.type != type) return false;
-      if (categoryId != null && m.categoryId != categoryId) return false;
-      if (userId != null && m.recordedByUserId != userId) return false;
-      if (dates != null &&
-          (m.createdAt.isBefore(dates!.start) ||
-              !m.createdAt.isBefore(dates!.end.add(const Duration(days: 1))))) {
-        return false;
-      }
-      return true;
-    }).toList();
-  }
-
   Widget _filters(_Data d) => Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -910,22 +946,33 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
                 width: 230,
                 child: TextField(
                     controller: search,
-                    onChanged: (_) => setState(() {}),
+                    onChanged: (_) {
+                      recordSearchDebounce?.cancel();
+                      recordSearchDebounce =
+                          Timer(const Duration(milliseconds: 300), () {
+                        if (mounted) refreshRecords(resetPage: true);
+                      });
+                    },
                     decoration: const InputDecoration(
                         labelText: 'Search payee, reference, notes, category',
                         prefixIcon: Icon(Icons.search),
                         isDense: true))),
-            _filter(
-                'Paid from',
-                fund,
-                ['all', 'drawer', 'petty', 'company', 'personal'],
-                (v) => setState(() => fund = v)),
+            _filter('Paid from', fund,
+                ['all', 'drawer', 'petty', 'company', 'personal'], (v) {
+              setState(() => fund = v);
+              refreshRecords(resetPage: true);
+            }),
             if (tab == 3)
-              _filter(
-                  'Type',
-                  type,
-                  ['all', 'expense', 'replenishment', 'opening', 'reversal'],
-                  (v) => setState(() => type = v)),
+              _filter('Type', type, [
+                'all',
+                'expense',
+                'replenishment',
+                'opening',
+                'reversal'
+              ], (v) {
+                setState(() => type = v);
+                refreshRecords(resetPage: true);
+              }),
             DropdownButton<String?>(
                 value: categoryId,
                 hint: const Text('Category: All'),
@@ -935,7 +982,10 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
                   ...d.categories.map((c) => DropdownMenuItem(
                       value: c.id, child: Text('Category: ${c.name}')))
                 ],
-                onChanged: (v) => setState(() => categoryId = v)),
+                onChanged: (v) {
+                  setState(() => categoryId = v);
+                  refreshRecords(resetPage: true);
+                }),
             DropdownButton<String?>(
                 value: userId,
                 hint: const Text('User: All'),
@@ -944,7 +994,10 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
                   ...d.users.entries.map((u) => DropdownMenuItem(
                       value: u.key, child: Text('User: ${u.value}')))
                 ],
-                onChanged: (v) => setState(() => userId = v)),
+                onChanged: (v) {
+                  setState(() => userId = v);
+                  refreshRecords(resetPage: true);
+                }),
             TextButton.icon(
                 onPressed: () async {
                   final picked = await showDateRangePicker(
@@ -952,7 +1005,10 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
                       firstDate: DateTime(2020),
                       lastDate: DateTime.now().add(const Duration(days: 1)),
                       initialDateRange: dates);
-                  if (picked != null) setState(() => dates = picked);
+                  if (picked != null) {
+                    setState(() => dates = picked);
+                    refreshRecords(resetPage: true);
+                  }
                 },
                 icon: const Icon(Icons.date_range),
                 label: Text(dates == null
@@ -960,7 +1016,10 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
                     : 'Date: ${dates!.start.month}/${dates!.start.day}–${dates!.end.month}/${dates!.end.day}')),
             if (dates != null)
               IconButton(
-                  onPressed: () => setState(() => dates = null),
+                  onPressed: () {
+                    setState(() => dates = null);
+                    refreshRecords(resetPage: true);
+                  },
                   icon: const Icon(Icons.close),
                   tooltip: 'Clear dates'),
           ]);
@@ -976,20 +1035,17 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
                     ListTile(
                         title: Text(fundName(fund)),
                         subtitle: Text(() {
-                          final openings = d.rows.where((m) =>
-                              m.type == 'opening' && m.destination == fund);
-                          return openings.isEmpty
-                              ? d.rows.any((m) =>
-                                      m.source == fund || m.destination == fund)
+                          final opening = d.overview.fundOpenings[fund];
+                          return opening == null
+                              ? d.overview.fundActivity[fund] == true
                                   ? 'Existing fund activity · Opening unavailable'
                                   : 'Not initialized'
-                              : 'Opening balance ${formatPeso(openings.first.amountCents)} · ${when(openings.first.createdAt)} · ${name(openings.first.recordedByUserId, d)}';
+                              : 'Opening balance ${formatPeso(opening.amountCents)} · ${when(opening.createdAt)} · ${name(opening.recordedByUserId, d)}';
                         }()),
                         trailing: Text(
                             formatPeso(fund == 'petty' ? d.petty : d.company))),
                     if (widget.user.role == UserRole.owner &&
-                        !d.rows.any(
-                            (m) => m.source == fund || m.destination == fund))
+                        d.overview.fundActivity[fund] != true)
                       TextButton(
                           onPressed: () {
                             Navigator.pop(dialog);
@@ -1008,27 +1064,6 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
             ],
           ));
 
-  bool _legacyVisible(PettyCashEntry row, _Data data, String query) {
-    if (fund != 'all' && fund != 'drawer') return false;
-    if (type != 'all' && type != 'expense') return false;
-    if (categoryId != null &&
-        !data.categories.any((category) =>
-            category.id == categoryId && category.name == row.category)) {
-      return false;
-    }
-    if (userId != null && userId != row.userId) return false;
-    if (query.isNotEmpty &&
-        !'${row.category} ${row.note ?? ''}'.toLowerCase().contains(query)) {
-      return false;
-    }
-    if (dates != null &&
-        (row.createdAt.isBefore(dates!.start) ||
-            !row.createdAt.isBefore(dates!.end.add(const Duration(days: 1))))) {
-      return false;
-    }
-    return true;
-  }
-
   Widget _filter(String label, String current, List<String> options,
           ValueChanged<String> changed) =>
       DropdownButton<String>(
@@ -1045,15 +1080,25 @@ class _PettyCashScreenState extends State<PettyCashScreen> {
 }
 
 class _Data {
-  final List<BusinessCashMovement> rows;
   final List<PettyCashEntry> legacy;
+  final List<BusinessCashMovement> recentExpenses;
+  final CashExpenseOverview overview;
   final List<CashExpenseCategory> categories;
   final Map<String, String> users;
   final CashSession? session;
   final int? drawer;
   final int petty, company, due;
-  _Data(this.rows, this.legacy, this.categories, this.users, this.session,
-      this.drawer, this.petty, this.company, this.due);
+  _Data(
+      this.legacy,
+      this.recentExpenses,
+      this.overview,
+      this.categories,
+      this.users,
+      this.session,
+      this.drawer,
+      this.petty,
+      this.company,
+      this.due);
 }
 
 /// Keeps field controllers alive until Flutter unmounts the dialog subtree.

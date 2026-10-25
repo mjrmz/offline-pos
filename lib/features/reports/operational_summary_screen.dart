@@ -67,17 +67,16 @@ class _OperationalSummaryScreenState extends State<OperationalSummaryScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Column(children: [
-        Padding(
-            padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-            child: AppPageHeader(
-              title: 'Operations',
-              subtitle: 'Current operational issues across your business.',
-              action: IconButton(
-                  tooltip: 'Refresh dashboard',
-                  onPressed: refreshing ? null : _retry,
-                  icon: const Icon(Icons.refresh)),
-            )),
+  Widget build(BuildContext context) => AppWorkspacePadding(
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        AppPageHeader(
+            title: 'Operations',
+            subtitle: 'Current operational issues across your business.',
+            action: IconButton(
+                tooltip: 'Refresh dashboard',
+                onPressed: refreshing ? null : _retry,
+                icon: const Icon(Icons.refresh))),
         if (refreshing) const LinearProgressIndicator(minHeight: 2),
         Expanded(
             child: FutureBuilder<OperationalSummary>(
@@ -100,9 +99,9 @@ class _OperationalSummaryScreenState extends State<OperationalSummaryScreen> {
                       data.activeLayaway == 0;
                   return LayoutBuilder(builder: (context, constraints) {
                     final narrow = constraints.maxWidth < 780;
-                    final contentWidth = constraints.maxWidth - 48;
+                    final contentWidth = constraints.maxWidth;
                     return ListView(
-                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                        padding: const EdgeInsets.only(top: 8),
                         children: [
                           Wrap(spacing: 12, runSpacing: 12, children: [
                             _kpi(
@@ -198,7 +197,7 @@ class _OperationalSummaryScreenState extends State<OperationalSummaryScreen> {
                         ]);
                   });
                 }))
-      ]);
+      ]));
 
   Widget _kpi(String label, int value, IconData icon, VoidCallback? action,
       double width, bool narrow) {

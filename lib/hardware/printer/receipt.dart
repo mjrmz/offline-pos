@@ -20,6 +20,7 @@ class ReceiptDocument {
   final int? birInvoiceNumber;
   final String? walkInName;
   final String? walkInContact;
+  final List<(String, int)> promotionDiscounts;
 
   const ReceiptDocument(
       this.reference,
@@ -36,7 +37,8 @@ class ReceiptDocument {
       this.customHeader = '',
       this.customFooter = '',
       this.walkInName,
-      this.walkInContact]);
+      this.walkInContact,
+      this.promotionDiscounts = const []]);
 
   factory ReceiptDocument.fromDetail(SaleDetail detail, String storeName,
           [PrinterSettings? settings]) =>
@@ -48,7 +50,10 @@ class ReceiptDocument {
         [
           for (var i = 0; i < detail.items.length; i++)
             ReceiptLine(detail.productNames[i], detail.items[i].quantity,
-                detail.items[i].unitPriceCents, detail.items[i].lineTotalCents,
+                detail.items[i].unitPriceCents,
+                detail.items[i].lineTotalCents +
+                    detail.items[i].manualDiscountCents +
+                    detail.items[i].promotionDiscountCents,
                 quantityMilli: detail.items[i].quantityMilli,
                 unit: detail.items[i].saleUnit,
                 mode: detail.items[i].saleMode,
@@ -68,6 +73,8 @@ class ReceiptDocument {
         settings?.receiptFooter ?? '',
         detail.summary.sale.walkInName,
         detail.summary.sale.walkInContact,
+        [for (final application in detail.promotionApplications)
+          (application.promotionName, application.discountCents)],
       );
 }
 
@@ -155,7 +162,11 @@ class EscPosEncoder {
       }
     }
     line('-' * columns);
-    pair('Subtotal', receiptMoney(receipt.totalCents));
+    pair('Subtotal', receiptMoney(receipt.lines.fold<int>(0,
+        (sum, item) => sum + item.totalCents)));
+    for (final promotion in receipt.promotionDiscounts) {
+      pair('Promo: ${promotion.$1}', '-${receiptMoney(promotion.$2)}');
+    }
     pair('Total', receiptMoney(receipt.totalCents));
     pair('Payment: ${receipt.paymentMethod}',
         receiptMoney(receipt.appliedCents));

@@ -9,8 +9,9 @@ import '../../shared/utils/safe_message.dart';
 class LoyaltySettingsScreen extends StatefulWidget {
   final AppDatabase db;
   final ActiveUser user;
+  final bool embedded;
   const LoyaltySettingsScreen(
-      {super.key, required this.db, required this.user});
+      {super.key, required this.db, required this.user, this.embedded = false});
 
   @override
   State<LoyaltySettingsScreen> createState() => _LoyaltySettingsScreenState();
@@ -67,7 +68,15 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
     try {
       await LoyaltyRepository(widget.db).updateSettings(widget.user.id,
           LoyaltySettings(enabled, spendCents, redeemPoints, discountCents));
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        if (widget.embedded) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Loyalty rules saved.'),
+              duration: Duration(seconds: 3)));
+        } else {
+          Navigator.pop(context);
+        }
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -87,43 +96,47 @@ class _LoyaltySettingsScreenState extends State<LoyaltySettingsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-      appBar: AppBar(title: const Text('Loyalty rewards')),
-      body: loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(padding: const EdgeInsets.all(20), children: [
-              SwitchListTile(
-                  title: const Text('Enable rewards'),
-                  value: enabled,
-                  onChanged: widget.user.can(PosPermission.manageSettings)
-                      ? (v) => setState(() => enabled = v)
-                      : null),
-              TextField(
-                  controller: earn,
-                  enabled: widget.user.can(PosPermission.manageSettings),
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                      labelText: 'Pesos spent per point')),
-              TextField(
-                  controller: redeem,
-                  enabled: widget.user.can(PosPermission.manageSettings),
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                      labelText: 'Points per redemption unit')),
-              TextField(
-                  controller: value,
-                  enabled: widget.user.can(PosPermission.manageSettings),
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                      labelText: 'Peso discount per unit')),
-              const SizedBox(height: 16),
-              if (widget.user.can(PosPermission.manageSettings))
-                Align(
-                    alignment: Alignment.centerLeft,
-                    child: FilledButton(
-                        onPressed: saving ? null : _save,
-                        child: const Text('Save rules'))),
-            ]));
+  Widget build(BuildContext context) => widget.embedded
+      ? _content()
+      : Scaffold(
+          appBar: AppBar(title: const Text('Loyalty rewards')),
+          body: _content());
+
+  Widget _content() => loading
+      ? const Center(child: CircularProgressIndicator())
+      : ListView(padding: const EdgeInsets.all(20), children: [
+          SwitchListTile(
+              title: const Text('Enable rewards'),
+              value: enabled,
+              onChanged: widget.user.can(PosPermission.manageSettings)
+                  ? (v) => setState(() => enabled = v)
+                  : null),
+          TextField(
+              controller: earn,
+              enabled: widget.user.can(PosPermission.manageSettings),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration:
+                  const InputDecoration(labelText: 'Pesos spent per point')),
+          TextField(
+              controller: redeem,
+              enabled: widget.user.can(PosPermission.manageSettings),
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                  labelText: 'Points per redemption unit')),
+          TextField(
+              controller: value,
+              enabled: widget.user.can(PosPermission.manageSettings),
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration:
+                  const InputDecoration(labelText: 'Peso discount per unit')),
+          const SizedBox(height: 16),
+          if (widget.user.can(PosPermission.manageSettings))
+            Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton(
+                    onPressed: saving ? null : _save,
+                    child: const Text('Save rules'))),
+        ]);
 }

@@ -84,7 +84,7 @@ void main() {
                 ..where((item) => item.quotationId.equals(quote.id)))
               .get())
           .single;
-      expect(db.schemaVersion, 40);
+      expect(db.schemaVersion, 46);
       expect(restored.productId, product);
       expect(restored.unitPriceCents, 50000);
       expect(restored.customNotes, isNull);
@@ -110,7 +110,7 @@ void main() {
       raw.execute('PRAGMA user_version = 22');
       raw.dispose();
       db = AppDatabase.forTesting(NativeDatabase(file));
-      expect(db.schemaVersion, 40);
+      expect(db.schemaVersion, 46);
       expect((await db.select(db.rmaCases).get()).single.reference, 'RMA-OLD');
       expect(await db.select(db.serialWarrantySnapshots).get(), isEmpty);
     } finally {
@@ -137,7 +137,7 @@ void main() {
       db = AppDatabase.forTesting(NativeDatabase(file));
       expect((await db.select(db.rmaCases).get()).single.reference, 'RMA-OLD');
       expect(await db.select(db.rmaLifecycleEvents).get(), isEmpty);
-      expect(db.schemaVersion, 40);
+      expect(db.schemaVersion, 46);
     } finally {
       await db?.close();
       await dir.delete(recursive: true);
@@ -168,7 +168,7 @@ void main() {
       expect((await db.select(db.rmaCases).get()).single.reference, 'RMA-18');
       expect(await db.select(db.saleItemRefunds).get(), isEmpty);
       expect(await db.select(db.inboundRmaReplacements).get(), isEmpty);
-      expect(db.schemaVersion, 40);
+      expect(db.schemaVersion, 46);
     } finally {
       await db?.close();
       await dir.delete(recursive: true);
@@ -196,7 +196,7 @@ void main() {
       final cases = await db.select(db.rmaCases).get();
       expect(cases.single.reference, 'RMA-OLD');
       expect(cases.single.replacementSerialUnitId, isNull);
-      expect(db.schemaVersion, 40);
+      expect(db.schemaVersion, 46);
     } finally {
       await db?.close();
       await dir.delete(recursive: true);
@@ -235,7 +235,7 @@ void main() {
       raw.execute('PRAGMA user_version = 16');
       raw.dispose();
       db = AppDatabase.forTesting(NativeDatabase(file));
-      expect(db.schemaVersion, 40);
+      expect(db.schemaVersion, 46);
       expect(
           (await db.select(db.customerCreditEntries).get()).single.amountCents,
           500);
@@ -405,7 +405,7 @@ void main() {
       raw.execute('PRAGMA user_version = 10');
       raw.dispose();
       db = AppDatabase.forTesting(NativeDatabase(file));
-      expect(db.schemaVersion, 40);
+      expect(db.schemaVersion, 46);
       expect((await db.select(db.products).get()).single.name, 'Rice');
       expect(
           (await db.select(db.productLots).get()).single.quantityMilli, 2000);

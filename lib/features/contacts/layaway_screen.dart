@@ -11,18 +11,21 @@ import '../../shared/utils/money.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/widgets/transaction_picker.dart';
 import '../../shared/widgets/app_workspace.dart';
+import '../../shared/theme/app_layout.dart';
 
 class LayawayScreen extends StatefulWidget {
   final LayawayRepository repository;
   final DirectoryRepository directory;
   final PosRepository products;
   final ActiveUser user;
+  final String? initialLayawayId;
   const LayawayScreen(
       {super.key,
       required this.repository,
       required this.directory,
       required this.products,
-      required this.user});
+      required this.user,
+      this.initialLayawayId});
   @override
   State<LayawayScreen> createState() => _LayawayScreenState();
 }
@@ -39,6 +42,7 @@ class _LayawayScreenState extends State<LayawayScreen> {
   int resultTotal = 0;
   bool loading = false;
   int requestGeneration = 0;
+  bool initialOpened = false;
   Map<String, int> paidById = {};
   Map<String, int> overview = {};
   @override
@@ -53,7 +57,8 @@ class _LayawayScreenState extends State<LayawayScreen> {
     try {
       final next = await widget.repository
           .page(page: page, search: query, status: filter);
-      final total = await widget.repository.countPage(search: query, status: filter);
+      final total =
+          await widget.repository.countPage(search: query, status: filter);
       final paid = await widget.repository.balancesFor(next.map((r) => r.id));
       final metrics = await widget.repository.overview();
       final directory = await widget.directory.customers();
@@ -70,6 +75,15 @@ class _LayawayScreenState extends State<LayawayScreen> {
           error = null;
           loading = false;
         });
+        if (!initialOpened && widget.initialLayawayId != null) {
+          initialOpened = true;
+          final initial = await widget.repository.byId(widget.initialLayawayId!);
+          if (initial != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) showLayaway(initial);
+            });
+          }
+        }
       }
     } catch (failure) {
       if (mounted && generation == requestGeneration) {
@@ -701,76 +715,106 @@ class _LayawayScreenState extends State<LayawayScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-      appBar: AppBar(title: const Text('Layaway'), actions: [
-        IconButton(onPressed: refresh, icon: const Icon(Icons.refresh))
-      ]),
-      body: LayoutBuilder(builder: (context, viewport) => SingleChildScrollView(
-        physics: viewport.maxWidth < 600 ? null : const NeverScrollableScrollPhysics(),
-        child: SizedBox(
-          height: viewport.maxWidth < 600 && viewport.maxHeight < 1200
-              ? 1200 : viewport.maxHeight,
-          child: Padding(padding: const EdgeInsets.all(24), child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start, children: [
-        AppPageHeader(
-          title: 'Layaway',
-          subtitle: 'Manage reserved purchases and customer payments.',
-          action: FilledButton.icon(
-            onPressed: create,
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('New layaway'),
-          ),
-        ),
-        if (error != null)
-          Text(error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error)),
-        Wrap(spacing: 10, runSpacing: 10, children: [
-          AppMetricTile(
-              label: 'Active', value: '${overview['active'] ?? 0}', width: 175),
-          AppMetricTile(
-              label: 'Outstanding balance',
-              value: formatPeso(overview['outstanding'] ?? 0),
-              width: 215),
-          AppMetricTile(
-              label: 'Completed',
-              value: '${overview['completed'] ?? 0}',
-              width: 175),
-          AppMetricTile(
-              label: 'Cancelled',
-              value: '${overview['cancelled'] ?? 0}',
-              width: 175),
-        ]),
-        const SizedBox(height: 16),
-        AppSearchField(
-            hintText: 'Search customer or layaway reference',
-            onChanged: changeSearch),
-        const SizedBox(height: 12),
-        Wrap(spacing: 8, children: [
-          for (final status in ['all', 'active', 'completed', 'cancelled'])
-            AppFilterChip(
-                label: status[0].toUpperCase() + status.substring(1),
-                selected: filter == status,
-                onSelected: () => changeFilter(status)),
-        ]),
-        const SizedBox(height: 16),
-        Expanded(child: AppPagedListPanel(
-          key: const Key('layaway-list-panel'),
-          title: 'Layaways', total: resultTotal, count: rows.length,
-          page: page, loading: loading,
-          emptyTitle: 'No layaways found',
-          onPrevious: () => changePage(page - 1),
-          onNext: () => changePage(page + 1),
-          itemBuilder: (context, index) {
-            final row = rows[index];
-            return AppEntityRow(
-            onTap: () => showLayaway(row),
-            title: row.reference,
-            subtitle:
-                '${customers.where((c) => c.id == row.customerId).firstOrNull?.name ?? 'Customer'} · ${MaterialLocalizations.of(context).formatMediumDate(row.createdAt)}\nTotal ${formatPeso(row.totalCents)} · Paid ${formatPeso(paidById[row.id] ?? 0)}',
-            amount: formatPeso(row.totalCents - (paidById[row.id] ?? 0)),
-            status: AppSemanticStatusBadge(
-                label: row.status[0].toUpperCase() + row.status.substring(1)),
-          );
-          },
-        )),
-      ]))))));
+      body: LayoutBuilder(
+          builder: (context, viewport) => SingleChildScrollView(
+              physics: viewport.maxWidth < 600
+                  ? null
+                  : const NeverScrollableScrollPhysics(),
+              child: SizedBox(
+                  height: viewport.maxWidth < 600 && viewport.maxHeight < 1200
+                      ? 1200
+                      : viewport.maxHeight,
+                  child: Padding(
+                      padding: AppLayout.workspacePadding(viewport.maxWidth),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            AppPageHeader(
+                              title: 'Layaway',
+                              subtitle:
+                                  'Manage reserved purchases and customer payments.',
+                              action: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Refresh layaways',
+                                    onPressed: refresh,
+                                    icon: const Icon(Icons.refresh),
+                                  ),
+                                  const SizedBox(width: AppLayout.space8),
+                                  FilledButton.icon(
+                                    onPressed: create,
+                                    icon: const Icon(Icons.add, size: 18),
+                                    label: const Text('New layaway'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            AppMetricGrid(children: [
+                              AppMetricTile(
+                                label: 'Active',
+                                value: '${overview['active'] ?? 0}',
+                              ),
+                              AppMetricTile(
+                                label: 'Outstanding balance',
+                                value: formatPeso(overview['outstanding'] ?? 0),
+                              ),
+                              AppMetricTile(
+                                label: 'Completed',
+                                value: '${overview['completed'] ?? 0}',
+                              ),
+                              AppMetricTile(
+                                label: 'Cancelled',
+                                value: '${overview['cancelled'] ?? 0}',
+                              ),
+                            ]),
+                            const SizedBox(height: 16),
+                            AppSearchField(
+                                hintText:
+                                    'Search customer or layaway reference',
+                                onChanged: changeSearch),
+                            const SizedBox(height: 12),
+                            Wrap(spacing: 8, children: [
+                              for (final status in [
+                                'all',
+                                'active',
+                                'completed',
+                                'cancelled'
+                              ])
+                                AppFilterChip(
+                                    label: status[0].toUpperCase() +
+                                        status.substring(1),
+                                    selected: filter == status,
+                                    onSelected: () => changeFilter(status)),
+                            ]),
+                            const SizedBox(height: 16),
+                            Expanded(
+                                child: AppPagedListPanel(
+                              key: const Key('layaway-list-panel'),
+                              title: 'Layaways',
+                              total: resultTotal,
+                              count: rows.length,
+                              page: page,
+                              loading: loading,
+                              error: error,
+                              onRetry: refresh,
+                              emptyTitle: 'No layaways found',
+                              onPrevious: () => changePage(page - 1),
+                              onNext: () => changePage(page + 1),
+                              itemBuilder: (context, index) {
+                                final row = rows[index];
+                                return AppEntityRow(
+                                  onTap: () => showLayaway(row),
+                                  title: row.reference,
+                                  subtitle:
+                                      '${customers.where((c) => c.id == row.customerId).firstOrNull?.name ?? 'Customer'} · ${MaterialLocalizations.of(context).formatMediumDate(row.createdAt)}\nTotal ${formatPeso(row.totalCents)} · Paid ${formatPeso(paidById[row.id] ?? 0)}',
+                                  amount: formatPeso(
+                                      row.totalCents - (paidById[row.id] ?? 0)),
+                                  status: AppSemanticStatusBadge(
+                                      label: row.status[0].toUpperCase() +
+                                          row.status.substring(1)),
+                                );
+                              },
+                            )),
+                          ]))))));
 }

@@ -52,7 +52,7 @@ void main() {
     expect(snapshot.walkInContact, '0917 123 4567');
     expect((await PosRepository(db).stockLevels())[productId]!.$1, 5000);
     final backup = await BackupService(db, dir).create(BackupKind.manual);
-    expect(BackupService.verify(backup.file), 40);
+    expect(BackupService.verify(backup.file), 46);
     await reopened.remove(
         ActiveUser(owner, 'Owner', UserRole.owner), rows.first.id,
         discard: true);

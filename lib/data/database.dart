@@ -69,6 +69,8 @@ class InventoryMovements extends Table {
   TextColumn get reason =>
       text()(); // 'sale' | 'purchase' | 'adjustment' | 'damaged'
   TextColumn get referenceId => text().nullable()(); // e.g. Sale.id
+  TextColumn get inventoryLayerId =>
+      text().nullable().references(InventoryLayers, #id)();
   DateTimeColumn get createdAt =>
       dateTime().clientDefault(() => DateTime.now())();
 
@@ -87,6 +89,7 @@ class Sales extends Table {
   TextColumn get walkInContact => text().nullable()();
   TextColumn get heldReference => text().nullable()();
   IntColumn get totalCents => integer()();
+  TextColumn get discountSource => text().withDefault(const Constant('none'))();
   IntColumn get birInvoiceNumber => integer().nullable().unique()();
   TextColumn get status => text().withDefault(
       const Constant('completed'))(); // completed | voided | refunded
@@ -112,6 +115,8 @@ class SaleItems extends Table {
   IntColumn get unitPriceCents => integer()();
   IntColumn get lineTotalCents => integer().withDefault(const Constant(0))();
   IntColumn get manualDiscountCents =>
+      integer().withDefault(const Constant(0))();
+  IntColumn get promotionDiscountCents =>
       integer().withDefault(const Constant(0))();
 
   @override
@@ -142,6 +147,23 @@ class SaleManualDiscounts extends Table {
   TextColumn get requestedBy => text().references(Users, #id)();
   TextColumn get authorizedBy => text().references(Users, #id)();
   DateTimeColumn get authorizedAt => dateTime()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class SalePromotionApplications extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get saleId => text().references(Sales, #id)();
+  TextColumn get promotionId => text().nullable()();
+  TextColumn get promotionReference => text()();
+  TextColumn get promotionName => text()();
+  TextColumn get promotionType => text()();
+  TextColumn get stackingMode => text()();
+  IntColumn get priority => integer()();
+  IntColumn get eligibleSubtotalCents => integer()();
+  IntColumn get discountCents => integer()();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -249,6 +271,47 @@ class AuditLogs extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class Promotions extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get reference => text().unique()();
+  TextColumn get name => text()();
+  TextColumn get description => text().withDefault(const Constant(''))();
+  TextColumn get type => text()();
+  TextColumn get rewardKind => text()();
+  IntColumn get rewardValue => integer()(); // percent basis points or cents
+  IntColumn get minimumSubtotalCents => integer().nullable()();
+  TextColumn get targetMode => text()();
+  BoolColumn get isActive => boolean().withDefault(const Constant(false))();
+  BoolColumn get isDraft => boolean().withDefault(const Constant(true))();
+  IntColumn get priority => integer().withDefault(const Constant(100))();
+  TextColumn get stackingMode =>
+      text().withDefault(const Constant('exclusive'))();
+  DateTimeColumn get startsAt => dateTime().nullable()();
+  DateTimeColumn get endsAt => dateTime().nullable()();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  DateTimeColumn get updatedAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  TextColumn get createdBy => text()();
+  TextColumn get updatedBy => text()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class PromotionProductTargets extends Table {
+  TextColumn get promotionId => text().references(Promotions, #id)();
+  TextColumn get productId => text().references(Products, #id)();
+  @override
+  Set<Column> get primaryKey => {promotionId, productId};
+}
+
+class PromotionCategoryTargets extends Table {
+  TextColumn get promotionId => text().references(Promotions, #id)();
+  TextColumn get categoryId => text().references(Categories, #id)();
+  @override
+  Set<Column> get primaryKey => {promotionId, categoryId};
+}
+
 class Settings extends Table {
   IntColumn get id => integer()();
   TextColumn get storeName => text().withDefault(const Constant(''))();
@@ -328,6 +391,7 @@ class Customers extends Table {
   TextColumn get phone => text().nullable()();
   TextColumn get address => text().nullable()();
   TextColumn get notes => text().nullable()();
+  IntColumn get creditLimitCents => integer().nullable()();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
   DateTimeColumn get createdAt =>
       dateTime().clientDefault(() => DateTime.now())();
@@ -344,8 +408,19 @@ class CustomerCreditEntries extends Table {
   TextColumn get kind => text()();
   TextColumn get paymentMethod => text().nullable()();
   TextColumn get note => text().nullable()();
+  TextColumn get reference => text().nullable()();
   DateTimeColumn get createdAt =>
       dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class CustomerCreditPaymentAllocations extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get paymentEntryId =>
+      text().references(CustomerCreditEntries, #id)();
+  TextColumn get saleId => text().references(Sales, #id)();
+  IntColumn get amountCents => integer()();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -479,6 +554,38 @@ class StockReceivingItems extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+// An explicit marker prevents pre-F1 receipts with unknown settlement from
+// becoming collectible just because their inventory was received.
+class SupplierPayableSources extends Table {
+  TextColumn get receivingId => text().references(StockReceivings, #id)();
+  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {receivingId};
+}
+
+class SupplierPayments extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  IntColumn get sequence => integer().unique()();
+  TextColumn get supplierId => text().references(Suppliers, #id)();
+  IntColumn get amountCents => integer()();
+  TextColumn get paymentMethod => text()();
+  DateTimeColumn get paidAt => dateTime()();
+  TextColumn get paidBy => text().references(Users, #id)();
+  TextColumn get notes => text().nullable()();
+  TextColumn get cashSessionId => text().nullable().references(CashSessions, #id)();
+  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class SupplierPaymentAllocations extends Table {
+  TextColumn get paymentId => text().references(SupplierPayments, #id)();
+  TextColumn get receivingId => text().references(StockReceivings, #id)();
+  IntColumn get allocatedCents => integer()();
+  @override
+  Set<Column> get primaryKey => {paymentId, receivingId};
+}
+
 class InventoryLayers extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get productId => text().references(Products, #id)();
@@ -493,6 +600,53 @@ class InventoryLayers extends Table {
   DateTimeColumn get expiryDate => dateTime().nullable()();
   DateTimeColumn get receivedAt =>
       dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class PurchaseReturns extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  IntColumn get sequence => integer().unique()();
+  TextColumn get supplierId => text().references(Suppliers, #id)();
+  TextColumn get receivingId => text().references(StockReceivings, #id)();
+  TextColumn get purchaseOrderId =>
+      text().nullable().references(PurchaseOrders, #id)();
+  TextColumn get supplierReturnReference => text().nullable()();
+  DateTimeColumn get returnDate => dateTime()();
+  TextColumn get notes => text().nullable()();
+  TextColumn get status => text().withDefault(const Constant('draft'))();
+  TextColumn get resolution =>
+      text().withDefault(const Constant('unresolved'))();
+  TextColumn get creditReference => text().nullable()();
+  IntColumn get creditAmountCents => integer().nullable()();
+  TextColumn get replacementReceivingId =>
+      text().nullable().references(StockReceivings, #id)();
+  TextColumn get createdBy => text().references(Users, #id)();
+  DateTimeColumn get createdAt =>
+      dateTime().clientDefault(() => DateTime.now())();
+  TextColumn get finalizedBy => text().nullable().references(Users, #id)();
+  DateTimeColumn get finalizedAt => dateTime().nullable()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class PurchaseReturnLines extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get purchaseReturnId => text().references(PurchaseReturns, #id)();
+  TextColumn get productId => text().references(Products, #id)();
+  TextColumn get receivingItemId =>
+      text().references(StockReceivingItems, #id)();
+  TextColumn get inventoryLayerId => text().references(InventoryLayers, #id)();
+  TextColumn get serialUnitId =>
+      text().nullable().references(SerialUnits, #id)();
+  IntColumn get quantityMilli => integer()();
+  TextColumn get unit => text().withDefault(const Constant('pcs'))();
+  IntColumn get unitCostCents => integer()();
+  IntColumn get returnValueCents => integer()();
+  TextColumn get batchNumber => text().nullable()();
+  TextColumn get serialNumber => text().nullable()();
+  TextColumn get reason => text()();
+  TextColumn get condition => text().nullable()();
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -736,6 +890,83 @@ class QuotationItems extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+class SalesOrders extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get reference => text().unique()();
+  TextColumn get customerId => text().references(Customers, #id)();
+  TextColumn get customerNameSnapshot => text()();
+  TextColumn get status => text().withDefault(const Constant('draft'))();
+  TextColumn get sourceQuotationId => text().nullable().references(Quotations, #id)();
+  TextColumn get fulfillmentMethod => text().nullable()();
+  DateTimeColumn get requestedDate => dateTime().nullable()();
+  TextColumn get notes => text().nullable()();
+  IntColumn get subtotalCents => integer()();
+  IntColumn get discountCents => integer().withDefault(const Constant(0))();
+  IntColumn get totalCents => integer()();
+  TextColumn get createdBy => text().references(Users, #id)();
+  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
+  DateTimeColumn get updatedAt => dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class SalesOrderLines extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get salesOrderId => text().references(SalesOrders, #id)();
+  TextColumn get productId => text().nullable().references(Products, #id)();
+  TextColumn get descriptionSnapshot => text()();
+  TextColumn get skuSnapshot => text().nullable()();
+  TextColumn get unitSnapshot => text()();
+  TextColumn get saleMode => text().withDefault(const Constant('ordinary'))();
+  IntColumn get extraCents => integer().withDefault(const Constant(0))();
+  IntColumn get quantityMilli => integer()();
+  IntColumn get unitPriceCents => integer()();
+  IntColumn get discountCents => integer().withDefault(const Constant(0))();
+  IntColumn get lineTotalCents => integer()();
+  IntColumn get sortOrder => integer()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class SalesOrderFulfillments extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get salesOrderId => text().references(SalesOrders, #id)();
+  TextColumn get saleId => text().unique().references(Sales, #id)();
+  TextColumn get createdBy => text().references(Users, #id)();
+  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class SalesOrderFulfillmentLines extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get fulfillmentId => text().references(SalesOrderFulfillments, #id)();
+  TextColumn get salesOrderLineId => text().references(SalesOrderLines, #id)();
+  TextColumn get saleItemId => text().unique().references(SaleItems, #id)();
+  IntColumn get quantityMilli => integer()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class StockReservations extends Table {
+  TextColumn get id => text().clientDefault(() => _uuid())();
+  TextColumn get reference => text().unique()();
+  TextColumn get salesOrderId => text().references(SalesOrders, #id)();
+  TextColumn get salesOrderLineId => text().references(SalesOrderLines, #id)();
+  TextColumn get sourceReference => text()();
+  TextColumn get productId => text().references(Products, #id)();
+  IntColumn get quantityMilli => integer()();
+  IntColumn get consumedMilli => integer().withDefault(const Constant(0))();
+  TextColumn get status => text().withDefault(const Constant('active'))();
+  TextColumn get createdBy => text().references(Users, #id)();
+  DateTimeColumn get createdAt => dateTime().clientDefault(() => DateTime.now())();
+  TextColumn get releasedBy => text().nullable().references(Users, #id)();
+  DateTimeColumn get releasedAt => dateTime().nullable()();
+  TextColumn get releaseReason => text().nullable()();
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 class QuotationSourcingRequirements extends Table {
   TextColumn get id => text().clientDefault(() => _uuid())();
   TextColumn get quotationId => text().references(Quotations, #id)();
@@ -926,6 +1157,7 @@ class ZReadings extends Table {
   SaleItems,
   HeldSales,
   SaleManualDiscounts,
+  SalePromotionApplications,
   Payments,
   Users,
   CashSessions,
@@ -939,6 +1171,7 @@ class ZReadings extends Table {
   TankEmptyMovements,
   Customers,
   CustomerCreditEntries,
+  CustomerCreditPaymentAllocations,
   CustomerRefundObligations,
   CustomerRefundSettlements,
   Suppliers,
@@ -946,7 +1179,12 @@ class ZReadings extends Table {
   PurchaseOrderLines,
   StockReceivings,
   StockReceivingItems,
+  SupplierPayableSources,
+  SupplierPayments,
+  SupplierPaymentAllocations,
   InventoryLayers,
+  PurchaseReturns,
+  PurchaseReturnLines,
   StockCounts,
   StockCountLines,
   InventoryAdjustments,
@@ -961,6 +1199,11 @@ class ZReadings extends Table {
   InboundRmaReplacements,
   Quotations,
   QuotationItems,
+  SalesOrders,
+  SalesOrderLines,
+  StockReservations,
+  SalesOrderFulfillments,
+  SalesOrderFulfillmentLines,
   QuotationSourcingRequirements,
   PurchaseOrderLineSourceLinks,
   QuotationDocumentSettings,
@@ -974,6 +1217,9 @@ class ZReadings extends Table {
   PriceHistory,
   BirComplianceState,
   ZReadings,
+  Promotions,
+  PromotionProductTargets,
+  PromotionCategoryTargets,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
@@ -985,12 +1231,38 @@ class AppDatabase extends _$AppDatabase {
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 40;
+  int get schemaVersion => 49;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) async {
           await m.createAll();
+          await customStatement('CREATE INDEX IF NOT EXISTS supplier_payments_supplier_date ON supplier_payments (supplier_id, paid_at DESC)');
+          await customStatement('CREATE INDEX IF NOT EXISTS supplier_allocations_receiving ON supplier_payment_allocations (receiving_id)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS purchase_returns_supplier_date ON purchase_returns (supplier_id, return_date DESC)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS purchase_returns_receiving ON purchase_returns (receiving_id)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS purchase_return_lines_return ON purchase_return_lines (purchase_return_id)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS sale_promotion_applications_sale ON sale_promotion_applications (sale_id)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS sale_promotion_applications_promotion ON sale_promotion_applications (promotion_id, sale_id)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS promotions_updated ON promotions (updated_at DESC, id DESC)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS sales_orders_customer_date ON sales_orders (customer_id, created_at DESC)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS sales_order_lines_order ON sales_order_lines (sales_order_id, sort_order)');
+          await customStatement(
+              "CREATE INDEX IF NOT EXISTS stock_reservations_active_product ON stock_reservations (product_id, status)");
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS stock_reservations_order ON stock_reservations (sales_order_id, status)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS sales_order_fulfillments_order ON sales_order_fulfillments (sales_order_id, created_at DESC)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS sales_order_fulfillment_lines_order_line ON sales_order_fulfillment_lines (sales_order_line_id)');
           await _createRoleTables(this);
           await _createCommercialReturnTables(this);
           await _createLoyaltyTables(this);
@@ -1013,6 +1285,10 @@ class AppDatabase extends _$AppDatabase {
           await customStatement(
               'CREATE INDEX IF NOT EXISTS customer_credit_entries_customer '
               'ON customer_credit_entries (customer_id)');
+          await customStatement(
+              'CREATE INDEX IF NOT EXISTS customer_credit_allocations_sale ON customer_credit_payment_allocations (sale_id)');
+          await customStatement(
+              'CREATE UNIQUE INDEX IF NOT EXISTS customer_credit_payment_reference ON customer_credit_entries (reference) WHERE reference IS NOT NULL');
           await customStatement(
               'CREATE INDEX IF NOT EXISTS stock_receivings_supplier '
               'ON stock_receivings (supplier_id)');
@@ -1714,6 +1990,131 @@ class AppDatabase extends _$AppDatabase {
             }
           }
           if (from < 40) await _createRoleTables(this);
+          if (from < 41) {
+            await m.createTable(promotions);
+            await m.createTable(promotionProductTargets);
+            await m.createTable(promotionCategoryTargets);
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS promotions_updated ON promotions (updated_at DESC, id DESC)');
+          }
+          if (from < 42) {
+            final saleColumns =
+                (await customSelect('PRAGMA table_info(sales)').get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!saleColumns.contains('discount_source')) {
+              await m.addColumn(sales, sales.discountSource);
+            }
+            final itemColumns =
+                (await customSelect('PRAGMA table_info(sale_items)').get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!itemColumns.contains('promotion_discount_cents')) {
+              await m.addColumn(saleItems, saleItems.promotionDiscountCents);
+            }
+            final table = await customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='sale_promotion_applications'")
+                .get();
+            if (table.isEmpty) await m.createTable(salePromotionApplications);
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS sale_promotion_applications_sale ON sale_promotion_applications (sale_id)');
+          }
+          if (from < 43) {
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS sale_promotion_applications_promotion ON sale_promotion_applications (promotion_id, sale_id)');
+          }
+          if (from < 44) {
+            await _createRoleTables(this);
+            final movementColumns =
+                (await customSelect('PRAGMA table_info(inventory_movements)')
+                        .get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!movementColumns.contains('inventory_layer_id')) {
+              await m.addColumn(
+                  inventoryMovements, inventoryMovements.inventoryLayerId);
+            }
+            await m.createTable(purchaseReturns);
+            await m.createTable(purchaseReturnLines);
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS purchase_returns_supplier_date ON purchase_returns (supplier_id, return_date DESC)');
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS purchase_returns_receiving ON purchase_returns (receiving_id)');
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS purchase_return_lines_return ON purchase_return_lines (purchase_return_id)');
+          }
+          if (from < 45) {
+            final customerColumns =
+                (await customSelect('PRAGMA table_info(customers)').get())
+                    .map((row) => row.read<String>('name'))
+                    .toSet();
+            if (!customerColumns.contains('credit_limit_cents')) {
+              await m.addColumn(customers, customers.creditLimitCents);
+            }
+            final creditColumns = (await customSelect(
+                        'PRAGMA table_info(customer_credit_entries)')
+                    .get())
+                .map((row) => row.read<String>('name'))
+                .toSet();
+            if (!creditColumns.contains('reference')) {
+              await m.addColumn(
+                  customerCreditEntries, customerCreditEntries.reference);
+            }
+            final allocationTables = await customSelect(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='customer_credit_payment_allocations'")
+                .get();
+            if (allocationTables.isEmpty) {
+              await m.createTable(customerCreditPaymentAllocations);
+            }
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS customer_credit_allocations_sale ON customer_credit_payment_allocations (sale_id)');
+            await customStatement(
+                'CREATE UNIQUE INDEX IF NOT EXISTS customer_credit_payment_reference ON customer_credit_entries (reference) WHERE reference IS NOT NULL');
+          }
+          if (from < 46) {
+            await m.createTable(supplierPayableSources);
+            await m.createTable(supplierPayments);
+            await m.createTable(supplierPaymentAllocations);
+            await customStatement('CREATE INDEX IF NOT EXISTS supplier_payments_supplier_date ON supplier_payments (supplier_id, paid_at DESC)');
+            await customStatement('CREATE INDEX IF NOT EXISTS supplier_allocations_receiving ON supplier_payment_allocations (receiving_id)');
+          }
+          if (from < 47) {
+            await m.createTable(salesOrders);
+            await m.createTable(salesOrderLines);
+            await customStatement('CREATE INDEX IF NOT EXISTS sales_orders_customer_date ON sales_orders (customer_id, created_at DESC)');
+            await customStatement('CREATE INDEX IF NOT EXISTS sales_order_lines_order ON sales_order_lines (sales_order_id, sort_order)');
+          }
+          if (from < 48) {
+            await m.createTable(stockReservations);
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS stock_reservations_active_product ON stock_reservations (product_id, status)');
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS stock_reservations_order ON stock_reservations (sales_order_id, status)');
+          }
+          if (from < 49) {
+            final lineColumns = (await customSelect(
+                'PRAGMA table_info(sales_order_lines)').get())
+                .map((row) => row.read<String>('name')).toSet();
+            if (!lineColumns.contains('sale_mode')) {
+              await m.addColumn(salesOrderLines, salesOrderLines.saleMode);
+            }
+            if (!lineColumns.contains('extra_cents')) {
+              await m.addColumn(salesOrderLines, salesOrderLines.extraCents);
+            }
+            final reservationColumns = (await customSelect(
+                'PRAGMA table_info(stock_reservations)').get())
+                .map((row) => row.read<String>('name')).toSet();
+            if (!reservationColumns.contains('consumed_milli')) {
+              await m.addColumn(stockReservations,
+                  stockReservations.consumedMilli);
+            }
+            await m.createTable(salesOrderFulfillments);
+            await m.createTable(salesOrderFulfillmentLines);
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS sales_order_fulfillments_order ON sales_order_fulfillments (sales_order_id, created_at DESC)');
+            await customStatement(
+                'CREATE INDEX IF NOT EXISTS sales_order_fulfillment_lines_order_line ON sales_order_fulfillment_lines (sales_order_line_id)');
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');

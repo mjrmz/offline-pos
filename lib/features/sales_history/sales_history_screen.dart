@@ -21,6 +21,8 @@ import '../../data/daos/customer_credit_repository.dart';
 import '../contacts/new_customer_rma_page.dart';
 import '../contacts/rma_screen.dart';
 import '../contacts/quotation_screen.dart';
+import '../contacts/sales_orders_screen.dart';
+import '../../data/daos/sales_order_repository.dart';
 import '../contacts/customer_profile_screen.dart';
 
 String saleReference(SaleSummary row) => row.sale.receiptNumber == null
@@ -416,6 +418,14 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
               .select(widget.sales.repository.db.quotations)
             ..where((q) => q.convertedSaleId.equals(saleId)))
           .getSingleOrNull();
+      final fulfillment = await (widget.sales.repository.db
+              .select(widget.sales.repository.db.salesOrderFulfillments)
+            ..where((f) => f.saleId.equals(saleId))).getSingleOrNull();
+      final sourceSalesOrder = fulfillment == null ? null :
+          await (widget.sales.repository.db.select(
+              widget.sales.repository.db.salesOrders)
+            ..where((o) => o.id.equals(fulfillment.salesOrderId)))
+              .getSingleOrNull();
       final customer = detail.summary.sale.customerId == null
           ? null
           : await (widget.sales.repository.db
@@ -691,6 +701,24 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                                 label: Text(
                                     'Source quotation · ${sourceQuotation.reference}'),
                               ),
+                            if (sourceSalesOrder != null && widget.pos != null)
+                              TextButton.icon(
+                                onPressed: () async {
+                                  Navigator.pop(context);
+                                  await Navigator.of(this.context).push(
+                                    MaterialPageRoute(builder: (_) =>
+                                      SalesOrdersScreen(
+                                        repository: SalesOrderRepository(
+                                            widget.sales.repository.db),
+                                        directory: DirectoryRepository(
+                                            widget.sales.repository.db),
+                                        products: widget.pos!,
+                                        user: widget.user,
+                                        initialReference:
+                                            sourceSalesOrder.reference)));
+                                },
+                                icon: const Icon(Icons.assignment_outlined),
+                                label: Text('Sales Order · ${sourceSalesOrder.reference}')),
                             Text('LIFECYCLE SUMMARY',
                                 style: Theme.of(context).textTheme.labelMedium),
                             ListTile(
@@ -763,6 +791,23 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                               for (final discount in manualDiscounts)
                                 Text(
                                     '${discount.read<String>('scope') == 'line' ? 'Line' : 'Order'} ${discount.read<String>('kind') == 'percent' ? '${discount.read<int>('value')}%' : formatPeso(discount.read<int>('value'))} · -${formatPeso(discount.read<int>('effect_cents'))}\n${discount.read<String>('reason')} · Requested by ${discount.readNullable<String>('requested_name') ?? 'Unknown'} · Authorized by ${discount.read<String>('authorized_name')}'),
+                              const Divider(),
+                            ],
+                            if (detail.promotionApplications.isNotEmpty) ...[
+                              Text('AUTOMATIC PROMOTION',
+                                  style: Theme.of(context).textTheme.labelMedium),
+                              for (final application in detail.promotionApplications)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Row(children: [
+                                    Expanded(child: Text(
+                                        '${application.promotionName} · ${application.promotionReference}\n${application.promotionType.replaceAll('_', ' ')}')),
+                                    Text('-${formatPeso(application.discountCents)}'),
+                                  ]),
+                                ),
+                              for (final item in detail.items.where(
+                                  (item) => item.promotionDiscountCents > 0))
+                                Text('${item.productName} · saved ${formatPeso(item.promotionDiscountCents)}'),
                               const Divider(),
                             ],
                             if (reward != null &&
@@ -1051,10 +1096,9 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
     return Scaffold(
       body: Center(
           child: SizedBox(
-              width: 1500,
+              width: double.infinity,
               height: double.infinity,
-              child: Padding(
-                padding: const EdgeInsets.all(16),
+              child: AppWorkspacePadding(
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [

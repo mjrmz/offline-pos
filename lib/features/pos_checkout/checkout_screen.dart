@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import '../../shared/widgets/app_workspace.dart';
 import 'package:drift/drift.dart' show TableUpdateQuery, Variable;
 import '../../core/models/cart.dart';
 import '../../core/models/manual_discount.dart';
+import '../../core/models/promotion_evaluation.dart';
+import '../../core/services/promotion_checkout_service.dart';
+import '../../data/daos/promotion_repository.dart';
 import '../../core/models/active_user.dart';
 import '../../core/models/product.dart';
 import '../../core/models/business_product.dart';
@@ -17,6 +21,7 @@ import '../../shared/utils/money.dart';
 import '../../shared/widgets/expiry_date_field.dart';
 import '../../shared/widgets/record_details_drawer.dart';
 import '../../data/daos/pos_repository.dart';
+import '../../data/daos/sales_order_repository.dart';
 import '../../data/daos/loyalty_repository.dart';
 import '../../data/daos/held_sale_repository.dart';
 import '../../data/daos/directory_repository.dart';
@@ -27,6 +32,8 @@ import '../../data/daos/inventory_health_repository.dart';
 import '../../data/database.dart';
 import '../inventory/inventory_overview.dart' show inventoryMovementLabel;
 import '../../hardware/printer/receipt_service.dart';
+import '../../hardware/printer/label_printing.dart';
+import '../inventory/label_print_dialog.dart';
 import '../../hardware/barcode/camera_scanner.dart';
 import 'dart:io';
 import 'dart:async';
@@ -106,6 +113,7 @@ class SaleCompletion {
   final int earnedPoints;
   final int? pointsBalance;
   final String? printIssue;
+  final List<(String, int)> promotionDiscounts;
   const SaleCompletion(
       this.saleId,
       this.reference,
@@ -115,7 +123,8 @@ class SaleCompletion {
       this.customer,
       this.earnedPoints,
       this.pointsBalance,
-      this.printIssue);
+      this.printIssue,
+      [this.promotionDiscounts = const []]);
 
   SaleCompletion withPrintIssue(String? issue) => SaleCompletion(
       saleId,
@@ -126,7 +135,8 @@ class SaleCompletion {
       customer,
       earnedPoints,
       pointsBalance,
-      issue);
+      issue,
+      promotionDiscounts);
 }
 
 class _FocusIntent extends Intent {
@@ -138,6 +148,8 @@ class _ScanKeyIntent extends Intent {
   const _ScanKeyIntent(this.key);
 }
 
+enum CheckoutDiscountSource { none, automaticPromotion, manual }
+
 class CheckoutScreen extends StatefulWidget {
   final PosRepository repository;
   final ActiveUser user;
@@ -146,6 +158,9 @@ class CheckoutScreen extends StatefulWidget {
   final CameraBarcodeScanner? camera;
   final String? quotationId;
   final String? quotationReference;
+  final String? salesOrderId;
+  final String? salesOrderReference;
+  final Map<String, int>? salesOrderQuantities;
   final bool focusMode;
   final VoidCallback? onToggleFocus;
   const CheckoutScreen(
@@ -157,6 +172,9 @@ class CheckoutScreen extends StatefulWidget {
       this.camera,
       this.quotationId,
       this.quotationReference,
+      this.salesOrderId,
+      this.salesOrderReference,
+      this.salesOrderQuantities,
       this.focusMode = false,
       this.onToggleFocus});
   @override
@@ -186,6 +204,96 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   String? walkInName;
   String? walkInContact;
   ManualDiscount? manualDiscount;
+  CheckoutDiscountSource discountSource = CheckoutDiscountSource.none;
+  PromotionEvaluationResult? promotionPreview;
+  String _promotionFingerprint = '';
+  int _promotionGeneration = 0;
+  bool _promotionPending = false;
+  bool _promotionScheduled = false;
+  String get _cartFingerprint => cart.lines.map((line) =>
+    '${line.id}:${line.product.id}:${line.product.categoryId}:${line.mode}:${line.quantityMilli}:${line.totalCents}').join('|');
+
+  int get promotionDiscountCents =>
+      discountSource == CheckoutDiscountSource.automaticPromotion &&
+              !_promotionPending && _promotionFingerprint == _cartFingerprint
+          ? promotionPreview?.totalDiscountCents ?? 0
+          : 0;
+  bool get _promotionReady => !_promotionPending &&
+      _promotionFingerprint == _cartFingerprint;
+
+  Future<void> _evaluatePromotions() async {
+    if (widget.salesOrderId != null) {
+      _promotionFingerprint = _cartFingerprint;
+      promotionPreview = null;
+      _promotionPending = false;
+      return;
+    }
+    final fingerprint = _cartFingerprint;
+    final generation = ++_promotionGeneration;
+    _promotionFingerprint = fingerprint;
+    if (cart.isEmpty) {
+      if (mounted) {
+        setState(() {
+        promotionPreview = null;
+        _promotionPending = false;
+        _promotionFingerprint = fingerprint;
+        if (discountSource != CheckoutDiscountSource.manual) {
+          discountSource = CheckoutDiscountSource.none;
+        }
+        });
+      }
+      return;
+    }
+    if (mounted) {
+      setState(() => _promotionPending = true);
+    }
+    try {
+      final preview = await PromotionCheckoutService(
+              PromotionRepository(widget.repository.db))
+          .evaluate(widget.user, cart, DateTime.now());
+      if (!mounted || generation != _promotionGeneration ||
+          fingerprint != _cartFingerprint) {
+        return;
+      }
+      setState(() {
+        promotionPreview = preview;
+        _promotionFingerprint = fingerprint;
+        _promotionPending = false;
+        if (discountSource != CheckoutDiscountSource.manual) {
+          discountSource = preview.totalDiscountCents > 0
+              ? CheckoutDiscountSource.automaticPromotion
+              : CheckoutDiscountSource.none;
+        }
+      });
+    } catch (error) {
+      if (!mounted || generation != _promotionGeneration) {
+        return;
+      }
+      setState(() {
+        _promotionPending = false;
+        promotionPreview = null;
+        _promotionFingerprint = fingerprint;
+        if (discountSource != CheckoutDiscountSource.manual) {
+          discountSource = CheckoutDiscountSource.none;
+        }
+        message = safeMessage(error);
+      });
+    }
+  }
+
+  void _schedulePromotionEvaluation() {
+    if (completion != null || _promotionScheduled ||
+        _promotionFingerprint == _cartFingerprint) {
+      return;
+    }
+    _promotionScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _promotionScheduled = false;
+      if (mounted) {
+        _evaluatePromotions();
+      }
+    });
+  }
   String? heldReference;
   SaleCompletion? completion;
   int redeemPoints = 0;
@@ -207,7 +315,51 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   int get payableCents =>
-      cart.totalCents - manualDiscountCents - rewardDiscountCents;
+      cart.totalCents - manualDiscountCents - promotionDiscountCents - rewardDiscountCents;
+
+  Widget _promotionRow(BuildContext context) {
+    final preview = promotionPreview!;
+    final names = preview.recommendedApplications
+        .map((application) => application.name).join(' + ');
+    return Row(children: [
+      Expanded(child: TextButton.icon(
+        key: const Key('applied-promotion-row'),
+        onPressed: _showPromotionDetails,
+        icon: const Icon(Icons.local_offer_outlined, size: 18),
+        label: Text('Promotion · $names', maxLines: 1,
+          overflow: TextOverflow.ellipsis))),
+      Text('-${money(promotionDiscountCents)}',
+        style: TextStyle(color: Theme.of(context).colorScheme.primary)),
+    ]);
+  }
+
+  Future<void> _showPromotionDetails() async {
+    final preview = promotionPreview;
+    if (preview == null) return;
+    await showDialog<void>(context: context, builder: (dialog) => AlertDialog(
+      title: const Text('Available promotions'),
+      content: SizedBox(width: 440, child: SingleChildScrollView(child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final application in preview.eligiblePromotions) ...[
+            Text(preview.recommendedApplications.any((selected) =>
+                selected.promotionId == application.promotionId)
+                ? 'APPLIED' : 'OTHER ELIGIBLE',
+              style: Theme.of(dialog).textTheme.labelSmall),
+            Text(application.name, style: Theme.of(dialog).textTheme.titleMedium),
+            Text('${application.type == 'percentage' ? 'Percentage discount' : application.type == 'fixed' ? 'Fixed discount' : 'Minimum spend discount'} · Save ${money(application.discountCents)}'),
+            Text('Eligible subtotal: ${money(application.eligibleSubtotalCents)}'),
+            Text('Applied to: ${application.affectedLineIds.map((id) => cart.lines.where((line) => line.id == id).firstOrNull?.product.name ?? 'Item').join(', ')}'),
+            const SizedBox(height: 12),
+          ],
+          const Text('The best valid combination is applied automatically.'),
+        ],
+      ))),
+      actions: [TextButton(onPressed: () => Navigator.pop(dialog),
+        child: const Text('Close'))],
+    ));
+  }
   String? message;
   String? cartNotice;
   Timer? _cartNoticeTimer;
@@ -263,9 +415,13 @@ class CheckoutScreenState extends State<CheckoutScreen> {
           db.productBusinessConfigurations,
           db.layaways,
           db.layawayItems,
+          db.stockReservations,
         ]))
         .listen((_) => refresh());
-    refresh().then((_) => _loadQuotation());
+    refresh().then((_) async {
+      await _loadQuotation();
+      await _loadSalesOrder();
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) barcodeFocus.requestFocus();
     });
@@ -325,6 +481,55 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     }
   }
 
+  Future<void> _loadSalesOrder() async {
+    final orderId = widget.salesOrderId;
+    if (orderId == null) return;
+    try {
+      final db = widget.repository.db;
+      final order = await (db.select(db.salesOrders)
+        ..where((o) => o.id.equals(orderId))).getSingle();
+      if (order.status != 'confirmed') {
+        throw StateError('Sales Order is no longer confirmed');
+      }
+      final lines = await (db.select(db.salesOrderLines)
+        ..where((l) => l.salesOrderId.equals(orderId))).get();
+      final fulfilled = await SalesOrderRepository(db).fulfilledByLine(orderId);
+      if (!mounted) return;
+      customerId = order.customerId;
+      for (final line in lines) {
+        final quantity = widget.salesOrderQuantities?[line.id] ?? 0;
+        if (quantity == 0) continue;
+        if (line.productId == null || quantity < 0 ||
+            quantity > line.quantityMilli - (fulfilled[line.id] ?? 0)) {
+          throw StateError('Sales Order quantity changed');
+        }
+        final product = products.where((p) => p.id == line.productId)
+            .firstOrNull;
+        if (product == null || !product.isActive) {
+          throw StateError('${line.descriptionSnapshot} is unavailable');
+        }
+        final snapshot = PosProduct(product.id, line.descriptionSnapshot,
+            product.barcode, line.unitPriceCents - line.extraCents,
+            product.isActive, line.skuSnapshot, product.categoryId,
+            product.costCents, product.lowStockThreshold, product.business,
+            product.serialTracking, product.pricingPolicy);
+        final before = fulfilled[line.id] ?? 0;
+        final after = before + quantity;
+        final discount = line.discountCents * after ~/ line.quantityMilli -
+            line.discountCents * before ~/ line.quantityMilli;
+        final cartLine = CartLine(snapshot, quantity, id: line.id,
+            mode: line.saleMode, extraCents: line.extraCents);
+        cartLine.pricedTotalCents = Quantity.lineCents(
+            line.unitPriceCents, quantity) - discount;
+        cart.restoreLine(cartLine);
+      }
+      if (cart.isEmpty) throw StateError('Choose a remaining quantity');
+      setState(() {});
+    } catch (failure) {
+      if (mounted) setState(() => message = safeMessage(failure));
+    }
+  }
+
   @override
   void dispose() {
     _cartNoticeTimer?.cancel();
@@ -354,6 +559,17 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       final rows = await widget.repository.products();
       final categoryRows = await widget.repository.categories();
       final levels = await widget.repository.stockLevels();
+      final ownClaims = <String, int>{};
+      if (widget.salesOrderId != null) {
+        final claims = await (widget.repository.db.select(
+            widget.repository.db.stockReservations)
+          ..where((r) => r.salesOrderId.equals(widget.salesOrderId!))).get();
+        for (final claim in claims.where((claim) => claim.status == 'active')) {
+          ownClaims.update(claim.productId,
+              (quantity) => quantity + claim.quantityMilli,
+              ifAbsent: () => claim.quantityMilli);
+        }
+      }
       final customerRows = await widget.repository.db
           .select(widget.repository.db.customers)
           .get();
@@ -363,7 +579,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
           categories = categoryRows;
           stockMilli = {
             for (final entry in levels.entries)
-              entry.key: entry.value.$1 - entry.value.$2,
+              entry.key: entry.value.$1 - entry.value.$2 +
+                  (ownClaims[entry.key] ?? 0),
           };
           customers = customerRows.where((c) => c.isActive).toList();
         });
@@ -374,7 +591,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Future<void> _refreshLayerPrices() async {
-    if (widget.quotationId != null) return;
+    if (widget.quotationId != null || widget.salesOrderId != null) return;
     final revision = ++pricingRevision;
     final lines = cart.lines
         .where((line) => line.product.pricingPolicy == 'layer')
@@ -521,7 +738,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
 
   Future<void> addToCart(PosProduct product,
       {String? scannedSerialId, String? scannedSerialLabel}) async {
-    if (widget.quotationId != null) {
+    if (widget.quotationId != null || widget.salesOrderId != null) {
       setState(() => message =
           'This checkout is linked to a saved quotation. Cancel conversion to change the items.');
       return;
@@ -909,6 +1126,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
 
   Future<void> checkout() async {
     if (busy || pricingPending) return;
+    await _evaluatePromotions();
+    if (!mounted || _promotionPending) return;
     final issue = _cartIssue() ?? quotationStockIssue;
     if (issue != null) {
       setState(() => message = issue);
@@ -947,7 +1166,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     try {
       final result = credit
           ? await sales.checkoutCredit(cart, customerId!, cashCents,
-              manualDiscount: manualDiscount, heldReference: heldReference)
+              manualDiscount: manualDiscount, heldReference: heldReference,
+              salesOrderId: widget.salesOrderId)
           : await sales.checkout(cart, cashCents,
               quotationId: widget.quotationId,
               customerId: customerId,
@@ -956,12 +1176,17 @@ class CheckoutScreenState extends State<CheckoutScreen> {
               manualDiscount: manualDiscount,
               walkInName: walkInName,
               walkInContact: walkInContact,
-              heldReference: heldReference);
+              heldReference: heldReference,
+              salesOrderId: widget.salesOrderId);
       lastSaleId = result.saleId;
       final completedSale =
           await (widget.repository.db.select(widget.repository.db.sales)
                 ..where((row) => row.id.equals(result.saleId)))
               .getSingle();
+      final completedPromotions = await (widget.repository.db
+              .select(widget.repository.db.salePromotionApplications)
+            ..where((row) => row.saleId.equals(result.saleId)))
+          .get();
       saleReference = 'Receipt #${completedSale.receiptNumber ?? 'Legacy sale'}'
           '${completedSale.birInvoiceNumber == null ? '' : '\nInvoice #${completedSale.birInvoiceNumber}'}';
       final completionMessage = result.protectionWarning
@@ -1009,11 +1234,14 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                         hardware.printerAttempted &&
                         !hardware.printed
                     ? 'Sale completed. Receipt printing failed.'
-                    : null);
+                    : null,
+                [for (final application in completedPromotions)
+                  (application.promotionName, application.discountCents)]);
           });
         }
       }
-      if (mounted && widget.quotationId != null) {
+      if (mounted && (widget.quotationId != null ||
+          widget.salesOrderId != null)) {
         Navigator.of(context).pop(result.saleId);
       }
     } catch (e) {
@@ -1025,6 +1253,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _schedulePromotionEvaluation();
     final compact = MediaQuery.sizeOf(context).width < 850;
     final scanFirst = layoutPreference.layout == PosLayoutType.scanFirst;
     return Scaffold(
@@ -1032,12 +1261,14 @@ class CheckoutScreenState extends State<CheckoutScreen> {
               layoutPreference.showShortcutBarFor(layoutPreference.layout)
           ? _shortcutBar(context)
           : null,
-      appBar: widget.quotationId == null
+      appBar: widget.quotationId == null && widget.salesOrderId == null
           ? null
           : AppBar(
-              title: Text(
-                  'Converting quotation ${widget.quotationReference ?? ''}'),
-              bottom: quotePriceChanges.isEmpty && quotationStockIssue == null
+              title: Text(widget.salesOrderId == null
+                  ? 'Converting quotation ${widget.quotationReference ?? ''}'
+                  : 'Fulfilling Sales Order ${widget.salesOrderReference ?? ''}'),
+              bottom: widget.salesOrderId != null ||
+                      (quotePriceChanges.isEmpty && quotationStockIssue == null)
                   ? null
                   : PreferredSize(
                       preferredSize: const Size.fromHeight(46),
@@ -1181,6 +1412,9 @@ class CheckoutScreenState extends State<CheckoutScreen> {
               ListTile(
                   title: const Text('Total'),
                   trailing: Text(money(done.totalCents))),
+              for (final promotion in done.promotionDiscounts)
+                ListTile(title: Text('Promotion · ${promotion.$1}'),
+                    trailing: Text('-${money(promotion.$2)}')),
               for (final payment in done.payments)
                 ListTile(
                     title: Text(payment.$1), trailing: Text(money(payment.$2))),
@@ -1241,6 +1475,9 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       walkInName = null;
       walkInContact = null;
       manualDiscount = null;
+      discountSource = CheckoutDiscountSource.none;
+      promotionPreview = null;
+      _promotionFingerprint = '';
       heldReference = null;
       redeemPoints = 0;
       rewardDiscountCents = 0;
@@ -1527,6 +1764,9 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       walkInName = draft.walkInName;
       walkInContact = draft.walkInContact;
       manualDiscount = priceChanged ? null : draft.discount;
+      discountSource = manualDiscount == null
+          ? CheckoutDiscountSource.none
+          : CheckoutDiscountSource.manual;
       redeemPoints = draft.redeemPoints;
       rewardDiscountCents = resumedRewardDiscount;
       heldReference = held.reference;
@@ -1593,7 +1833,10 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Future<void> _scanPayment() async {
-    if (cart.isEmpty || pricingPending || _cartIssue() != null) return;
+    if (cart.isEmpty || pricingPending || !_promotionReady ||
+        _cartIssue() != null) {
+      return;
+    }
     await showDialog<void>(
         context: context,
         builder: (dialog) => StatefulBuilder(builder: (context, update) {
@@ -1757,7 +2000,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   Widget _shortcutBar(BuildContext context) {
     final profile = PosShortcutProfile.forLayout(layoutPreference.layout);
     final selected = profile.hasCartNavigation && _selectedLine != null;
-    final canPay = !cart.isEmpty && !pricingPending && _cartIssue() == null;
+    final canPay = !cart.isEmpty && !pricingPending &&
+        _promotionReady && _cartIssue() == null;
     return Material(
       color: Theme.of(context).colorScheme.surfaceContainerLow,
       child: SafeArea(
@@ -2004,12 +2248,6 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                   overflow: TextOverflow.ellipsis),
             ),
             const Spacer(),
-            if (widget.onToggleFocus != null)
-              TextButton.icon(
-                onPressed: widget.onToggleFocus,
-                icon: const Icon(Icons.fullscreen, size: 18),
-                label: Text(widget.focusMode ? 'Exit focus' : 'Focus mode'),
-              ),
             IconButton(
                 tooltip: 'More actions F10',
                 onPressed: _scanMoreActions,
@@ -2254,6 +2492,10 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                         )),
             ]),
           )),
+          if (promotionDiscountCents > 0) ...[
+            _promotionRow(context),
+            const SizedBox(height: 8),
+          ],
           const SizedBox(height: 8),
           Container(
               key: const Key('scan-checkout-footer'),
@@ -2291,7 +2533,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                 FilledButton(
                   key: const Key('pay-button'),
                   onPressed:
-                      lines.isEmpty || pricingPending || _cartIssue() != null
+                      lines.isEmpty || pricingPending || !_promotionReady ||
+                              _cartIssue() != null
                           ? null
                           : _scanPayment,
                   child: Text('Pay ${money(payableCents)}  F8'),
@@ -2302,8 +2545,11 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
-  Future<void> _openProductLookup() async {
-    final search = TextEditingController();
+  Future<void> openProductLookup(String query) =>
+      _openProductLookup(initialQuery: query);
+
+  Future<void> _openProductLookup({String initialQuery = ''}) async {
+    final search = TextEditingController(text: initialQuery);
     try {
       await showDialog<void>(
           context: context,
@@ -2698,6 +2944,10 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       child: Text(label, style: Theme.of(context).textTheme.labelSmall));
 
   Future<void> _chooseCustomer() async {
+    if (widget.salesOrderId != null) {
+      setState(() => message = 'Sales Order customer is fixed.');
+      return;
+    }
     String query = '';
     final summaries =
         await DirectoryRepository(widget.repository.db).customerSummaries();
@@ -3073,10 +3323,47 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                     ],
                   )));
       if (approved != null && mounted) {
-        setState(() {
-          manualDiscount = approved;
-          cashController.clear();
-        });
+        var useManual = true;
+        if (promotionPreview != null &&
+            promotionPreview!.totalDiscountCents > 0 &&
+            discountSource == CheckoutDiscountSource.automaticPromotion) {
+          final basis = approved.scope == 'line'
+              ? cart.lines.where((line) => line.id == approved.lineKey)
+                  .fold<int>(0, (sum, line) => sum + line.totalCents)
+              : cart.totalCents;
+          final decision = await showDialog<bool>(context: context,
+            builder: (dialog) => AlertDialog(
+              title: const Text('Choose discount'),
+              content: SizedBox(width: 420, child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Text('This sale already has an automatic promotion applied. Choose which discount should be used.'),
+                  const SizedBox(height: 16),
+                  Text('Automatic promotion', style: Theme.of(dialog).textTheme.labelMedium),
+                  Text(promotionPreview!.recommendedApplications
+                      .map((application) => application.name).join(' + ')),
+                  Text('-${money(promotionPreview!.totalDiscountCents)}'),
+                  const SizedBox(height: 12),
+                  Text('Manual discount', style: Theme.of(dialog).textTheme.labelMedium),
+                  Text(approved.kind == 'percent' ? '${approved.value}%' : money(approved.value)),
+                  Text('-${money(approved.effectOn(basis))}'),
+                ])),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancel')),
+                TextButton(onPressed: () => Navigator.pop(dialog, false), child: const Text('Keep promotion')),
+                FilledButton(onPressed: () => Navigator.pop(dialog, true), child: const Text('Use manual discount')),
+              ],
+            ));
+          if (decision == null) return;
+          useManual = decision;
+        }
+        if (useManual) {
+          setState(() {
+            manualDiscount = approved;
+            discountSource = CheckoutDiscountSource.manual;
+            cashController.clear();
+          });
+        }
       }
     } finally {
       await waitForDialogExit();
@@ -3100,6 +3387,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     final cartIssue = _cartIssue();
     final ready = !busy &&
         !pricingPending &&
+        _promotionReady &&
         !cart.isEmpty &&
         cart.totalCents > 0 &&
         cashError == null &&
@@ -3278,8 +3566,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   void _changeQuantity(CartLine line, int milli) {
-    if (widget.quotationId != null) {
-      _showCartNotice('The accepted quotation quantity is fixed.');
+    if (widget.quotationId != null || widget.salesOrderId != null) {
+      _showCartNotice('The linked order quantity is fixed for this checkout.');
       return;
     }
     final issue = _quantityIssue(line, milli);
@@ -3387,8 +3675,10 @@ class CheckoutScreenState extends State<CheckoutScreen> {
 
   Widget _cartLine(BuildContext context, CartLine line) {
     final canDecrease = widget.quotationId == null &&
+        widget.salesOrderId == null &&
         _quantityIssue(line, line.quantityMilli - Quantity.scale) == null;
     final canIncrease = widget.quotationId == null &&
+        widget.salesOrderId == null &&
         _quantityIssue(line, line.quantityMilli + Quantity.scale) == null;
     final mode = saleModeLabel(line.mode);
     final serials = line.serialIds
@@ -3411,7 +3701,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                 Expanded(
                     child: Text(line.product.name,
                         style: Theme.of(context).textTheme.titleSmall)),
-                if (widget.quotationId != null &&
+                if ((widget.quotationId != null || widget.salesOrderId != null) &&
                     (line.product.serialTracking ||
                         line.product.business.batch))
                   TextButton(
@@ -3420,7 +3710,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                 IconButton(
                     tooltip: 'Remove ${line.product.name}',
                     visualDensity: VisualDensity.compact,
-                    onPressed: widget.quotationId != null
+                    onPressed: widget.quotationId != null ||
+                            widget.salesOrderId != null
                         ? null
                         : () {
                             setState(() => cart.remove(line.id));
@@ -3582,6 +3873,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       const Divider(),
       _amountRow(context, 'Subtotal', cart.subtotalCents),
+      if (promotionDiscountCents > 0) _promotionRow(context),
       if (customerId != null && !credit)
         TextButton.icon(
             onPressed: _redeemRewards,
@@ -3600,7 +3892,12 @@ class CheckoutScreenState extends State<CheckoutScreen> {
         if (manualDiscount != null)
           IconButton(
               tooltip: 'Remove manual discount',
-              onPressed: () => setState(() => manualDiscount = null),
+              onPressed: () => setState(() {
+                manualDiscount = null;
+                discountSource = promotionPreview?.totalDiscountCents == 0
+                    ? CheckoutDiscountSource.none
+                    : CheckoutDiscountSource.automaticPromotion;
+              }),
               icon: const Icon(Icons.close)),
       ]),
       if (manualDiscount != null)
@@ -3717,6 +4014,7 @@ class ProductScreen extends StatefulWidget {
   final bool createOnOpen;
   final String initialFilter;
   final String? initialBarcode;
+  final String? initialProductId;
   const ProductScreen(
       {super.key,
       required this.repository,
@@ -3726,6 +4024,7 @@ class ProductScreen extends StatefulWidget {
       this.onCreated,
       this.createOnOpen = false,
       this.initialBarcode,
+      this.initialProductId,
       this.initialFilter = 'All'});
   @override
   State<ProductScreen> createState() => _ProductScreenState();
@@ -3772,8 +4071,20 @@ class _ProductScreenState extends State<ProductScreen> {
         planning = plans;
         inventoryHealth = health.products;
       });
+      if (widget.initialProductId != null && !_openedInitialProduct) {
+        _openedInitialProduct = true;
+        final product = rows.where((row) => row.id == widget.initialProductId)
+            .firstOrNull;
+        if (product != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) edit(product);
+          });
+        }
+      }
     }
   }
+
+  bool _openedInitialProduct = false;
 
   String _range(Iterable<int> values, int fallback) {
     final sorted = values.toSet().toList()..sort();
@@ -5955,6 +6266,14 @@ class _ProductScreenState extends State<ProductScreen> {
           OutlinedButton(
               onPressed: () {
                 Navigator.pop(context);
+                showLabelPrintDialog(context, widget.repository.db,
+                    [LabelItem(product, 1)], products: widget.repository,
+                    actorId: widget.auth.current?.id);
+              },
+              child: const Text('Print label')),
+          OutlinedButton(
+              onPressed: () {
+                Navigator.pop(context);
                 _editPlanning(product, plan);
               },
               child: const Text('Reorder settings')),
@@ -6082,202 +6401,191 @@ class _ProductScreenState extends State<ProductScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Products')),
-        body: Center(
-            child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1280),
-                child: ListView(padding: const EdgeInsets.all(20), children: [
-                  if (error != null)
-                    Text(error!,
-                        style: TextStyle(
-                            color: Theme.of(context).colorScheme.error)),
-                  Wrap(spacing: 8, children: [
-                    FilledButton.icon(
-                        onPressed: () => edit(),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add product')),
-                    PopupMenuButton<String>(
-                        tooltip: 'More',
-                        onSelected: (value) {
-                          if (value == 'categories') addCategory();
-                        },
-                        itemBuilder: (context) => const [
-                              PopupMenuItem(
-                                  value: 'categories',
-                                  child: Text('Manage categories'))
-                            ],
-                        child: const Padding(
-                            padding: EdgeInsets.all(12),
-                            child: Icon(Icons.more_horiz))),
-                  ]),
-                  const SizedBox(height: 16),
-                  TextField(
-                    decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search),
-                        labelText: 'Search name, SKU, or barcode'),
-                    onChanged: (value) =>
-                        setState(() => search = value.toLowerCase().trim()),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(spacing: 8, runSpacing: 4, children: [
-                    for (final choice in [
-                      'All',
-                      'Active',
-                      'Inactive',
-                      'Low stock',
-                      'Out of stock',
-                      'Reorder',
-                      'Incoming',
-                      'Slow moving',
-                      'Dead stock',
-                      'Never sold',
-                      'Near expiry',
-                      'Expired',
-                      'Serialized',
-                      'Batch tracked'
-                    ])
-                      Padding(
-                          padding: const EdgeInsets.only(right: 6),
-                          child: ChoiceChip(
-                            label: Text(choice),
-                            selected: filter == choice,
-                            onSelected: (_) => setState(() => filter = choice),
-                          )),
-                  ]),
-                  const SizedBox(height: 16),
-                  if (products.isEmpty)
-                    Card(
-                        child: Padding(
-                            padding: const EdgeInsets.all(24),
-                            child: Column(children: [
-                              const Text('No products yet'),
-                              const Text(
-                                  'Create your first product to start building the inventory catalog.'),
-                              FilledButton(
-                                  onPressed: () => edit(),
-                                  child: const Text('Add product')),
-                            ]))),
-                  ...products
-                      .where((p) =>
-                          (search.isEmpty ||
-                              p.name.toLowerCase().contains(search) ||
-                              (p.sku ?? '').toLowerCase().contains(search) ||
-                              (p.barcode ?? '')
-                                  .toLowerCase()
-                                  .contains(search) ||
-                              (categories
-                                          .where((c) => c.id == p.categoryId)
-                                          .firstOrNull
-                                          ?.name ??
-                                      '')
-                                  .toLowerCase()
-                                  .contains(search)) &&
-                          (filter == 'All' ||
-                              (filter == 'Active' && p.isActive) ||
-                              (filter == 'Inactive' && !p.isActive) ||
-                              (filter == 'Out of stock' && p.isActive) ||
-                              (filter == 'Reorder' && p.isActive) ||
-                              (filter == 'Incoming' && p.isActive) ||
-                              (filter == 'Slow moving' && p.isActive) ||
-                              (filter == 'Dead stock' && p.isActive) ||
-                              (filter == 'Never sold' && p.isActive) ||
-                              (filter == 'Near expiry' && p.isActive) ||
-                              (filter == 'Expired' && p.isActive) ||
-                              (filter == 'Serialized' && p.serialTracking) ||
-                              (filter == 'Batch tracked' && p.business.batch) ||
-                              filter == 'Low stock'))
-                      .map((p) {
-                    final available = (stockLevels[p.id]?.$1 ?? 0) -
-                        (stockLevels[p.id]?.$2 ?? 0);
-                    final plan = planning[p.id];
-                    final health = inventoryHealth[p.id];
-                    final narrow = MediaQuery.sizeOf(context).width < 700;
-                    return (filter == 'Low stock' &&
-                                (available <= 0 ||
-                                    available >
-                                        p.lowStockThreshold *
-                                            Quantity.scale)) ||
-                            (filter == 'Out of stock' && available > 0) ||
-                            (filter == 'Reorder' &&
-                                (plan == null || !plan.belowReorderLevel)) ||
-                            (filter == 'Incoming' &&
-                                (plan == null || plan.incomingMilli <= 0)) ||
-                            (filter == 'Slow moving' &&
-                                health?.slowMoving != true) ||
-                            (filter == 'Dead stock' &&
-                                health?.deadStock != true) ||
-                            (filter == 'Never sold' &&
-                                (health?.neverSold != true ||
-                                    available <= 0)) ||
-                            (filter == 'Near expiry' &&
-                                (health?.nearExpiryMilli ?? 0) <= 0) ||
-                            (filter == 'Expired' &&
-                                (health?.expiredMilli ?? 0) <= 0)
-                        ? const SizedBox.shrink()
-                        : Card(
-                            child: ListTile(
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 8),
-                            onTap: () => showProduct(p),
-                            title: Text(p.name,
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.w600)),
-                            subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (p.sku?.isNotEmpty == true ||
-                                      p.categoryId != null ||
-                                      !p.isActive)
-                                    Text(
-                                        '${p.sku ?? categories.where((c) => c.id == p.categoryId).firstOrNull?.name ?? ''}${p.isActive ? '' : ' · Inactive'}'),
-                                  Text(
-                                      'Selling: ${_sellingRange(p)} / ${p.business.unit.label}   ·   Purchase cost: ${_costRange(p)}'),
-                                  if (narrow)
-                                    Text(
-                                        '${Quantity.format(available)} ${p.business.unit.label} available'),
-                                  if (plan != null && plan.incomingMilli > 0)
-                                    Text(
-                                        '${Quantity.format(plan.incomingMilli)} ${p.business.unit.label} incoming'),
-                                  const SizedBox(height: 4),
-                                  Wrap(spacing: 6, runSpacing: 4, children: [
-                                    if (p.serialTracking) _badge('Serialized'),
-                                    if (p.business.batch) _badge('Batch'),
-                                    if (p.business.weight) _badge('Weight'),
-                                    if (p.business.refill) _badge('Refill'),
-                                    if (p.business.tank) _badge('LPG'),
-                                    if (p.business.madeToOrder) _badge('MTO'),
-                                    if (plan?.belowReorderLevel == true)
-                                      _badge(plan!.incomingCoversShortage
-                                          ? 'Incoming covers shortage'
-                                          : 'Reorder needed'),
-                                    if (health?.deadStock == true)
-                                      _badge('Dead stock')
-                                    else if (health?.slowMoving == true)
-                                      _badge('Slow moving'),
-                                    if (health?.neverSold == true &&
-                                        available > 0)
-                                      _badge('Never sold'),
-                                    if ((health?.expiredMilli ?? 0) > 0)
-                                      _badge('Expired'),
-                                    if ((health?.nearExpiryMilli ?? 0) > 0)
-                                      _badge('Near expiry'),
-                                  ]),
-                                ]),
-                            trailing: narrow
-                                ? const Icon(Icons.chevron_right)
-                                : Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    crossAxisAlignment: CrossAxisAlignment.end,
-                                    children: [
-                                        Text(
-                                            '${Quantity.format(available)} ${p.business.unit.label} available',
-                                            style: const TextStyle(
-                                                fontWeight: FontWeight.w600)),
-                                        const Icon(Icons.chevron_right,
-                                            size: 18),
-                                      ]),
-                          ));
-                  }),
-                ]))),
+        body: AppWorkspacePadding(
+            child: ListView(padding: EdgeInsets.zero, children: [
+          AppPageHeader(
+              title: 'Products',
+              subtitle:
+                  'Manage products, stock visibility, and catalog details.',
+              action: FilledButton.icon(
+                  onPressed: () => edit(),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add product'))),
+          if (error != null)
+            Text(error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error)),
+          Wrap(spacing: 8, children: [
+            PopupMenuButton<String>(
+                tooltip: 'More',
+                onSelected: (value) {
+                  if (value == 'categories') addCategory();
+                },
+                itemBuilder: (context) => const [
+                      PopupMenuItem(
+                          value: 'categories', child: Text('Manage categories'))
+                    ],
+                child: const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Icon(Icons.more_horiz))),
+          ]),
+          const SizedBox(height: 16),
+          TextField(
+            decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                labelText: 'Search name, SKU, or barcode'),
+            onChanged: (value) =>
+                setState(() => search = value.toLowerCase().trim()),
+          ),
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, runSpacing: 4, children: [
+            for (final choice in [
+              'All',
+              'Active',
+              'Inactive',
+              'Low stock',
+              'Out of stock',
+              'Reorder',
+              'Incoming',
+              'Slow moving',
+              'Dead stock',
+              'Never sold',
+              'Near expiry',
+              'Expired',
+              'Serialized',
+              'Batch tracked'
+            ])
+              Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: ChoiceChip(
+                    label: Text(choice),
+                    selected: filter == choice,
+                    onSelected: (_) => setState(() => filter = choice),
+                  )),
+          ]),
+          const SizedBox(height: 16),
+          if (products.isEmpty)
+            Card(
+                child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(children: [
+                      const Text('No products yet'),
+                      const Text(
+                          'Create your first product to start building the inventory catalog.'),
+                      FilledButton(
+                          onPressed: () => edit(),
+                          child: const Text('Add product')),
+                    ]))),
+          ...products
+              .where((p) =>
+                  (search.isEmpty ||
+                      p.name.toLowerCase().contains(search) ||
+                      (p.sku ?? '').toLowerCase().contains(search) ||
+                      (p.barcode ?? '').toLowerCase().contains(search) ||
+                      (categories
+                                  .where((c) => c.id == p.categoryId)
+                                  .firstOrNull
+                                  ?.name ??
+                              '')
+                          .toLowerCase()
+                          .contains(search)) &&
+                  (filter == 'All' ||
+                      (filter == 'Active' && p.isActive) ||
+                      (filter == 'Inactive' && !p.isActive) ||
+                      (filter == 'Out of stock' && p.isActive) ||
+                      (filter == 'Reorder' && p.isActive) ||
+                      (filter == 'Incoming' && p.isActive) ||
+                      (filter == 'Slow moving' && p.isActive) ||
+                      (filter == 'Dead stock' && p.isActive) ||
+                      (filter == 'Never sold' && p.isActive) ||
+                      (filter == 'Near expiry' && p.isActive) ||
+                      (filter == 'Expired' && p.isActive) ||
+                      (filter == 'Serialized' && p.serialTracking) ||
+                      (filter == 'Batch tracked' && p.business.batch) ||
+                      filter == 'Low stock'))
+              .map((p) {
+            final available =
+                (stockLevels[p.id]?.$1 ?? 0) - (stockLevels[p.id]?.$2 ?? 0);
+            final plan = planning[p.id];
+            final health = inventoryHealth[p.id];
+            final narrow = MediaQuery.sizeOf(context).width < 700;
+            return (filter == 'Low stock' &&
+                        (available <= 0 ||
+                            available >
+                                p.lowStockThreshold * Quantity.scale)) ||
+                    (filter == 'Out of stock' && available > 0) ||
+                    (filter == 'Reorder' &&
+                        (plan == null || !plan.belowReorderLevel)) ||
+                    (filter == 'Incoming' &&
+                        (plan == null || plan.incomingMilli <= 0)) ||
+                    (filter == 'Slow moving' && health?.slowMoving != true) ||
+                    (filter == 'Dead stock' && health?.deadStock != true) ||
+                    (filter == 'Never sold' &&
+                        (health?.neverSold != true || available <= 0)) ||
+                    (filter == 'Near expiry' &&
+                        (health?.nearExpiryMilli ?? 0) <= 0) ||
+                    (filter == 'Expired' && (health?.expiredMilli ?? 0) <= 0)
+                ? const SizedBox.shrink()
+                : Card(
+                    child: ListTile(
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    onTap: () => showProduct(p),
+                    title: Text(p.name,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (p.sku?.isNotEmpty == true ||
+                              p.categoryId != null ||
+                              !p.isActive)
+                            Text(
+                                '${p.sku ?? categories.where((c) => c.id == p.categoryId).firstOrNull?.name ?? ''}${p.isActive ? '' : ' · Inactive'}'),
+                          Text(
+                              'Selling: ${_sellingRange(p)} / ${p.business.unit.label}   ·   Purchase cost: ${_costRange(p)}'),
+                          if (narrow)
+                            Text(
+                                '${Quantity.format(available)} ${p.business.unit.label} available'),
+                          if (plan != null && plan.incomingMilli > 0)
+                            Text(
+                                '${Quantity.format(plan.incomingMilli)} ${p.business.unit.label} incoming'),
+                          const SizedBox(height: 4),
+                          Wrap(spacing: 6, runSpacing: 4, children: [
+                            if (p.serialTracking) _badge('Serialized'),
+                            if (p.business.batch) _badge('Batch'),
+                            if (p.business.weight) _badge('Weight'),
+                            if (p.business.refill) _badge('Refill'),
+                            if (p.business.tank) _badge('LPG'),
+                            if (p.business.madeToOrder) _badge('MTO'),
+                            if (plan?.belowReorderLevel == true)
+                              _badge(plan!.incomingCoversShortage
+                                  ? 'Incoming covers shortage'
+                                  : 'Reorder needed'),
+                            if (health?.deadStock == true)
+                              _badge('Dead stock')
+                            else if (health?.slowMoving == true)
+                              _badge('Slow moving'),
+                            if (health?.neverSold == true && available > 0)
+                              _badge('Never sold'),
+                            if ((health?.expiredMilli ?? 0) > 0)
+                              _badge('Expired'),
+                            if ((health?.nearExpiryMilli ?? 0) > 0)
+                              _badge('Near expiry'),
+                          ]),
+                        ]),
+                    trailing: narrow
+                        ? const Icon(Icons.chevron_right)
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                                Text(
+                                    '${Quantity.format(available)} ${p.business.unit.label} available',
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600)),
+                                const Icon(Icons.chevron_right, size: 18),
+                              ]),
+                  ));
+          }),
+        ])),
       );
 }

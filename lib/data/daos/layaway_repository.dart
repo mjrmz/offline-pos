@@ -21,6 +21,10 @@ class LayawayRepository {
   final PosRepository pos;
   LayawayRepository(this.db, this.pos);
 
+  Future<Layaway?> byId(String id) =>
+      (db.select(db.layaways)..where((l) => l.id.equals(id)))
+          .getSingleOrNull();
+
   Future<List<Layaway>> history() => (db.select(db.layaways)
         ..orderBy([
           (l) => OrderingTerm(expression: l.createdAt, mode: OrderingMode.desc),

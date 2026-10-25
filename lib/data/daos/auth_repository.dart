@@ -58,7 +58,10 @@ class AuthRepository {
                   'logout',
                   'register_locked'
                 ]))
-            ..orderBy([(a) => OrderingTerm.desc(a.createdAt)])
+            ..orderBy([
+              (a) => OrderingTerm.desc(a.createdAt),
+              (a) => OrderingTerm.desc(a.id),
+            ])
             ..limit(limit, offset: offset))
           .get();
   Future<int> securityActivityCount() async {

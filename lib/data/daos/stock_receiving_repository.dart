@@ -6,6 +6,7 @@ import '../database.dart';
 import 'auth_repository.dart';
 import 'business_feature_repository.dart';
 import 'purchase_order_repository.dart';
+import 'paged_result.dart';
 
 class ReceivingLineRequest {
   final String productId;
@@ -47,7 +48,13 @@ class StockReceivingRepository {
   final AppDatabase db;
   StockReceivingRepository(this.db);
 
-  Future<Map<String, ReceivingHistorySummary>> historySummaries() async {
+  Future<Map<String, ReceivingHistorySummary>> historySummaries(
+      {Iterable<String>? receivingIds}) async {
+    final ids = receivingIds?.toList();
+    if (ids != null && ids.isEmpty) return {};
+    final selected = ids == null
+        ? ''
+        : 'WHERE r.id IN (${List.filled(ids.length, '?').join(',')})';
     final rows = await db.customSelect('''
       SELECT r.id AS receiving_id, s.name AS supplier_name,
         po.sequence AS po_sequence, u.name AS actor_name,
@@ -61,8 +68,11 @@ class StockReceivingRepository {
       LEFT JOIN users u ON u.id = r.user_id
       LEFT JOIN stock_receiving_items i ON i.receiving_id = r.id
       LEFT JOIN products p ON p.id = i.product_id
+      $selected
       GROUP BY r.id
-    ''').get();
+    ''', variables: [
+      for (final id in ids ?? <String>[]) Variable.withString(id),
+    ]).get();
     return {
       for (final row in rows)
         row.read<String>('receiving_id'): ReceivingHistorySummary(
@@ -80,6 +90,104 @@ class StockReceivingRepository {
 
   static String number(StockReceiving receipt) =>
       'RCV-${(receipt.sequence ?? 0).toString().padLeft(6, '0')}';
+
+  Future<PagedResult<StockReceiving>> historyPage({
+    int page = 0,
+    String search = '',
+    String? supplierId,
+    String? actorName,
+    String type = 'All',
+    DateTime? from,
+    DateTime? through,
+  }) async {
+    if (page < 0) throw ArgumentError.value(page, 'page');
+    final conditions = <String>[];
+    final variables = <Variable>[];
+    final term = search.trim().toLowerCase();
+    if (term.isNotEmpty) {
+      conditions.add('''(
+        instr(lower(printf('RCV-%06d', COALESCE(r.sequence, 0))), ?) > 0
+        OR instr(lower(s.name), ?) > 0
+        OR instr(lower(COALESCE(r.external_reference, '')), ?) > 0
+        OR instr(lower(COALESCE(u.name, '')), ?) > 0
+        OR instr(lower(printf('PO-%06d', COALESCE(po.sequence, 0))), ?) > 0
+        OR EXISTS (SELECT 1 FROM stock_receiving_items i
+          JOIN products p ON p.id = i.product_id
+          WHERE i.receiving_id = r.id AND (
+            instr(lower(p.name), ?) > 0 OR instr(lower(COALESCE(p.sku, '')), ?) > 0
+            OR instr(lower(COALESCE(p.barcode, '')), ?) > 0))
+      )''');
+      variables.addAll(List.generate(8, (_) => Variable.withString(term)));
+    }
+    if (supplierId != null) {
+      conditions.add('r.supplier_id = ?');
+      variables.add(Variable.withString(supplierId));
+    }
+    if (actorName != null) {
+      conditions.add('u.name = ?');
+      variables.add(Variable.withString(actorName));
+    }
+    if (type == 'PO-based') {
+      conditions.add('r.purchase_order_id IS NOT NULL');
+    } else if (type == 'Direct') {
+      conditions.add('r.purchase_order_id IS NULL');
+    } else if (type != 'All') {
+      throw ArgumentError.value(type, 'type');
+    }
+    if (from != null) {
+      conditions.add('r.received_at >= ?');
+      variables.add(Variable.withInt(
+          DateTime(from.year, from.month, from.day).millisecondsSinceEpoch ~/
+              1000));
+    }
+    if (through != null) {
+      conditions.add('r.received_at < ?');
+      variables.add(Variable.withInt(
+          DateTime(through.year, through.month, through.day + 1)
+                  .millisecondsSinceEpoch ~/
+              1000));
+    }
+    const joins = '''FROM stock_receivings r
+      JOIN suppliers s ON s.id = r.supplier_id
+      LEFT JOIN users u ON u.id = r.user_id
+      LEFT JOIN purchase_orders po ON po.id = r.purchase_order_id''';
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
+    return db.transaction(() async {
+      final total = (await db
+              .customSelect(
+                'SELECT COUNT(*) AS total $joins $where',
+                variables: variables,
+              )
+              .getSingle())
+          .read<int>('total');
+      final ids = (await db.customSelect(
+        'SELECT r.id $joins $where ORDER BY r.received_at DESC, r.id DESC LIMIT 50 OFFSET ?',
+        variables: [...variables, Variable.withInt(page * 50)],
+      ).get())
+          .map((row) => row.read<String>('id'))
+          .toList();
+      if (ids.isEmpty) {
+        return PagedResult(
+            items: <StockReceiving>[], totalCount: total, page: page);
+      }
+      final rows = await (db.select(db.stockReceivings)
+            ..where((receipt) => receipt.id.isIn(ids)))
+          .get();
+      final byId = {for (final row in rows) row.id: row};
+      return PagedResult(
+          items: [for (final id in ids) byId[id]!],
+          totalCount: total,
+          page: page);
+    });
+  }
+
+  Future<List<String>> receiverNames() async {
+    final rows = await db.customSelect('''
+      SELECT DISTINCT u.name AS name FROM stock_receivings r
+      JOIN users u ON u.id = r.user_id ORDER BY u.name
+    ''').get();
+    return [for (final row in rows) row.read<String>('name')];
+  }
 
   Future<List<StockReceiving>> duplicateReference(
       String supplierId, String reference) async {
@@ -211,6 +319,8 @@ class StockReceivingRepository {
                 finalizedAt: Value(DateTime.now()),
                 externalReference: Value(_clean(externalReference)),
                 notes: Value(_clean(notes))));
+        await db.into(db.supplierPayableSources).insert(
+            SupplierPayableSourcesCompanion.insert(receivingId: header.id));
         for (final line in lines) {
           final product = await (db.select(db.products)
                 ..where((p) => p.id.equals(line.productId)))

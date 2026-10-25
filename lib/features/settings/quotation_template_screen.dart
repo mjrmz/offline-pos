@@ -6,7 +6,9 @@ import '../../shared/utils/safe_message.dart';
 
 class QuotationTemplateScreen extends StatefulWidget {
   final AppDatabase db;
-  const QuotationTemplateScreen({super.key, required this.db});
+  final bool embedded;
+  const QuotationTemplateScreen(
+      {super.key, required this.db, this.embedded = false});
 
   @override
   State<QuotationTemplateScreen> createState() =>
@@ -70,7 +72,15 @@ class _QuotationTemplateScreenState extends State<QuotationTemplateScreen> {
             terms: Value(terms.text.trim()),
           ),
           mode: InsertMode.insertOrReplace);
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        if (widget.embedded) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Quotation defaults saved.'),
+              duration: Duration(seconds: 3)));
+        } else {
+          Navigator.pop(context);
+        }
+      }
     } catch (failure) {
       if (mounted) setState(() => error = safeMessage(failure));
     } finally {
@@ -86,70 +96,70 @@ class _QuotationTemplateScreenState extends State<QuotationTemplateScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-      appBar: AppBar(title: const Text('Quotation template')),
-      body: Center(
-          child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 720),
-              child: ListView(padding: const EdgeInsets.all(24), children: [
-                Text('Customer document',
-                    style: Theme.of(context).textTheme.titleLarge),
-                const SizedBox(height: 8),
-                const Text(
-                    'The business name, address, and contact details come from Printer & Receipt settings.'),
-                const SizedBox(height: 16),
-                SwitchListTile(
-                    title: const Text('Show SKU'),
-                    value: showSku,
-                    onChanged: (value) => setState(() => showSku = value)),
-                SwitchListTile(
-                    title: const Text('Show barcode'),
-                    value: showBarcode,
-                    onChanged: (value) => setState(() => showBarcode = value)),
-                SwitchListTile(
-                    title: const Text('Show unit'),
-                    value: showUnit,
-                    onChanged: (value) => setState(() => showUnit = value)),
-                SwitchListTile(
-                    title: const Text('Show prepared by'),
-                    value: showPreparedBy,
-                    onChanged: (value) =>
-                        setState(() => showPreparedBy = value)),
-                SwitchListTile(
-                    title: const Text('Signature area'),
-                    value: showSignature,
-                    onChanged: (value) =>
-                        setState(() => showSignature = value)),
-                SwitchListTile(
-                    title: const Text('Customer acceptance area'),
-                    value: showAcceptance,
-                    onChanged: (value) =>
-                        setState(() => showAcceptance = value)),
-                const SizedBox(height: 16),
-                TextField(
-                    controller: terms,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                        labelText: 'Default quotation terms',
-                        border: OutlineInputBorder())),
-                const SizedBox(height: 16),
-                TextField(
-                    controller: footer,
-                    maxLines: 3,
-                    decoration: const InputDecoration(
-                        labelText: 'Footer message',
-                        border: OutlineInputBorder())),
-                if (error != null)
-                  Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: Text(error!,
-                          style: TextStyle(
-                              color: Theme.of(context).colorScheme.error))),
-                const SizedBox(height: 20),
-                Align(
-                    alignment: Alignment.centerRight,
-                    child: FilledButton(
-                        onPressed: busy ? null : save,
-                        child: const Text('Save template'))),
-              ]))));
+  Widget build(BuildContext context) => widget.embedded
+      ? _content()
+      : Scaffold(
+          appBar: AppBar(title: const Text('Quotation template')),
+          body: _content());
+
+  Widget _content() => Center(
+      child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: ListView(padding: const EdgeInsets.all(24), children: [
+            Text('Customer document',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 8),
+            const Text(
+                'The business name, address, and contact details come from Printer & Receipt settings.'),
+            const SizedBox(height: 16),
+            SwitchListTile(
+                title: const Text('Show SKU'),
+                value: showSku,
+                onChanged: (value) => setState(() => showSku = value)),
+            SwitchListTile(
+                title: const Text('Show barcode'),
+                value: showBarcode,
+                onChanged: (value) => setState(() => showBarcode = value)),
+            SwitchListTile(
+                title: const Text('Show unit'),
+                value: showUnit,
+                onChanged: (value) => setState(() => showUnit = value)),
+            SwitchListTile(
+                title: const Text('Show prepared by'),
+                value: showPreparedBy,
+                onChanged: (value) => setState(() => showPreparedBy = value)),
+            SwitchListTile(
+                title: const Text('Signature area'),
+                value: showSignature,
+                onChanged: (value) => setState(() => showSignature = value)),
+            SwitchListTile(
+                title: const Text('Customer acceptance area'),
+                value: showAcceptance,
+                onChanged: (value) => setState(() => showAcceptance = value)),
+            const SizedBox(height: 16),
+            TextField(
+                controller: terms,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                    labelText: 'Default quotation terms',
+                    border: OutlineInputBorder())),
+            const SizedBox(height: 16),
+            TextField(
+                controller: footer,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                    labelText: 'Footer message', border: OutlineInputBorder())),
+            if (error != null)
+              Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(error!,
+                      style: TextStyle(
+                          color: Theme.of(context).colorScheme.error))),
+            const SizedBox(height: 20),
+            Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                    onPressed: busy ? null : save,
+                    child: const Text('Save template'))),
+          ])));
 }

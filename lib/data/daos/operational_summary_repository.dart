@@ -70,6 +70,17 @@ class OperationalSummaryRepository {
             ifAbsent: () => item.quantityMilli);
       }
     }
+    final orderReservations = await db.customSelect('''
+      SELECT product_id, SUM(quantity_milli) AS quantity
+      FROM stock_reservations WHERE status = 'active'
+      GROUP BY product_id
+    ''').get();
+    for (final row in orderReservations) {
+      final productId = row.read<String>('product_id');
+      final quantity = row.read<int>('quantity');
+      reservations.update(productId, (n) => n + quantity,
+          ifAbsent: () => quantity);
+    }
     final lowAlerts = <StockAlert>[];
     final outAlerts = <StockAlert>[];
     final low = <String>[];

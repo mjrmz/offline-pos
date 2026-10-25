@@ -40,7 +40,7 @@ void main() {
         if (width == 1920) {
           expect(
               tester.getSize(find.byKey(const ValueKey('sale-row-sale'))).width,
-              lessThanOrEqualTo(1468));
+              lessThanOrEqualTo(width - 64));
         }
         expect(find.text('Receipt #POS-000126'), findsOneWidget);
         expect(find.text('₱50'), findsWidgets);

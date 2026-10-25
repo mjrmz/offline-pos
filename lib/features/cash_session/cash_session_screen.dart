@@ -156,112 +156,102 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
     final previous =
         sessions.where((s) => s.session.closedAt != null).take(8).toList();
     final wide = MediaQuery.sizeOf(context).width >= 850;
-    return ListView(padding: const EdgeInsets.all(20), children: [
-      ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 1180),
-          child:
+    return AppWorkspacePadding(
+        child: ListView(padding: EdgeInsets.zero, children: [
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (widget.showTitle) ...[
+          const AppPageHeader(
+            title: 'Cash Session',
+            subtitle: 'Review shift cash and closing history.',
+          ),
+        ],
+        if (loadingSessions && sessions.isEmpty)
+          const Padding(
+              padding: EdgeInsets.all(24), child: CircularProgressIndicator())
+        else if (sessionError != null)
+          _panel(_failure(sessionError!, _refreshSessions))
+        else if (active == null)
+          _panel(
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (widget.showTitle) ...[
-              const AppPageHeader(
-                title: 'Cash Session',
-                subtitle: 'Review shift cash and closing history.',
-              ),
+            Text('No active cash session',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 6),
+            const Text(
+                'Start and close your cashier shift from Point of Sale.'),
+            if (widget.onGoPos != null) ...[
+              const SizedBox(height: 14),
+              FilledButton(
+                  onPressed: widget.onGoPos, child: const Text('Go to POS')),
             ],
-            if (loadingSessions && sessions.isEmpty)
-              const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: CircularProgressIndicator())
-            else if (sessionError != null)
-              _panel(_failure(sessionError!, _refreshSessions))
-            else if (active == null)
-              _panel(Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('No active cash session',
-                        style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 6),
-                    const Text(
-                        'Start and close your cashier shift from Point of Sale.'),
-                    if (widget.onGoPos != null) ...[
-                      const SizedBox(height: 14),
-                      FilledButton(
-                          onPressed: widget.onGoPos,
-                          child: const Text('Go to POS')),
-                    ],
-                  ]))
-            else ...[
-              _panel(Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('CURRENT SHIFT',
-                        style: Theme.of(context).textTheme.labelLarge),
-                    const SizedBox(height: 10),
-                    Text('Opened by ${_name(active.session.openedByUserId)}',
-                        style: Theme.of(context).textTheme.titleMedium),
-                    Text(_when(active.session.openedAt)),
-                    const Divider(height: 24),
-                    _metric('Opening cash',
-                        formatPeso(active.session.startingCashCents)),
-                    _metric('Expected cash', formatPeso(active.expectedCents),
-                        strong: true),
-                  ])),
-              const SizedBox(height: 10),
-              TextButton(
-                  onPressed: () => _showShift(active),
-                  child: const Text('View details')),
-              if (active.session.openedByUserId != widget.user.id &&
-                  widget.user.can(PosPermission.manageCashSession))
-                TextButton(
-                    onPressed: () async {
-                      if (await showPosCloseShift(
-                          context, widget.repository, widget.user, active)) {
-                        await refresh();
-                      }
-                    },
-                    child: const Text('Close other user shift')),
-            ],
-            if (widget.otherShift != null &&
-                widget.user.can(PosPermission.manageCashSession)) ...[
-              const SizedBox(height: 12),
-              _panel(Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('OTHER USER SHIFT',
-                        style: Theme.of(context).textTheme.labelLarge),
-                    Text(
-                        'Opened by ${_name(widget.otherShift!.session.openedByUserId)}'),
-                    _metric('Expected cash',
-                        formatPeso(widget.otherShift!.expectedCents)),
-                    TextButton(
-                        onPressed: () async {
-                          if (await showPosCloseShift(
-                              context,
-                              widget.repository,
-                              widget.user,
-                              widget.otherShift!)) {
-                            await refresh();
-                          }
-                        },
-                        child: const Text('Close other user shift')),
-                  ])),
-            ],
-            const SizedBox(height: 24),
-            Text('HISTORY', style: Theme.of(context).textTheme.labelLarge),
+          ]))
+        else ...[
+          _panel(
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('CURRENT SHIFT',
+                style: Theme.of(context).textTheme.labelLarge),
             const SizedBox(height: 10),
-            if (wide)
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(flex: 11, child: _history(previous)),
-                const SizedBox(width: 14),
-                Expanded(flex: 9, child: _zHistory()),
-              ])
-            else
-              Column(children: [
-                _history(previous),
-                const SizedBox(height: 14),
-                _zHistory()
-              ]),
+            Text('Opened by ${_name(active.session.openedByUserId)}',
+                style: Theme.of(context).textTheme.titleMedium),
+            Text(_when(active.session.openedAt)),
+            const Divider(height: 24),
+            _metric(
+                'Opening cash', formatPeso(active.session.startingCashCents)),
+            _metric('Expected cash', formatPeso(active.expectedCents),
+                strong: true),
           ])),
-    ]);
+          const SizedBox(height: 10),
+          TextButton(
+              onPressed: () => _showShift(active),
+              child: const Text('View details')),
+          if (active.session.openedByUserId != widget.user.id &&
+              widget.user.can(PosPermission.manageCashSession))
+            TextButton(
+                onPressed: () async {
+                  if (await showPosCloseShift(
+                      context, widget.repository, widget.user, active)) {
+                    await refresh();
+                  }
+                },
+                child: const Text('Close other user shift')),
+        ],
+        if (widget.otherShift != null &&
+            widget.user.can(PosPermission.manageCashSession)) ...[
+          const SizedBox(height: 12),
+          _panel(
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('OTHER USER SHIFT',
+                style: Theme.of(context).textTheme.labelLarge),
+            Text(
+                'Opened by ${_name(widget.otherShift!.session.openedByUserId)}'),
+            _metric(
+                'Expected cash', formatPeso(widget.otherShift!.expectedCents)),
+            TextButton(
+                onPressed: () async {
+                  if (await showPosCloseShift(context, widget.repository,
+                      widget.user, widget.otherShift!)) {
+                    await refresh();
+                  }
+                },
+                child: const Text('Close other user shift')),
+          ])),
+        ],
+        const SizedBox(height: 24),
+        Text('HISTORY', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 10),
+        if (wide)
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(flex: 11, child: _history(previous)),
+            const SizedBox(width: 14),
+            Expanded(flex: 9, child: _zHistory()),
+          ])
+        else
+          Column(children: [
+            _history(previous),
+            const SizedBox(height: 14),
+            _zHistory()
+          ]),
+      ]),
+    ]));
   }
 
   Widget _history(List<CashSessionSummary> rows) =>
@@ -352,12 +342,15 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
                                   sum('petty_cash').abs())),
                           _metric('Expense reversals',
                               formatPeso(sum('business_expense_reversal'))),
+                          _metric('Supplier payments',
+                              formatPeso(sum('supplier_payment').abs())),
                           _metric(
                               'Refunds and other cash out',
                               formatPeso(movements
                                   .where((m) =>
                                       m.amountCents < 0 &&
                                       m.kind != 'business_expense' &&
+                                      m.kind != 'supplier_payment' &&
                                       m.kind != 'petty_cash')
                                   .fold<int>(
                                       0, (total, m) => total - m.amountCents))),

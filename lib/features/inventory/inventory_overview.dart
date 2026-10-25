@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart' hide Column;
 import 'package:flutter/material.dart';
+import '../../shared/theme/app_layout.dart';
 import '../../shared/theme/app_theme.dart';
 
 import '../../core/models/product.dart';
@@ -13,6 +14,7 @@ import '../../shared/widgets/app_workspace.dart';
 
 String inventoryMovementLabel(String reason) => switch (reason) {
       'initial_stock' => 'Opening stock',
+      'opening_inventory_import' => 'Opening Inventory',
       'supplier_receiving' ||
       'batch_received' ||
       'receiving' =>
@@ -191,9 +193,9 @@ class _InventoryOverviewState extends State<InventoryOverview> {
   Widget build(BuildContext context) =>
       LayoutBuilder(builder: (context, constraints) {
         final width = constraints.maxWidth;
-        return ListView(padding: const EdgeInsets.all(20), children: [
+        return ListView(padding: AppLayout.workspacePadding(width), children: [
           ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 1280),
+            constraints: const BoxConstraints(),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Wrap(

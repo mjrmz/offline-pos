@@ -27,6 +27,14 @@ class DirectoryRepository {
   final AppDatabase db;
   DirectoryRepository(this.db);
 
+  Future<Customer?> customerById(String id) =>
+      (db.select(db.customers)..where((c) => c.id.equals(id)))
+          .getSingleOrNull();
+
+  Future<Supplier?> supplierById(String id) =>
+      (db.select(db.suppliers)..where((s) => s.id.equals(id)))
+          .getSingleOrNull();
+
   Future<int> countCustomers(String search) async {
     final term = '%${search.trim().toLowerCase()}%';
     final row = await db

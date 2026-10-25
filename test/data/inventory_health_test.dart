@@ -26,7 +26,7 @@ void main() {
       expect((await db.select(db.products).get()).single.name, 'Preserved');
       expect(
           (await InventoryHealthRepository(db).settings()).slowMovingDays, 60);
-      expect(db.schemaVersion, 40);
+      expect(db.schemaVersion, 46);
     } finally {
       await db.close();
       await dir.delete(recursive: true);

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/models/active_user.dart';
@@ -23,13 +25,17 @@ class ContactsScreen extends StatefulWidget {
   final SalesService? sales;
   final PosRepository? pos;
   final ReceiptService? receipts;
+  final String? initialCustomerId;
+  final String? initialSupplierId;
   const ContactsScreen(
       {super.key,
       required this.repository,
       required this.user,
       this.sales,
       this.pos,
-      this.receipts});
+      this.receipts,
+      this.initialCustomerId,
+      this.initialSupplierId});
   @override
   State<ContactsScreen> createState() => _ContactsScreenState();
 }
@@ -38,6 +44,31 @@ class _ContactsScreenState extends State<ContactsScreen> {
   bool suppliers = false;
   String search = '';
   int page = 0;
+  Timer? searchDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialCustomerId != null || widget.initialSupplierId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        if (widget.initialCustomerId != null) {
+          final row = await widget.repository.customerById(widget.initialCustomerId!);
+          if (mounted && row != null) _openCustomer(row);
+        } else if (widget.initialSupplierId != null) {
+          final row = await widget.repository.supplierById(widget.initialSupplierId!);
+          if (mounted && row != null) _openSupplier(row);
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    searchDebounce?.cancel();
+    super.dispose();
+  }
+
   Future<void> _openCustomer(Customer row) => showRecordDetailsDrawer<void>(
           context: context,
           builder: (context) => Align(
@@ -213,49 +244,52 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-          body: Column(children: [
+          body: AppWorkspacePadding(
+              child: Column(children: [
+        AppPageHeader(
+            title: 'Customers & Suppliers',
+            subtitle:
+                'Manage customer relationships, supplier records, purchasing history, and account activity.',
+            action: widget.user.can(PosPermission.manageContacts)
+                ? FilledButton.icon(
+                    onPressed: () => edit(),
+                    icon: const Icon(Icons.add),
+                    label: Text('Add ${suppliers ? 'supplier' : 'customer'}'))
+                : null),
+        AppWorkspaceTabs(
+            labels: const ['Customers', 'Suppliers'],
+            selectedIndex: suppliers ? 1 : 0,
+            onSelected: (index) {
+              searchDebounce?.cancel();
+              setState(() {
+                suppliers = index == 1;
+                search = '';
+                page = 0;
+              });
+            }),
         Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 0),
-            child: AppPageHeader(
-                title: 'Customers & Suppliers',
-                subtitle:
-                    'Manage customer relationships, supplier records, purchasing history, and account activity.',
-                action: widget.user.can(PosPermission.manageContacts)
-                    ? FilledButton.icon(
-                        onPressed: () => edit(),
-                        icon: const Icon(Icons.add),
-                        label:
-                            Text('Add ${suppliers ? 'supplier' : 'customer'}'))
-                    : null)),
-        Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: AppWorkspaceTabs(
-                labels: const ['Customers', 'Suppliers'],
-                selectedIndex: suppliers ? 1 : 0,
-                onSelected: (index) => setState(() {
-                      suppliers = index == 1;
-                      search = '';
-                      page = 0;
-                    }))),
-        Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            padding: const EdgeInsets.symmetric(vertical: 8),
             child: AppSearchField(
                 key: ValueKey(suppliers),
                 hintText: suppliers
                     ? 'Search supplier or contact...'
                     : 'Search customer or phone...',
-                onChanged: (value) => setState(() {
-                      search = value.toLowerCase().trim();
-                      page = 0;
-                    }))),
+                onChanged: (value) {
+                  searchDebounce?.cancel();
+                  searchDebounce = Timer(const Duration(milliseconds: 300), () {
+                    if (mounted) {
+                      setState(() {
+                        search = value.toLowerCase().trim();
+                        page = 0;
+                      });
+                    }
+                  });
+                })),
         Expanded(
             child: FutureBuilder<List<Object>>(
                 key: ValueKey('$suppliers:$search:$page'),
                 future: _loadPage(),
                 builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    return Center(child: Text(safeMessage(snapshot.error!)));
-                  }
                   final data = snapshot.data;
                   final total = data == null ? 0 : data[0] as int;
                   final rows =
@@ -267,12 +301,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
                       ? <String, SupplierListSummary>{}
                       : data[2] as Map<String, SupplierListSummary>;
                   return Padding(
-                      padding: const EdgeInsets.fromLTRB(24, 4, 24, 24),
+                      padding: const EdgeInsets.only(top: 4),
                       child: AppPagedListPanel(
                           title: suppliers ? 'Suppliers' : 'Customers',
                           total: total,
                           count: rows.length,
                           loading: data == null,
+                          error: snapshot.hasError
+                              ? safeMessage(snapshot.error!)
+                              : null,
+                          onRetry: () => setState(() {}),
                           page: page,
                           onPrevious: () => setState(() => page--),
                           onNext: () => setState(() => page++),
@@ -316,7 +354,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                 onTap: () => _openSupplier(supplier));
                           }));
                 })),
-      ]));
+      ])));
 }
 
 class CustomerDetailsScreen extends StatefulWidget {

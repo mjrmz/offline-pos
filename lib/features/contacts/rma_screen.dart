@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/models/active_user.dart';
@@ -9,6 +11,7 @@ import '../../data/database.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/widgets/app_workspace.dart';
+import '../../shared/theme/app_layout.dart';
 import 'rma_detail_page.dart';
 import 'new_customer_rma_page.dart';
 import 'new_supplier_rma_page.dart';
@@ -47,10 +50,17 @@ class _RmaScreenState extends State<RmaScreen> {
   String filter = 'All';
   String searchText = '';
   int listPage = 0;
+  int resultTotal = 0;
+  Map<String, int> customerStageCounts = {};
+  Map<String, int> supplierStageCounts = {};
+  bool listLoading = false;
+  Timer? searchDebounce;
+  int loadGeneration = 0;
   final searchController = TextEditingController();
 
   @override
   void dispose() {
+    searchDebounce?.cancel();
     searchController.dispose();
     super.dispose();
   }
@@ -61,27 +71,72 @@ class _RmaScreenState extends State<RmaScreen> {
     refresh();
     if (widget.initialCaseId != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
-        final row = (await widget.repository.cases())
-            .where((r) => r.id == widget.initialCaseId)
-            .firstOrNull;
-        if (row != null && mounted) await showCaseDetail(row);
+        final row = await widget.repository.byId(widget.initialCaseId!);
+        if (row != null && mounted) {
+          if (row.origin == 'inbound') {
+            setState(() => origin = 'inbound');
+          }
+          await showCaseDetail(row);
+        }
       });
     }
   }
 
-  Future<void> refresh() async {
+  Future<void> refresh({bool reloadCounts = true}) async {
+    final generation = ++loadGeneration;
+    if (mounted) setState(() => listLoading = true);
     try {
-      final next = await widget.repository.cases();
+      final result = await widget.repository.page(
+          origin: origin == 'inbound' ? 'inbound' : 'customer',
+          search: searchText,
+          stage: origin == 'attention' ? 'Awaiting supplier' : filter,
+          page: listPage);
+      final next = result.items;
+      final customerCounts = reloadCounts
+          ? await widget.repository.stageCounts('customer')
+          : customerStageCounts;
+      final supplierCounts = reloadCounts
+          ? await widget.repository.stageCounts('inbound')
+          : supplierStageCounts;
       final lifecycle = RmaLifecycleRepository(widget.repository.db);
+      final factsByCase = await lifecycle.historiesFor(next);
+      final batchedActions = await lifecycle.nextActionsFor(next);
       final db = widget.repository.db;
-      final customers = await db.select(db.customers).get();
-      final suppliers = await db.select(db.suppliers).get();
-      final sales = await db.select(db.sales).get();
-      final saleItems = await db.select(db.saleItems).get();
-      final receivingItems = await db.select(db.stockReceivingItems).get();
-      final receivings = await db.select(db.stockReceivings).get();
-      final products = await db.select(db.products).get();
-      final serials = await db.select(db.serialUnits).get();
+      final customers = await (db.select(db.customers)
+            ..where((t) =>
+                t.id.isIn(next.map((r) => r.customerId).whereType<String>())))
+          .get();
+      final suppliers = await (db.select(db.suppliers)
+            ..where((t) =>
+                t.id.isIn(next.map((r) => r.supplierId).whereType<String>())))
+          .get();
+      final sales = await (db.select(db.sales)
+            ..where((t) =>
+                t.id.isIn(next.map((r) => r.saleId).whereType<String>())))
+          .get();
+      final saleItems = await (db.select(db.saleItems)
+            ..where((t) =>
+                t.id.isIn(next.map((r) => r.saleItemId).whereType<String>())))
+          .get();
+      final receivingItems = await (db.select(db.stockReceivingItems)
+            ..where((t) => t.id
+                .isIn(next.map((r) => r.receivingItemId).whereType<String>())))
+          .get();
+      final receivings = await (db.select(db.stockReceivings)
+            ..where((t) =>
+                t.id.isIn(next.map((r) => r.receivingId).whereType<String>())))
+          .get();
+      final productIds = [
+        ...saleItems.map((r) => r.productId),
+        ...receivingItems.map((r) => r.productId)
+      ];
+      final products = await (db.select(db.products)
+            ..where((t) => t.id.isIn(productIds)))
+          .get();
+      final serials = await (db.select(db.serialUnits)
+            ..where((t) =>
+                t.id.isIn(next.map((r) => r.serialUnitId).whereType<String>())))
+          .get();
       final newStages = <String, String>{};
       final newActions = <String, String>{};
       final newSummaries = <String, String>{};
@@ -99,7 +154,17 @@ class _RmaScreenState extends State<RmaScreen> {
       final receivingsById = {for (final value in receivings) value.id: value};
       final productsById = {for (final value in products) value.id: value};
       final serialsById = {for (final value in serials) value.id: value};
-      final casesById = {for (final value in next) value.id: value};
+      final links = factsByCase.values.expand((events) => events).toList();
+      final linkedIds = links
+          .map((event) => event.relatedCaseId)
+          .whereType<String>()
+          .toList();
+      final linkedCases = await (db.select(db.rmaCases)
+            ..where((row) => row.id.isIn(linkedIds)))
+          .get();
+      final casesById = {
+        for (final value in [...next, ...linkedCases]) value.id: value
+      };
       final newSearchKeys = <String, String>{};
       final newSourceLabels = <String, String>{};
       final newLinkedReferences = <String, String>{};
@@ -132,7 +197,7 @@ class _RmaScreenState extends State<RmaScreen> {
             '${sale?.receiptNumber ?? ''} ${sale?.birInvoiceNumber ?? ''} $productName ${product?.sku ?? ''} '
             '${product?.barcode ?? ''} ${serial?.serialNumber ?? ''} '
             '${row.issueDescription}';
-        final facts = await lifecycle.history(row.id);
+        final facts = factsByCase[row.id] ?? const <RmaLifecycleEvent>[];
         if (row.origin == 'inbound') {
           final receiving = receivingsById[row.receivingId];
           final receivingRef = receiving?.externalReference?.trim();
@@ -149,7 +214,7 @@ class _RmaScreenState extends State<RmaScreen> {
               linked == null ? 'Inventory / Receiving' : 'Customer RMA';
           if (linked != null) newLinkedReferences[row.id] = linked.reference;
         }
-        final action = await lifecycle.nextAction(row.id);
+        final action = batchedActions[row.id] ?? 'Loading';
         newActions[row.id] = action;
         final names = facts.map((fact) => fact.action).toSet();
         final received = facts
@@ -196,9 +261,13 @@ class _RmaScreenState extends State<RmaScreen> {
                                                     ? 'Ready for handoff'
                                                     : 'Awaiting resolution';
       }
-      if (mounted) {
+      if (mounted && generation == loadGeneration) {
         setState(() {
           rows = next;
+          resultTotal = result.totalCount;
+          customerStageCounts = customerCounts;
+          supplierStageCounts = supplierCounts;
+          listLoading = false;
           stages
             ..clear()
             ..addAll(newStages);
@@ -236,7 +305,12 @@ class _RmaScreenState extends State<RmaScreen> {
         });
       }
     } catch (failure) {
-      if (mounted) setState(() => error = safeMessage(failure));
+      if (mounted && generation == loadGeneration) {
+        setState(() {
+          error = safeMessage(failure);
+          listLoading = false;
+        });
+      }
     }
   }
 
@@ -1257,6 +1331,7 @@ class _RmaScreenState extends State<RmaScreen> {
 
   Widget metricTiles(BuildContext context) {
     final customer = origin == 'customer';
+    final counts = customer ? customerStageCounts : supplierStageCounts;
     final metrics = <(String, String)>[
       ('Open', 'Open'),
       if (customer) ...[
@@ -1273,32 +1348,54 @@ class _RmaScreenState extends State<RmaScreen> {
         ('Resolved', 'Resolved'),
       ],
     ];
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        key: const ValueKey('rma-status-strip'),
-        children: [
-          for (final metric in metrics) ...[
-            if (metric != metrics.first) const SizedBox(width: 10),
-            AppMetricTile(
-              width: 160,
-              label: metric.$1,
-              value: '${rows.where((row) => row.origin == origin && (metric.$2 == 'Open' ? !{
-                  'Completed',
-                  'Resolved',
-                  'Rejected',
-                  'Cancelled',
-                  'Rejected / Cancelled',
-                  'Legacy'
-                }.contains(stages[row.id]) : stages[row.id] == metric.$2)).length}',
-              onTap: metric.$2 == 'Open'
-                  ? () => setState(() => filter = 'All')
-                  : () => setState(() => filter = metric.$2),
-            ),
-          ],
-        ],
-      ),
-    );
+    final tiles = <Widget>[
+      for (final metric in metrics)
+        AppMetricTile(
+          label: metric.$1,
+          value: '${metric.$2 == 'Open' ? counts.entries.where((entry) => !{
+                'Completed',
+                'Resolved',
+                'Rejected',
+                'Cancelled',
+                'Rejected / Cancelled',
+                'Legacy'
+              }.contains(entry.key)).fold<int>(0, (sum, entry) => sum + entry.value) : counts[metric.$2] ?? 0}',
+          onTap: metric.$2 == 'Open'
+              ? () {
+                  setState(() {
+                    filter = 'All';
+                    listPage = 0;
+                  });
+                  refresh();
+                }
+              : () {
+                  setState(() {
+                    filter = metric.$2;
+                    listPage = 0;
+                  });
+                  refresh();
+                },
+        ),
+    ];
+    return LayoutBuilder(builder: (context, bounds) {
+      if (bounds.maxWidth < 900) {
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            key: const ValueKey('rma-status-strip'),
+            children: [
+              for (final tile in tiles)
+                Padding(
+                  padding: const EdgeInsets.only(right: AppLayout.space12),
+                  child: SizedBox(width: 160, child: tile),
+                ),
+            ],
+          ),
+        );
+      }
+      return AppMetricGrid(
+          key: const ValueKey('rma-status-strip'), children: tiles);
+    });
   }
 
   Widget queueRow(BuildContext context, RmaCase row) {
@@ -1415,10 +1512,14 @@ class _RmaScreenState extends State<RmaScreen> {
 
   Widget moreMenu() => PopupMenuButton<String>(
         tooltip: 'More RMA views',
-        onSelected: (value) => setState(() {
-          origin = value;
-          filter = 'All';
-        }),
+        onSelected: (value) {
+          setState(() {
+            origin = value;
+            filter = 'All';
+            listPage = 0;
+          });
+          if (value == 'attention') refresh();
+        },
         itemBuilder: (_) => [
           const PopupMenuItem(
               value: 'attention', child: Text('Aging & attention')),
@@ -1436,15 +1537,6 @@ class _RmaScreenState extends State<RmaScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final visible = rows
-        .where((row) =>
-            row.origin == origin &&
-            (filter == 'All' || stages[row.id] == filter) &&
-            (searchText.trim().isEmpty ||
-                ('${searchKeys[row.id]} ${nextActions[row.id]}')
-                    .toLowerCase()
-                    .contains(searchText.trim().toLowerCase())))
-        .toList();
     final activeWorkspace = origin == 'customer' || origin == 'inbound';
     final scheme = Theme.of(context).colorScheme;
     Widget workspace(
@@ -1464,28 +1556,42 @@ class _RmaScreenState extends State<RmaScreen> {
           clipBehavior: Clip.antiAlias,
           child: InkWell(
             key: ValueKey('workspace-$value'),
-            onTap: () => setState(() {
-              origin = value;
-              filter = 'All';
-              listPage = 0;
-            }),
-          child: Padding(
+            onTap: () {
+              searchDebounce?.cancel();
+              setState(() {
+                origin = value;
+                filter = 'All';
+                listPage = 0;
+              });
+              refresh();
+            },
+            child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(children: [
                 Icon(icon,
                     size: 26,
                     color: selected ? scheme.primary : scheme.onSurfaceVariant),
                 const SizedBox(width: 8),
-                Expanded(child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: selected ? scheme.primary : scheme.onSurface,
-                        fontWeight: FontWeight.w700)),
-                    Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall),
-                  ])),
+                Expanded(
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                      Text(title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(
+                                  color: selected
+                                      ? scheme.primary
+                                      : scheme.onSurface,
+                                  fontWeight: FontWeight.w700)),
+                      Text(subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ])),
               ]),
             ),
           ),
@@ -1522,212 +1628,276 @@ class _RmaScreenState extends State<RmaScreen> {
             'Cancelled'
           ];
     return Scaffold(
-        body: LayoutBuilder(builder: (context, viewport) =>
-          SingleChildScrollView(
-            physics: viewport.maxWidth < 600 || viewport.maxHeight < 760 || !activeWorkspace
-                ? null : const NeverScrollableScrollPhysics(),
-            child: SizedBox(
-              height: viewport.maxWidth < 600 && viewport.maxHeight < 1700
-                  ? 1700 : viewport.maxHeight < 760
-                      ? 900 : !activeWorkspace && viewport.maxHeight < 850
-                      ? 850 : viewport.maxHeight,
-              child: Center(
-            child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1500),
-                child: Padding(padding: EdgeInsets.symmetric(
-                        horizontal:
-                            MediaQuery.sizeOf(context).width >= 600 ? 20 : 12,
-                        vertical: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      AppPageHeader(
-                        title: 'RMA / Warranty',
-                        subtitle:
-                            'Manage customer returns, warranties, and supplier recovery.',
-                        action: activeWorkspace &&
-                                MediaQuery.sizeOf(context).width >= 600
-                            ? action()
-                            : null,
-                      ),
-                      LayoutBuilder(builder: (context, constraints) {
-                        final cards = [
-                          workspace(
-                              'customer',
-                              'Customer RMA',
-                              'Returns & warranties',
-                              Icons.assignment_return_outlined),
-                          workspace(
-                              'inbound',
-                              'Supplier RMA',
-                              'Supplier recovery & defective stock',
-                              Icons.local_shipping_outlined),
-                        ];
-                        return constraints.maxWidth >= 650
-                            ? Row(children: [
-                                Expanded(child: cards[0]),
-                                const SizedBox(width: 8),
-                                Expanded(child: cards[1]),
-                                const SizedBox(width: 8),
-                                moreMenu(),
-                              ])
-                            : Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                    cards[0],
-                                    const SizedBox(height: 10),
-                                    cards[1],
-                                    const SizedBox(height: 4),
-                                    moreMenu(),
-                                  ]);
-                      }),
-                      if (activeWorkspace) ...[
-                        const SizedBox(height: 22),
-                        Text(
-                            origin == 'customer'
-                                ? 'Customer RMA'
-                                : 'Supplier RMA',
-                            key: const ValueKey('active-workspace-heading'),
-                            style: Theme.of(context)
-                                .textTheme
-                                .headlineSmall
-                                ?.copyWith(
-                                    fontSize: 25, fontWeight: FontWeight.w700)),
-                        const SizedBox(height: 8),
-                        Text(
-                            origin == 'customer'
-                                ? 'Manage customer returns, warranty claims, inspection, resolution, and handoff.'
-                                : 'Manage supplier warranty recovery and defective stock.',
-                            style: Theme.of(context).textTheme.bodyMedium),
-                        const SizedBox(height: 16),
-                        if (MediaQuery.sizeOf(context).width < 600)
-                          Align(
-                              alignment: Alignment.centerLeft, child: action()),
-                        metricTiles(context),
-                        const SizedBox(height: 22),
-                      ],
-                      if (error != null)
-                        Text(error!, style: TextStyle(color: scheme.error)),
-                      if (activeWorkspace) ...[
-                        AppSearchField(
-                          key: const ValueKey('rma-search'),
-                          controller: searchController,
-                          hintText:
-                              'Search RMA, receipt, customer, product, serial...',
-                          onChanged: (value) =>
-                              setState(() { searchText = value; listPage = 0; }),
-                        ),
-                        const SizedBox(height: 14),
-                        Wrap(spacing: 8, runSpacing: 8, children: [
-                          for (final stage in filters)
-                            ChoiceChip(
-                              label: Text(stage),
-                              selected: filter == stage,
-                              onSelected: (_) => setState(() { filter = stage; listPage = 0; }),
-                            ),
-                          PopupMenuButton<String>(
-                            tooltip: 'More filters',
-                            onSelected: (value) =>
-                                setState(() { filter = value; listPage = 0; }),
-                            itemBuilder: (_) => (origin == 'customer'
-                                    ? const ['Legacy']
-                                    : const <String>[])
-                                .map((value) => PopupMenuItem(
-                                    value: value, child: Text(value)))
-                                .toList(),
-                            child: const Padding(
-                              padding: EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 9),
-                              child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text('More filters'),
-                                    Icon(Icons.arrow_drop_down),
-                                  ]),
-                            ),
-                          ),
-                        ]),
-                        const SizedBox(height: 18),
-                      ],
-                      if (origin == 'attention') ...[
-                        Text('Customer claims awaiting suppliers',
-                            style: Theme.of(context).textTheme.titleMedium),
-                        const SizedBox(height: 8),
-                        for (final row in rows)
-                          if (row.origin == 'customer' &&
-                              stages[row.id] == 'Awaiting supplier')
-                            Card(
-                                child: ListTile(
-                              title: Text(row.reference),
-                              subtitle: Text(
-                                  '${summaries[row.id] ?? ''} · ${nextActions[row.id] ?? ''}'),
-                              trailing: const Icon(Icons.chevron_right),
-                              onTap: () => showCaseDetail(row),
-                            )),
-                        if (!rows.any((row) =>
-                            row.origin == 'customer' &&
-                            stages[row.id] == 'Awaiting supplier'))
-                          const Card(
-                              child: Padding(
-                                  padding: EdgeInsets.all(16),
-                                  child: Text(
-                                      'No customer claims are awaiting suppliers.'))),
-                        const SizedBox(height: 12),
-                        const Text(
-                            'Supplier overdue tracking is unavailable until an SLA is configured.'),
-                      ],
-                      if (origin == 'reports') ...[
-                        Text('RMA overview',
-                            style: Theme.of(context).textTheme.titleMedium),
-                        const SizedBox(height: 8),
-                        Wrap(spacing: 8, runSpacing: 8, children: [
-                          for (final metric in <(String, int)>[
-                            (
-                              'Customer claims',
-                              rows
-                                  .where((row) => row.origin == 'customer')
-                                  .length
-                            ),
-                            (
-                              'Supplier claims',
-                              rows
-                                  .where((row) => row.origin == 'inbound')
-                                  .length
-                            ),
-                            (
-                              'Completed',
-                              rows
-                                  .where((row) => stages[row.id] == 'Completed')
-                                  .length
-                            ),
-                          ])
-                            Card(
-                                child: Padding(
-                                    padding: const EdgeInsets.all(16),
-                                    child: Text('${metric.$1}: ${metric.$2}'))),
-                        ]),
-                      ],
-                      if (origin == 'settings') ...[
-                        Text('RMA settings',
-                            style: Theme.of(context).textTheme.titleMedium),
-                        const SizedBox(height: 8),
-                        const Text(
-                            'Supplier overdue tracking requires an SLA. No RMA-specific settings are configured.'),
-                      ],
-                      if (activeWorkspace)
-                        Expanded(child: AppPagedListPanel(
-                          key: ValueKey('rma-list-panel-$origin'),
-                          title: origin == 'customer' ? 'Customer RMA' : 'Supplier RMA',
-                          total: visible.length,
-                          count: visible.skip(listPage * 50).take(50).length,
-                          page: listPage,
-                          emptyTitle: origin == 'customer'
-                              ? 'No Customer RMAs found' : 'No Supplier RMAs found',
-                          onPrevious: () => setState(() => listPage--),
-                          onNext: () => setState(() => listPage++),
-                          itemBuilder: (context, index) =>
-                              queueRow(context, visible[listPage * 50 + index]),
-                        )),
-                    ]))))))));
+        body: LayoutBuilder(
+            builder: (context, viewport) => SingleChildScrollView(
+                physics: viewport.maxWidth < 600 ||
+                        viewport.maxHeight < 760 ||
+                        !activeWorkspace
+                    ? null
+                    : const NeverScrollableScrollPhysics(),
+                child: SizedBox(
+                    height: viewport.maxWidth < 600 && viewport.maxHeight < 1700
+                        ? 1700
+                        : viewport.maxHeight < 760
+                            ? 900
+                            : !activeWorkspace && viewport.maxHeight < 850
+                                ? 850
+                                : viewport.maxHeight,
+                    child: Center(
+                        child: ConstrainedBox(
+                            constraints: const BoxConstraints(),
+                            child: Padding(
+                                padding: AppLayout.workspacePadding(
+                                    viewport.maxWidth),
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      AppPageHeader(
+                                        title: 'RMA / Warranty',
+                                        subtitle:
+                                            'Manage customer returns, warranties, and supplier recovery.',
+                                        action: activeWorkspace &&
+                                                MediaQuery.sizeOf(context)
+                                                        .width >=
+                                                    600
+                                            ? action()
+                                            : null,
+                                      ),
+                                      LayoutBuilder(
+                                          builder: (context, constraints) {
+                                        final cards = [
+                                          workspace(
+                                              'customer',
+                                              'Customer RMA',
+                                              'Returns & warranties',
+                                              Icons.assignment_return_outlined),
+                                          workspace(
+                                              'inbound',
+                                              'Supplier RMA',
+                                              'Supplier recovery & defective stock',
+                                              Icons.local_shipping_outlined),
+                                        ];
+                                        return constraints.maxWidth >= 650
+                                            ? Row(children: [
+                                                Expanded(child: cards[0]),
+                                                const SizedBox(width: 8),
+                                                Expanded(child: cards[1]),
+                                                const SizedBox(width: 8),
+                                                moreMenu(),
+                                              ])
+                                            : Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.end,
+                                                children: [
+                                                    cards[0],
+                                                    const SizedBox(height: 10),
+                                                    cards[1],
+                                                    const SizedBox(height: 4),
+                                                    moreMenu(),
+                                                  ]);
+                                      }),
+                                      if (activeWorkspace) ...[
+                                        const SizedBox(
+                                            height: AppLayout.sectionGap),
+                                        if (MediaQuery.sizeOf(context).width <
+                                            600)
+                                          Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: action()),
+                                        metricTiles(context),
+                                        const SizedBox(height: 22),
+                                      ],
+                                      if (error != null)
+                                        Text(error!,
+                                            style:
+                                                TextStyle(color: scheme.error)),
+                                      if (activeWorkspace) ...[
+                                        AppSearchField(
+                                          key: const ValueKey('rma-search'),
+                                          controller: searchController,
+                                          hintText:
+                                              'Search RMA, receipt, customer, product, serial...',
+                                          onChanged: (value) {
+                                            searchDebounce?.cancel();
+                                            setState(() {
+                                              searchText = value;
+                                              listPage = 0;
+                                            });
+                                            searchDebounce = Timer(
+                                                const Duration(
+                                                    milliseconds: 300),
+                                                refresh);
+                                          },
+                                        ),
+                                        const SizedBox(height: 14),
+                                        Wrap(
+                                            spacing: 8,
+                                            runSpacing: 8,
+                                            children: [
+                                              for (final stage in filters)
+                                                ChoiceChip(
+                                                  label: Text(stage),
+                                                  selected: filter == stage,
+                                                  onSelected: (_) {
+                                                    setState(() {
+                                                      filter = stage;
+                                                      listPage = 0;
+                                                    });
+                                                    refresh();
+                                                  },
+                                                ),
+                                              PopupMenuButton<String>(
+                                                tooltip: 'More filters',
+                                                onSelected: (value) {
+                                                  setState(() {
+                                                    filter = value;
+                                                    listPage = 0;
+                                                  });
+                                                  refresh();
+                                                },
+                                                itemBuilder: (_) => (origin ==
+                                                            'customer'
+                                                        ? const ['Legacy']
+                                                        : const <String>[])
+                                                    .map((value) =>
+                                                        PopupMenuItem(
+                                                            value: value,
+                                                            child: Text(value)))
+                                                    .toList(),
+                                                child: const Padding(
+                                                  padding: EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 9),
+                                                  child: Row(
+                                                      mainAxisSize:
+                                                          MainAxisSize.min,
+                                                      children: [
+                                                        Text('More filters'),
+                                                        Icon(Icons
+                                                            .arrow_drop_down),
+                                                      ]),
+                                                ),
+                                              ),
+                                            ]),
+                                        const SizedBox(height: 18),
+                                      ],
+                                      if (origin == 'attention') ...[
+                                        Text(
+                                            'Customer claims awaiting suppliers',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium),
+                                        const SizedBox(height: 8),
+                                        for (final row in rows)
+                                          if (row.origin == 'customer' &&
+                                              stages[row.id] ==
+                                                  'Awaiting supplier')
+                                            Card(
+                                                child: ListTile(
+                                              title: Text(row.reference),
+                                              subtitle: Text(
+                                                  '${summaries[row.id] ?? ''} · ${nextActions[row.id] ?? ''}'),
+                                              trailing: const Icon(
+                                                  Icons.chevron_right),
+                                              onTap: () => showCaseDetail(row),
+                                            )),
+                                        if (!rows.any((row) =>
+                                            row.origin == 'customer' &&
+                                            stages[row.id] ==
+                                                'Awaiting supplier'))
+                                          const Card(
+                                              child: Padding(
+                                                  padding: EdgeInsets.all(16),
+                                                  child: Text(
+                                                      'No customer claims are awaiting suppliers.'))),
+                                        const SizedBox(height: 12),
+                                        const Text(
+                                            'Supplier overdue tracking is unavailable until an SLA is configured.'),
+                                      ],
+                                      if (origin == 'reports') ...[
+                                        Text('RMA overview',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium),
+                                        const SizedBox(height: 8),
+                                        Wrap(
+                                            spacing: 8,
+                                            runSpacing: 8,
+                                            children: [
+                                              for (final metric
+                                                  in <(String, int)>[
+                                                (
+                                                  'Customer claims',
+                                                  customerStageCounts.values
+                                                      .fold<int>(
+                                                          0, (a, b) => a + b)
+                                                ),
+                                                (
+                                                  'Supplier claims',
+                                                  supplierStageCounts.values
+                                                      .fold<int>(
+                                                          0, (a, b) => a + b)
+                                                ),
+                                                (
+                                                  'Completed',
+                                                  customerStageCounts[
+                                                          'Completed'] ??
+                                                      0
+                                                ),
+                                              ])
+                                                Card(
+                                                    child: Padding(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .all(16),
+                                                        child: Text(
+                                                            '${metric.$1}: ${metric.$2}'))),
+                                            ]),
+                                      ],
+                                      if (origin == 'settings') ...[
+                                        Text('RMA settings',
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .titleMedium),
+                                        const SizedBox(height: 8),
+                                        const Text(
+                                            'Supplier overdue tracking requires an SLA. No RMA-specific settings are configured.'),
+                                      ],
+                                      if (activeWorkspace)
+                                        Expanded(
+                                            child: AppPagedListPanel(
+                                          key: ValueKey(
+                                              'rma-list-panel-$origin'),
+                                          title: origin == 'customer'
+                                              ? 'Customer RMA'
+                                              : 'Supplier RMA',
+                                          total: resultTotal,
+                                          count: rows.length,
+                                          page: listPage,
+                                          loading: listLoading,
+                                          error: error,
+                                          onRetry: refresh,
+                                          emptyTitle: searchText
+                                                  .trim()
+                                                  .isNotEmpty
+                                              ? 'No RMAs match this search'
+                                              : filter != 'All'
+                                                  ? 'No RMAs match this filter'
+                                                  : origin == 'customer'
+                                                      ? 'No Customer RMAs yet'
+                                                      : 'No Supplier RMAs yet',
+                                          onPrevious: () {
+                                            setState(() => listPage--);
+                                            refresh(reloadCounts: false);
+                                          },
+                                          onNext: () {
+                                            setState(() => listPage++);
+                                            refresh(reloadCounts: false);
+                                          },
+                                          itemBuilder: (context, index) =>
+                                              queueRow(context, rows[index]),
+                                        )),
+                                    ]))))))));
   }
 }

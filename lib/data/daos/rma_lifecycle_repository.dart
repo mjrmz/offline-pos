@@ -1286,6 +1286,66 @@ class RmaLifecycleRepository {
   Future<String> nextAction(String caseId) async {
     final row = await _case(caseId);
     final events = await history(caseId);
+    return _nextAction(row, events, history);
+  }
+
+  Future<Map<String, List<RmaLifecycleEvent>>> historiesFor(
+      List<RmaCase> cases) async {
+    if (cases.isEmpty) return {};
+    final rows = await (db.select(db.rmaLifecycleEvents)
+          ..where((event) => event.caseId.isIn(cases.map((row) => row.id)))
+          ..orderBy([
+            (event) =>
+                OrderingTerm(expression: const CustomExpression<int>('rowid'))
+          ]))
+        .get();
+    final result = <String, List<RmaLifecycleEvent>>{};
+    for (final row in rows) {
+      result.putIfAbsent(row.caseId, () => []).add(row);
+    }
+    return result;
+  }
+
+  /// Load lifecycle facts for a visible page in two batched queries.
+  Future<Map<String, String>> nextActionsFor(List<RmaCase> cases) async {
+    if (cases.isEmpty) return {};
+    final ids = cases.map((row) => row.id).toList();
+    final direct = await (db.select(db.rmaLifecycleEvents)
+          ..where((event) => event.caseId.isIn(ids))
+          ..orderBy([
+            (event) =>
+                OrderingTerm(expression: const CustomExpression<int>('rowid'))
+          ]))
+        .get();
+    final linkedIds = direct
+        .where((event) => event.action == 'supplier_claim_opened')
+        .map((event) => event.relatedCaseId)
+        .whereType<String>()
+        .toSet()
+        .toList();
+    final linked = linkedIds.isEmpty
+        ? <RmaLifecycleEvent>[]
+        : await (db.select(db.rmaLifecycleEvents)
+              ..where((event) => event.caseId.isIn(linkedIds))
+              ..orderBy([
+                (event) => OrderingTerm(
+                    expression: const CustomExpression<int>('rowid'))
+              ]))
+            .get();
+    final byCase = <String, List<RmaLifecycleEvent>>{};
+    for (final event in [...direct, ...linked]) {
+      byCase.putIfAbsent(event.caseId, () => []).add(event);
+    }
+    final result = <String, String>{};
+    for (final row in cases) {
+      result[row.id] = await _nextAction(row, byCase[row.id] ?? const [],
+          (id) async => byCase[id] ?? const []);
+    }
+    return result;
+  }
+
+  Future<String> _nextAction(RmaCase row, List<RmaLifecycleEvent> events,
+      Future<List<RmaLifecycleEvent>> Function(String) loadHistory) async {
     if (events.isEmpty) {
       return 'Legacy record · detailed physical history unavailable';
     }
@@ -1340,7 +1400,7 @@ class RmaLifecycleRepository {
       final link =
           events.where((e) => e.action == 'supplier_claim_opened').lastOrNull;
       if (link == null) return 'Send item to supplier';
-      final supplierEvents = await history(link.relatedCaseId!);
+      final supplierEvents = await loadHistory(link.relatedCaseId!);
       if (!_has(supplierEvents, 'supplier_requested')) {
         return 'Send item to supplier';
       }

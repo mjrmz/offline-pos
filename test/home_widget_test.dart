@@ -199,11 +199,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Settings'), findsOneWidget);
     expect(find.byKey(const Key('pos-shift-status')), findsNothing);
-    await tester.tap(find.text('Business').first);
+    await tester.tap(find.descendant(
+        of: find.byKey(const Key('settings-navigation')),
+        matching: find.text('Inventory')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Business Features'));
+    await tester.tap(find.text('Product capabilities'));
     await tester.pumpAndSettle();
-    expect(find.text('Settings → Business Features'), findsOneWidget);
+    expect(find.textContaining('Choose any combination'), findsOneWidget);
+    expect(find.byType(AppBar), findsNothing);
   });
 
   testWidgets('recovery scan widget mounts only when owner opens its tab',
@@ -231,7 +234,13 @@ void main() {
     expect(recoveryBuilds, 0);
     await tester.drag(find.byType(ListView).first, const Offset(0, -700));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Backup & Recovery'));
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(
+        of: find.byKey(const Key('settings-navigation')),
+        matching: find.text('System')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Backup & Recovery'));
     await tester.pumpAndSettle();
     expect(recoveryBuilds, greaterThan(0));
     expect(find.text('Recovery probe'), findsOneWidget);

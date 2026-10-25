@@ -7,10 +7,162 @@ import 'business_feature_repository.dart';
 import 'sales_repository.dart';
 import 'stock_receiving_repository.dart';
 import 'inventory_layer_repository.dart';
+import 'paged_result.dart';
 
 class RmaRepository {
   final AppDatabase db;
   RmaRepository(this.db);
+
+  static const _stageSource = '''
+    WITH facts AS (
+      SELECT case_id, COUNT(*) fact_count,
+        MAX(action = 'cancelled') cancelled,
+        MAX(action = 'rejected') rejected,
+        MAX(action = 'completed') completed,
+        MAX(action = 'supplier_fulfilled') fulfilled,
+        MAX(action = 'supplier_decision') decision,
+        MAX(action = 'supplier_requested') requested,
+        MAX(action = 'supplier_intake') intake,
+        MAX(action = 'approved') approved,
+        MAX(action = 'intent') intent,
+        SUM(CASE WHEN action = 'received' THEN COALESCE(quantity_milli, 0) ELSE 0 END) received,
+        SUM(CASE WHEN action = 'inspected' THEN COALESCE(quantity_milli, 0) ELSE 0 END) inspected,
+        MAX(CASE WHEN action = 'intent' THEN outcome END) intent_outcome,
+        MAX(CASE WHEN action = 'intent' THEN disposition END) intent_disposition
+      FROM rma_lifecycle_events GROUP BY case_id
+    ), staged AS (
+      SELECT r.*,
+        CASE
+          WHEN COALESCE(f.fact_count, 0) = 0 THEN 'Legacy'
+          WHEN f.cancelled = 1 THEN CASE WHEN r.origin = 'inbound' THEN 'Cancelled' ELSE 'Rejected / Cancelled' END
+          WHEN f.rejected = 1 OR r.status = 'rejected' THEN CASE WHEN r.origin = 'inbound' THEN 'Rejected' ELSE 'Rejected / Cancelled' END
+          WHEN r.origin = 'inbound' THEN CASE
+            WHEN f.completed = 1 OR f.fulfilled = 1 THEN 'Resolved'
+            WHEN f.decision = 1 THEN 'Fulfillment pending'
+            WHEN f.requested = 1 THEN 'Awaiting supplier'
+            WHEN f.intake = 1 THEN 'Ready to send'
+            ELSE 'Requested' END
+          WHEN f.completed = 1 THEN 'Completed'
+          WHEN f.approved = 0 THEN 'Awaiting approval'
+          WHEN f.received < r.quantity_milli THEN 'Awaiting receipt'
+          WHEN f.inspected < r.quantity_milli THEN 'Awaiting inspection'
+          WHEN f.intent = 0 THEN 'Awaiting resolution'
+          WHEN f.intent_outcome = 'supplier_warranty' THEN CASE
+            WHEN (SELECT outcome FROM rma_lifecycle_events se
+              WHERE se.case_id = (SELECT ce.related_case_id FROM rma_lifecycle_events ce
+                WHERE ce.case_id = r.id AND ce.action = 'supplier_claim_opened'
+                ORDER BY ce.rowid DESC LIMIT 1)
+                AND se.action = 'supplier_fulfilled' ORDER BY se.rowid DESC LIMIT 1)
+                IN ('repair', 'no_fault') THEN 'Ready for handoff'
+            WHEN (SELECT outcome FROM rma_lifecycle_events se
+              WHERE se.case_id = (SELECT ce.related_case_id FROM rma_lifecycle_events ce
+                WHERE ce.case_id = r.id AND ce.action = 'supplier_claim_opened'
+                ORDER BY ce.rowid DESC LIMIT 1)
+                AND se.action = 'supplier_fulfilled' ORDER BY se.rowid DESC LIMIT 1)
+                = 'rejected' AND EXISTS (SELECT 1 FROM rma_lifecycle_events se
+                  WHERE se.case_id = (SELECT ce.related_case_id FROM rma_lifecycle_events ce
+                    WHERE ce.case_id = r.id AND ce.action = 'supplier_claim_opened'
+                    ORDER BY ce.rowid DESC LIMIT 1)
+                  AND se.action = 'supplier_disposition' AND se.disposition = 'return_to_customer')
+              THEN 'Ready for handoff'
+            ELSE 'Awaiting supplier' END
+          WHEN f.intent_disposition = 'supplier' THEN 'Awaiting supplier'
+          WHEN f.intent_outcome = 'replacement' AND
+            (SELECT action FROM rma_lifecycle_events re
+             WHERE re.case_id = r.id AND re.action IN ('replacement_reserved', 'replacement_released')
+             ORDER BY re.rowid DESC LIMIT 1) = 'replacement_reserved'
+            THEN 'Ready for handoff'
+          WHEN f.intent_outcome IN ('no_fault', 'reject_claim', 'repaired_return') THEN 'Ready for handoff'
+          ELSE 'Awaiting resolution' END AS stage
+      FROM rma_cases r LEFT JOIN facts f ON f.case_id = r.id
+    )
+  ''';
+
+  Future<PagedResult<RmaCase>> page({
+    required String origin,
+    String search = '',
+    String stage = 'All',
+    int page = 0,
+    DateTime? from,
+    DateTime? until,
+  }) async {
+    final conditions = <String>['r.origin = ?'];
+    final variables = <Variable<Object>>[Variable.withString(origin)];
+    if (stage != 'All') {
+      conditions.add('r.stage = ?');
+      variables.add(Variable.withString(stage));
+    }
+    if (from != null) {
+      conditions.add('r.created_at >= ?');
+      variables.add(Variable.withInt(from.millisecondsSinceEpoch ~/ 1000));
+    }
+    if (until != null) {
+      conditions.add('r.created_at < ?');
+      variables.add(Variable.withInt(until.millisecondsSinceEpoch ~/ 1000));
+    }
+    final term = search.trim().toLowerCase();
+    if (term.isNotEmpty) {
+      conditions.add('''(
+        instr(lower(r.reference), ?) > 0 OR
+        instr(lower(COALESCE(c.name, s.name, '')), ?) > 0 OR
+        instr(lower(COALESCE(c.phone, s.phone, '')), ?) > 0 OR
+        instr(lower(COALESCE(si.product_name, p.name, '')), ?) > 0 OR
+        instr(lower(COALESCE(p.sku, '')), ?) > 0 OR
+        instr(lower(COALESCE(p.barcode, '')), ?) > 0 OR
+        instr(lower(COALESCE(su.serial_number, '')), ?) > 0 OR
+        instr(lower(COALESCE(sa.receipt_number, '')), ?) > 0 OR
+        instr(lower(CAST(sa.bir_invoice_number AS TEXT)), ?) > 0 OR
+        instr(lower(COALESCE(sr.external_reference, '')), ?) > 0 OR
+        instr(lower(r.issue_description), ?) > 0
+      )''');
+      for (var i = 0; i < 11; i++) {
+        variables.add(Variable.withString(term));
+      }
+    }
+    final source = '''$_stageSource
+      SELECT r.id FROM staged r
+      LEFT JOIN customers c ON c.id = r.customer_id
+      LEFT JOIN suppliers s ON s.id = r.supplier_id
+      LEFT JOIN sale_items si ON si.id = r.sale_item_id
+      LEFT JOIN stock_receiving_items sri ON sri.id = r.receiving_item_id
+      LEFT JOIN products p ON p.id = COALESCE(si.product_id, sri.product_id)
+      LEFT JOIN serial_units su ON su.id = r.serial_unit_id
+      LEFT JOIN sales sa ON sa.id = r.sale_id
+      LEFT JOIN stock_receivings sr ON sr.id = r.receiving_id
+      WHERE ${conditions.join(' AND ')}''';
+    final countRows = await db
+        .customSelect('SELECT COUNT(*) AS total FROM ($source)',
+            variables: variables)
+        .get();
+    final total = countRows.single.read<int>('total');
+    final idRows = await db.customSelect('''$source
+      ORDER BY r.created_at DESC, r.id DESC LIMIT 50 OFFSET ?''',
+        variables: [...variables, Variable.withInt(page * 50)]).get();
+    final ids = idRows.map((r) => r.read<String>('id')).toList();
+    if (ids.isEmpty) {
+      return PagedResult(items: const [], totalCount: total, page: page);
+    }
+    final cases =
+        await (db.select(db.rmaCases)..where((r) => r.id.isIn(ids))).get();
+    final byId = {for (final row in cases) row.id: row};
+    return PagedResult(
+        items: [for (final id in ids) byId[id]!],
+        totalCount: total,
+        page: page);
+  }
+
+  Future<RmaCase?> byId(String id) =>
+      (db.select(db.rmaCases)..where((r) => r.id.equals(id))).getSingleOrNull();
+
+  Future<Map<String, int>> stageCounts(String origin) async {
+    final rows = await db.customSelect('''$_stageSource
+      SELECT stage, COUNT(*) AS total FROM staged
+      WHERE origin = ? GROUP BY stage''',
+        variables: [Variable.withString(origin)]).get();
+    return {
+      for (final row in rows) row.read<String>('stage'): row.read<int>('total')
+    };
+  }
 
   Future<List<RmaChoice>> choices(String origin, String query) async {
     final result = <RmaChoice>[];

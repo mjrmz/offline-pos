@@ -5,6 +5,7 @@ import '../../core/models/quantity.dart';
 import '../database.dart';
 import 'auth_repository.dart';
 import 'business_feature_repository.dart';
+import 'paged_result.dart';
 
 class PurchaseOrderLineInput {
   final String productId;
@@ -163,6 +164,186 @@ class PurchaseOrderRepository {
           (o) => OrderingTerm(expression: o.sequence, mode: OrderingMode.desc)
         ]))
       .get();
+
+  /// Mirrors PurchaseOrderProgress.status and isOverdue using SQL aggregates.
+  Future<PagedResult<PurchaseOrderProgress>> page({
+    int page = 0,
+    String search = '',
+    String status = 'All',
+    String? supplierId,
+    DateTime? orderFrom,
+    DateTime? orderThrough,
+    DateTime? deliveryFrom,
+    DateTime? deliveryThrough,
+    DateTime? today,
+  }) async {
+    if (page < 0) throw ArgumentError.value(page, 'page');
+    final conditions = <String>[];
+    final variables = <Variable>[];
+    final term = search.trim().toLowerCase();
+    if (term.isNotEmpty) {
+      conditions.add('''(
+        instr(lower(printf('PO-%06d', q.sequence)), ?) > 0
+        OR instr(lower(s.name), ?) > 0
+        OR instr(lower(COALESCE(q.supplier_reference, '')), ?) > 0
+      )''');
+      variables.addAll(List.generate(3, (_) => Variable.withString(term)));
+    }
+    if (supplierId != null) {
+      conditions.add('q.supplier_id = ?');
+      variables.add(Variable.withString(supplierId));
+    }
+    void addRange(String column, DateTime? from, DateTime? through) {
+      if (from != null) {
+        conditions.add('$column >= ?');
+        variables.add(Variable.withInt(
+            DateTime(from.year, from.month, from.day).millisecondsSinceEpoch ~/
+                1000));
+      }
+      if (through != null) {
+        conditions.add('$column < ?');
+        variables.add(Variable.withInt(
+            DateTime(through.year, through.month, through.day + 1)
+                    .millisecondsSinceEpoch ~/
+                1000));
+      }
+    }
+
+    addRange('q.order_date', orderFrom, orderThrough);
+    addRange('q.expected_delivery_date', deliveryFrom, deliveryThrough);
+    final localToday = today ?? DateTime.now();
+    final todayEpoch =
+        DateTime(localToday.year, localToday.month, localToday.day)
+                .millisecondsSinceEpoch ~/
+            1000;
+    switch (status) {
+      case 'All':
+        break;
+      case 'Open':
+        conditions.add(
+            "q.computed_status IN ('sent', 'partially_received') AND q.remaining > 0");
+        break;
+      case 'Awaiting delivery':
+      case 'Sent':
+        conditions.add("q.computed_status = 'sent'");
+        break;
+      case 'Completed':
+        conditions.add("q.computed_status IN ('fully_received', 'closed')");
+        break;
+      case 'Overdue':
+        conditions.add(
+            "q.computed_status IN ('sent', 'partially_received') AND q.remaining > 0 AND q.expected_delivery_date < ?");
+        variables.add(Variable.withInt(todayEpoch));
+        break;
+      default:
+        final raw = status.toLowerCase().replaceAll(' ', '_');
+        if (!{
+          'draft',
+          'partially_received',
+          'fully_received',
+          'closed',
+          'cancelled'
+        }.contains(raw)) {
+          throw ArgumentError.value(status, 'status');
+        }
+        conditions.add('q.computed_status = ?');
+        variables.add(Variable.withString(raw));
+    }
+    const source = '''
+      WITH received AS (
+        SELECT i.purchase_order_line_id AS line_id,
+          SUM(i.quantity_milli) AS quantity
+        FROM stock_receiving_items i
+        WHERE i.purchase_order_line_id IS NOT NULL
+        GROUP BY i.purchase_order_line_id
+      ), progress AS (
+        SELECT o.id, o.sequence, o.supplier_id, o.supplier_reference,
+          o.order_date, o.expected_delivery_date, o.status,
+          COALESCE(SUM(COALESCE(r.quantity, 0)), 0) AS received,
+          COALESCE(SUM(l.ordered_qty_milli - l.cancelled_qty_milli
+            - COALESCE(r.quantity, 0)), 0) AS remaining
+        FROM purchase_orders o
+        LEFT JOIN purchase_order_lines l ON l.purchase_order_id = o.id
+        LEFT JOIN received r ON r.line_id = l.id
+        GROUP BY o.id
+      ), q AS (
+        SELECT p.*, CASE
+          WHEN p.status IN ('draft', 'cancelled', 'closed') THEN p.status
+          WHEN p.received = 0 THEN 'sent'
+          WHEN p.remaining = 0 THEN 'fully_received'
+          ELSE 'partially_received' END AS computed_status
+        FROM progress p
+      )
+    ''';
+    const from = 'FROM q JOIN suppliers s ON s.id = q.supplier_id';
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
+    return db.transaction(() async {
+      final total = (await db
+              .customSelect(
+                '$source SELECT COUNT(*) AS total $from $where',
+                variables: variables,
+              )
+              .getSingle())
+          .read<int>('total');
+      final ids = (await db.customSelect(
+        '$source SELECT q.id $from $where ORDER BY q.sequence DESC, q.id DESC LIMIT 50 OFFSET ?',
+        variables: [...variables, Variable.withInt(page * 50)],
+      ).get())
+          .map((row) => row.read<String>('id'))
+          .toList();
+      final progress = await progressFor(ids);
+      return PagedResult(
+        items: [for (final id in ids) progress[id]!],
+        totalCount: total,
+        page: page,
+      );
+    });
+  }
+
+  Future<Map<String, PurchaseOrderProgress>> progressFor(
+      Iterable<String> orderIds) async {
+    final ids = orderIds.toList();
+    if (ids.isEmpty) return {};
+    final orders = await (db.select(db.purchaseOrders)
+          ..where((o) => o.id.isIn(ids)))
+        .get();
+    final lines = await (db.select(db.purchaseOrderLines)
+          ..where((l) => l.purchaseOrderId.isIn(ids)))
+        .get();
+    final receipts = await (db.select(db.stockReceivings)
+          ..where((r) => r.purchaseOrderId.isIn(ids)))
+        .get();
+    final receiptIds = receipts.map((r) => r.id).toList();
+    final received = <String, int>{};
+    for (var start = 0; start < receiptIds.length; start += 900) {
+      final batch = receiptIds.skip(start).take(900).toList();
+      final items = await (db.select(db.stockReceivingItems)
+            ..where((i) => i.receivingId.isIn(batch)))
+          .get();
+      for (final item in items) {
+        if (item.purchaseOrderLineId != null) {
+          received.update(
+              item.purchaseOrderLineId!, (value) => value + item.quantityMilli,
+              ifAbsent: () => item.quantityMilli);
+        }
+      }
+    }
+    return {
+      for (final order in orders)
+        order.id: PurchaseOrderProgress(
+          order,
+          lines.where((line) => line.purchaseOrderId == order.id).toList(),
+          {
+            for (final line
+                in lines.where((line) => line.purchaseOrderId == order.id))
+              if (received.containsKey(line.id)) line.id: received[line.id]!,
+          },
+          receipts
+              .where((receipt) => receipt.purchaseOrderId == order.id)
+              .toList(),
+        ),
+    };
+  }
 
   Future<int> incomingForProduct(String productId) async {
     var incoming = 0;

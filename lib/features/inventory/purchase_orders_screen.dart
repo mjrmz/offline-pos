@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,9 +16,12 @@ import '../../data/database.dart';
 import '../../data/daos/directory_repository.dart';
 import '../../data/daos/pos_repository.dart';
 import '../../data/daos/purchase_order_repository.dart';
+import '../../data/daos/purchase_return_repository.dart';
+import 'purchase_returns_screen.dart';
 import '../../data/daos/stock_receiving_repository.dart';
 import '../../data/daos/supplier_procurement_repository.dart';
 import '../../data/daos/inventory_planning_repository.dart';
+import '../../data/daos/paged_result.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/utils/safe_message.dart';
 import 'documents/purchase_order_pdf.dart';
@@ -100,6 +104,7 @@ class PurchaseOrdersScreen extends StatefulWidget {
   final String? initialProductId;
   final String? initialExistingOrderId;
   final String? initialSelectedOrderId;
+  final bool createOnOpen;
   final List<({String productId, int quantityMilli})>? initialLines;
   final String? initialSupplierId;
   final int? initialQuantityMilli;
@@ -116,6 +121,7 @@ class PurchaseOrdersScreen extends StatefulWidget {
       this.initialProductId,
       this.initialExistingOrderId,
       this.initialSelectedOrderId,
+      this.createOnOpen = false,
       this.initialLines,
       this.initialSupplierId,
       this.initialQuantityMilli,
@@ -127,6 +133,11 @@ class PurchaseOrdersScreen extends StatefulWidget {
 class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
   final GlobalKey _expandedOrderKey = GlobalKey();
   List<PurchaseOrder> orders = [];
+  PagedResult<PurchaseOrderProgress>? orderPage;
+  int listPage = 0;
+  bool listLoading = false;
+  int listGeneration = 0;
+  Timer? searchDebounce;
   List<Supplier> suppliers = [];
   List<PosProduct> products = [];
   String? selectedId;
@@ -137,6 +148,12 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
   DateTimeRange? deliveryRange;
   String? error;
   bool busy = false;
+
+  @override
+  void dispose() {
+    searchDebounce?.cancel();
+    super.dispose();
+  }
 
   Future<void> _openQuickDetail(PurchaseOrder order,
       PurchaseOrderProgress progress, String supplier) async {
@@ -327,6 +344,30 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                         ),
                     ],
                   )),
+            DrawerSection(title: 'Purchase Returns', child: FutureBuilder(
+              future: PurchaseReturnRepository(widget.repository.db)
+                  .forPurchaseOrder(order.id),
+              builder: (context, snapshot) {
+                final returns = snapshot.data ?? <PurchaseReturn>[];
+                if (returns.isEmpty) return const Text('No purchase returns linked to this order.');
+                return Column(children: [for (final row in returns)
+                  FutureBuilder(future: PurchaseReturnRepository(widget.repository.db).lines(row.id),
+                    builder: (context, lineSnapshot) {
+                    final lines = lineSnapshot.data ?? <PurchaseReturnLine>[];
+                    return ListTile(contentPadding: EdgeInsets.zero,
+                    title: Text(PurchaseReturnRepository.number(row)),
+                    subtitle: Text('${Quantity.format(lines.fold<int>(0, (n, l) => n + l.quantityMilli))} returned · ${formatPeso(lines.fold<int>(0, (n, l) => n + l.returnValueCents))} · ${row.status} · ${PurchaseReturnResolution.values.byName(row.resolution).label}'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.pop(drawerContext);
+                      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => Scaffold(
+                        appBar: AppBar(title: const Text('Purchase Returns')),
+                        body: PurchaseReturnsScreen(
+                          repository: PurchaseReturnRepository(widget.repository.db),
+                          user: widget.user, initialReturnId: row.id))));
+                    });
+                  })]);
+              })),
           ],
         ),
         primaryAction: FilledButton(
@@ -403,7 +444,8 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
         widget.repository.detail(widget.initialExistingOrderId!).then((order) {
           if (mounted) create(order);
         });
-      } else if (widget.initialProductId?.isNotEmpty == true ||
+      } else if (widget.createOnOpen ||
+          widget.initialProductId?.isNotEmpty == true ||
           widget.initialLines?.isNotEmpty == true) {
         create();
       }
@@ -412,20 +454,68 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
 
   Future<void> refresh() async {
     try {
-      final rows = await widget.repository.list();
       final supplierRows = await widget.directory.suppliers();
       final productRows = await widget.products.products();
       if (mounted) {
         setState(() {
-          orders = rows;
           suppliers = supplierRows;
           products = productRows;
           error = null;
         });
       }
+      await loadOrders();
     } catch (e) {
       if (mounted) setState(() => error = safeMessage(e));
     }
+  }
+
+  Future<void> loadOrders() async {
+    final generation = ++listGeneration;
+    if (mounted) setState(() => listLoading = true);
+    try {
+      final result = await widget.repository.page(
+        page: listPage,
+        search: search,
+        status: filter,
+        supplierId: supplierFilter,
+        orderFrom: orderRange?.start,
+        orderThrough: orderRange?.end,
+        deliveryFrom: deliveryRange?.start,
+        deliveryThrough: deliveryRange?.end,
+      );
+      final detailId = selectedId ?? widget.initialSelectedOrderId;
+      PurchaseOrder? selectedOrder;
+      if (detailId != null &&
+          !result.items.any((progress) => progress.order.id == detailId)) {
+        selectedOrder = (await widget.repository.detail(detailId)).order;
+      }
+      if (mounted && generation == listGeneration) {
+        setState(() {
+          orderPage = result;
+          orders = [
+            ...result.items.map((progress) => progress.order),
+            if (selectedOrder != null) selectedOrder,
+          ];
+          listLoading = false;
+          error = null;
+        });
+      }
+    } catch (failure) {
+      if (mounted && generation == listGeneration) {
+        setState(() {
+          listLoading = false;
+          error = safeMessage(failure);
+        });
+      }
+    }
+  }
+
+  void changeListFilter(VoidCallback update) {
+    setState(() {
+      update();
+      listPage = 0;
+    });
+    loadOrders();
   }
 
   Future<void> create([PurchaseOrderProgress? existing]) async {
@@ -874,54 +964,38 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
         _ => '${status[0].toUpperCase()}${status.substring(1)}'
       };
 
-  @override
-  Widget build(BuildContext context) => Scaffold(
-      body: Center(
+  Widget listWorkspace(BuildContext context) => Scaffold(
+        body: Center(
           child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1280),
-              child: ListView(padding: const EdgeInsets.all(20), children: [
-                if (selectedId != null)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: () => setState(() => selectedId = null),
-                      icon: const Icon(Icons.arrow_back),
-                      label: const Text('Back to Purchase Orders'),
+            constraints: const BoxConstraints(),
+            child: AppWorkspacePadding(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AppPageHeader(
+                      title: 'Purchase Orders',
+                      subtitle:
+                          'Plan purchases and receive deliveries through Receiving.',
+                      action: FilledButton.icon(
+                        onPressed: create,
+                        icon: const Icon(Icons.add),
+                        label: const Text('New Purchase Order'),
+                      ),
                     ),
-                  ),
-                AppPageHeader(
-                  title: selectedId == null
-                      ? 'Purchase Orders'
-                      : orders
-                              .where((order) => order.id == selectedId)
-                              .map(PurchaseOrderRepository.number)
-                              .firstOrNull ??
-                          'Purchase Order',
-                  subtitle: selectedId == null
-                      ? 'Plan purchases and receive deliveries through Receiving.'
-                      : null,
-                  action: selectedId == null
-                      ? FilledButton.icon(
-                          onPressed: create,
-                          icon: const Icon(Icons.add),
-                          label: const Text('New Purchase Order'))
-                      : null,
-                ),
-                if (error != null)
-                  Text(error!,
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.error)),
-                const SizedBox(height: 16),
-                if (selectedId == null)
-                  Wrap(spacing: 12, children: [
-                    SizedBox(
-                        width: 280,
-                        child: TextField(
-                            decoration: const InputDecoration(
-                                prefixIcon: Icon(Icons.search),
-                                labelText: 'Search PO, supplier, reference'),
-                            onChanged: (v) => setState(() => search = v))),
-                    DropdownButton<String>(
+                    AppSearchField(
+                      hintText: 'Search PO, supplier, reference',
+                      onChanged: (value) {
+                        searchDebounce?.cancel();
+                        searchDebounce =
+                            Timer(const Duration(milliseconds: 300), () {
+                          if (!mounted) return;
+                          changeListFilter(() => search = value.trim());
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(spacing: 12, runSpacing: 6, children: [
+                      DropdownButton<String>(
                         value: filter,
                         items: [
                           'All',
@@ -936,11 +1010,13 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                           'Closed',
                           'Cancelled'
                         ]
-                            .map((v) =>
-                                DropdownMenuItem(value: v, child: Text(v)))
+                            .map((value) => DropdownMenuItem(
+                                value: value, child: Text(value)))
                             .toList(),
-                        onChanged: (v) => setState(() => filter = v ?? 'All')),
-                    DropdownButton<String?>(
+                        onChanged: (value) =>
+                            changeListFilter(() => filter = value ?? 'All'),
+                      ),
+                      DropdownButton<String?>(
                         value: supplierFilter,
                         hint: const Text('All suppliers'),
                         items: [
@@ -950,398 +1026,624 @@ class _PurchaseOrdersScreenState extends State<PurchaseOrdersScreen> {
                             DropdownMenuItem<String?>(
                                 value: supplier.id, child: Text(supplier.name)),
                         ],
-                        onChanged: (v) => setState(() => supplierFilter = v)),
-                    OutlinedButton(
-                      onPressed: () async {
-                        final range = await showDateRangePicker(
+                        onChanged: (value) =>
+                            changeListFilter(() => supplierFilter = value),
+                      ),
+                      OutlinedButton(
+                        onPressed: () async {
+                          final range = await showDateRangePicker(
                             context: context,
                             firstDate: DateTime(2000),
                             lastDate: DateTime(2100),
-                            initialDateRange: orderRange);
-                        if (range != null) setState(() => orderRange = range);
-                      },
-                      child: Text(orderRange == null
-                          ? 'Order dates'
-                          : 'Order: ${MaterialLocalizations.of(context).formatShortDate(orderRange!.start)}–${MaterialLocalizations.of(context).formatShortDate(orderRange!.end)}'),
-                    ),
-                    OutlinedButton(
-                      onPressed: () async {
-                        final range = await showDateRangePicker(
+                            initialDateRange: orderRange,
+                          );
+                          if (range != null) {
+                            changeListFilter(() => orderRange = range);
+                          }
+                        },
+                        child: Text(orderRange == null
+                            ? 'Order dates'
+                            : 'Order: ${MaterialLocalizations.of(context).formatShortDate(orderRange!.start)}–${MaterialLocalizations.of(context).formatShortDate(orderRange!.end)}'),
+                      ),
+                      OutlinedButton(
+                        onPressed: () async {
+                          final range = await showDateRangePicker(
                             context: context,
                             firstDate: DateTime(2000),
                             lastDate: DateTime(2100),
-                            initialDateRange: deliveryRange);
-                        if (range != null) {
-                          setState(() => deliveryRange = range);
-                        }
+                            initialDateRange: deliveryRange,
+                          );
+                          if (range != null) {
+                            changeListFilter(() => deliveryRange = range);
+                          }
+                        },
+                        child: Text(deliveryRange == null
+                            ? 'Expected delivery'
+                            : 'Delivery: ${MaterialLocalizations.of(context).formatShortDate(deliveryRange!.start)}–${MaterialLocalizations.of(context).formatShortDate(deliveryRange!.end)}'),
+                      ),
+                      if (orderRange != null || deliveryRange != null)
+                        TextButton(
+                          onPressed: () => changeListFilter(() {
+                            orderRange = null;
+                            deliveryRange = null;
+                          }),
+                          child: const Text('Clear dates'),
+                        ),
+                    ]),
+                    const SizedBox(height: 12),
+                    Expanded(
+                        child: AppPagedListPanel(
+                      key: const Key('purchase-order-list-panel'),
+                      title: 'Purchase Orders',
+                      total: orderPage?.totalCount ?? 0,
+                      count: orderPage?.items.length ?? 0,
+                      page: listPage,
+                      loading: listLoading || orderPage == null,
+                      error: error,
+                      onRetry: loadOrders,
+                      emptyTitle: search.isNotEmpty
+                          ? 'No purchase orders match this search'
+                          : filter != 'All' ||
+                                  supplierFilter != null ||
+                                  orderRange != null ||
+                                  deliveryRange != null
+                              ? 'No purchase orders match these filters'
+                              : 'No purchase orders yet',
+                      onPrevious: () {
+                        setState(() => listPage--);
+                        loadOrders();
                       },
-                      child: Text(deliveryRange == null
-                          ? 'Expected delivery'
-                          : 'Delivery: ${MaterialLocalizations.of(context).formatShortDate(deliveryRange!.start)}–${MaterialLocalizations.of(context).formatShortDate(deliveryRange!.end)}'),
-                    ),
-                    if (orderRange != null || deliveryRange != null)
-                      TextButton(
-                          onPressed: () => setState(() {
-                                orderRange = null;
-                                deliveryRange = null;
-                              }),
-                          child: const Text('Clear dates')),
-                  ]),
-                if (orders.isEmpty)
-                  AppEmptyState(
-                    title: 'No purchase orders yet',
-                    message:
-                        'Create a purchase order to track supplier orders and incoming stock.',
-                    action: TextButton(
-                      onPressed: create,
-                      child: const Text('New Purchase Order'),
-                    ),
-                  ),
-                for (final order in orders)
-                  FutureBuilder<PurchaseOrderProgress>(
-                      future: widget.repository.detail(order.id),
-                      builder: (context, snapshot) {
-                        final p = snapshot.data;
-                        if (p == null) return const SizedBox.shrink();
+                      onNext: () {
+                        setState(() => listPage++);
+                        loadOrders();
+                      },
+                      itemBuilder: (context, index) {
+                        final progress = orderPage!.items[index];
+                        final order = progress.order;
                         final supplier = suppliers
-                                .where((s) => s.id == order.supplierId)
+                                .where((item) => item.id == order.supplierId)
                                 .firstOrNull
                                 ?.name ??
                             'Supplier';
-                        final haystack =
-                            '${PurchaseOrderRepository.number(order)} $supplier '
-                                    '${order.supplierReference ?? ''}'
-                                .toLowerCase();
                         final today = DateUtils.dateOnly(DateTime.now());
                         final expected = order.expectedDeliveryDate == null
                             ? null
                             : DateUtils.dateOnly(order.expectedDeliveryDate!);
-                        final overdue = p.isOverdue(DateTime.now());
+                        final overdue = progress.isOverdue(DateTime.now());
                         final dueLabel = expected == null
                             ? 'Expected not set'
                             : overdue
-                                ? 'Overdue · ${today.difference(expected).inDays} ${today.difference(expected).inDays == 1 ? 'day' : 'days'}'
+                                ? 'Overdue · ${today.difference(expected).inDays} days'
                                 : expected == today
                                     ? 'Due today'
                                     : 'Expected ${MaterialLocalizations.of(context).formatMediumDate(expected)}';
-                        final matchesStatus = filter == 'All' ||
-                            (filter == 'Open' &&
-                                p.remainingTotal > 0 &&
-                                {'sent', 'partially_received'}
-                                    .contains(p.status)) ||
-                            (filter == 'Awaiting delivery' &&
-                                p.status == 'sent') ||
-                            (filter == 'Completed' &&
-                                {'fully_received', 'closed'}
-                                    .contains(p.status)) ||
-                            (filter == 'Overdue' && overdue) ||
-                            label(p.status).toLowerCase() ==
-                                filter.toLowerCase();
-                        bool inRange(DateTime value, DateTimeRange range) {
-                          final day = DateUtils.dateOnly(value);
-                          return !day.isBefore(range.start) &&
-                              !day.isAfter(range.end);
-                        }
+                        return AppEntityRow(
+                          title:
+                              '${PurchaseOrderRepository.number(order)} · $supplier',
+                          subtitle:
+                              '${MaterialLocalizations.of(context).formatMediumDate(order.orderDate)} · $dueLabel\n'
+                              '${Quantity.format(progress.ordered)} ordered · '
+                              '${Quantity.format(progress.receivedTotal)} received · '
+                              '${Quantity.format(progress.remainingTotal)} remaining',
+                          amount: formatPeso(progress.estimatedTotal),
+                          status: AppSemanticStatusBadge(
+                              label: label(progress.status)),
+                          onTap: () =>
+                              _openQuickDetail(order, progress, supplier),
+                        );
+                      },
+                    )),
+                  ]),
+            ),
+          ),
+        ),
+      );
 
-                        if (selectedId != null && selectedId != order.id) {
-                          return const SizedBox.shrink();
-                        }
-                        if (selectedId == null &&
-                            (!haystack.contains(search.toLowerCase()) ||
-                                !matchesStatus ||
-                                (supplierFilter != null &&
-                                    supplierFilter != order.supplierId) ||
-                                (orderRange != null &&
-                                    !inRange(order.orderDate, orderRange!)) ||
-                                (deliveryRange != null &&
-                                    (order.expectedDeliveryDate == null ||
-                                        !inRange(order.expectedDeliveryDate!,
-                                            deliveryRange!))))) {
-                          return const SizedBox.shrink();
-                        }
-                        return Card(
-                            child: Column(children: [
-                          if (selectedId == null)
-                            ListTile(
-                                title: Text(
-                                    '${PurchaseOrderRepository.number(order)} · $supplier'),
-                                subtitle: Text(
-                                    '${label(p.status)} · Ordered ${MaterialLocalizations.of(context).formatMediumDate(order.orderDate)} · $dueLabel\n'
-                                    '${Quantity.format(p.ordered)} ordered · ${Quantity.format(p.receivedTotal)} received · ${Quantity.format(p.remainingTotal)} remaining · ${formatPeso(p.estimatedTotal)} expected'),
-                                trailing: const Icon(Icons.chevron_right),
-                                onTap: () =>
-                                    _openQuickDetail(order, p, supplier)),
-                          if (selectedId == order.id)
-                            Padding(
-                                key: _expandedOrderKey,
-                                padding: const EdgeInsets.all(16),
-                                child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      TextButton.icon(
-                                          onPressed: () =>
-                                              setState(() => selectedId = null),
-                                          icon: const Icon(Icons.arrow_back),
-                                          label: const Text(
-                                              'Back to Purchase Orders')),
-                                      Text(
-                                          'Supplier reference: ${order.supplierReference ?? '—'}'),
-                                      Text(
-                                          'Expected delivery: ${order.expectedDeliveryDate == null ? 'Not set' : MaterialLocalizations.of(context).formatMediumDate(order.expectedDeliveryDate!)}'),
-                                      Text('Notes: ${order.notes ?? '—'}'),
-                                      Text(
-                                          'Remaining: ${Quantity.format(p.remainingTotal)}'),
-                                      if (p.receivedTotal > 0)
-                                        FutureBuilder<ReceivedCostVariance>(
-                                            future: widget.repository
-                                                .receivedCostVariance(order.id),
-                                            builder: (context, snapshot) {
-                                              final value = snapshot.data;
-                                              if (value == null) {
-                                                return const SizedBox.shrink();
-                                              }
-                                              final difference =
-                                                  value.differenceCents;
-                                              return Text(
-                                                  'Expected value of received quantity: ${formatPeso(value.expectedCents)} · Actual received cost: ${formatPeso(value.actualCents)} · Variance: ${difference > 0 ? '+' : ''}${formatPeso(difference)}${value.percent == null ? '' : ' (${value.percent!.toStringAsFixed(1)}%)'}');
-                                            }),
-                                      if (order.cancelReason != null)
-                                        Text(
-                                            'Cancellation: ${order.cancelReason}'),
-                                      const SizedBox(height: 12),
-                                      FutureBuilder<
-                                              Map<String, List<Quotation>>>(
-                                          future: widget.repository
-                                              .sourceQuotationsForOrder(
-                                                  order.id),
-                                          builder:
-                                              (context, sources) => Column(
-                                                      crossAxisAlignment:
-                                                          CrossAxisAlignment
-                                                              .start,
-                                                      children: [
-                                                        Text('Items',
-                                                            style: Theme.of(
-                                                                    context)
-                                                                .textTheme
-                                                                .titleMedium),
-                                                        for (final line
-                                                            in p.lines)
-                                                          ListTile(
-                                                              dense: true,
-                                                              title: Text(products
-                                                                      .where((x) =>
-                                                                          x.id ==
-                                                                          line
-                                                                              .productId)
-                                                                      .firstOrNull
-                                                                      ?.name ??
-                                                                  'Product'),
-                                                              subtitle: Column(
-                                                                  crossAxisAlignment:
-                                                                      CrossAxisAlignment
-                                                                          .start,
-                                                                  children: [
-                                                                    Text(
-                                                                        'Ordered ${Quantity.format(line.orderedQtyMilli)} · Received ${Quantity.format(p.received[line.id] ?? 0)} · Remaining ${Quantity.format(p.remaining(line))} · Expected ${formatPeso(line.expectedUnitCostCents)}'),
-                                                                    for (final quote
-                                                                        in sources.data?[line.id] ??
-                                                                            <Quotation>[])
-                                                                      TextButton(
-                                                                          onPressed: widget.onOpenQuotation == null
-                                                                              ? null
-                                                                              : () => widget.onOpenQuotation!(quote
-                                                                                  .reference),
-                                                                          child:
-                                                                              Text('Source: ${quote.reference}')),
-                                                                  ])),
-                                                        if ((sources.data
-                                                                    ?.isEmpty ??
-                                                                false) &&
-                                                            (order.notes?.contains(
-                                                                    'For quotation') ??
-                                                                false))
-                                                          const Text(
-                                                              'Legacy sourcing note (unverified link)'),
-                                                      ])),
-                                      if (p.receivings.isNotEmpty) ...[
-                                        Text('Receiving history',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .titleMedium),
-                                        for (final receipt in p.receivings)
-                                          ListTile(
-                                              dense: true,
-                                              title: Text(
-                                                  StockReceivingRepository
-                                                      .number(receipt)),
-                                              subtitle: Text(
-                                                  '${MaterialLocalizations.of(context).formatMediumDate(receipt.receivedAt)} · ${receipt.externalReference?.isNotEmpty == true ? 'Supplier reference ${receipt.externalReference}' : 'No supplier reference'}'),
-                                              onTap: widget.onOpenReceiving ==
-                                                      null
-                                                  ? null
-                                                  : () =>
-                                                      widget.onOpenReceiving!(
-                                                          receipt.id)),
-                                      ],
-                                      if (order.sentAt != null) ...[
-                                        const SizedBox(height: 8),
-                                        Text(p.receivings.isEmpty
-                                            ? 'Open for ${SupplierProcurementRepository.calendarDays(order.sentAt!, DateTime.now())} days'
-                                            : 'First delivery: ${SupplierProcurementRepository.calendarDays(order.sentAt!, p.receivings.first.receivedAt)} days after sent${order.expectedDeliveryDate == null ? '' : ' · ${SupplierProcurementRepository.deliveryPerformance(order.expectedDeliveryDate!, p.receivings.first.receivedAt)}'}'),
-                                        if (p.receivings.isNotEmpty &&
-                                            {'fully_received', 'closed'}
-                                                .contains(p.status))
+  @override
+  Widget build(BuildContext context) => selectedId == null
+      ? listWorkspace(context)
+      : Scaffold(
+          body: Center(
+              child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1280),
+                  child: ListView(padding: const EdgeInsets.all(20), children: [
+                    if (selectedId != null)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () => setState(() => selectedId = null),
+                          icon: const Icon(Icons.arrow_back),
+                          label: const Text('Back to Purchase Orders'),
+                        ),
+                      ),
+                    AppPageHeader(
+                      title: selectedId == null
+                          ? 'Purchase Orders'
+                          : orders
+                                  .where((order) => order.id == selectedId)
+                                  .map(PurchaseOrderRepository.number)
+                                  .firstOrNull ??
+                              'Purchase Order',
+                      subtitle: selectedId == null
+                          ? 'Plan purchases and receive deliveries through Receiving.'
+                          : null,
+                      action: selectedId == null
+                          ? FilledButton.icon(
+                              onPressed: create,
+                              icon: const Icon(Icons.add),
+                              label: const Text('New Purchase Order'))
+                          : null,
+                    ),
+                    if (error != null)
+                      Text(error!,
+                          style: TextStyle(
+                              color: Theme.of(context).colorScheme.error)),
+                    const SizedBox(height: 16),
+                    if (selectedId == null)
+                      Wrap(spacing: 12, children: [
+                        SizedBox(
+                            width: 280,
+                            child: TextField(
+                                decoration: const InputDecoration(
+                                    prefixIcon: Icon(Icons.search),
+                                    labelText:
+                                        'Search PO, supplier, reference'),
+                                onChanged: (v) => setState(() => search = v))),
+                        DropdownButton<String>(
+                            value: filter,
+                            items: [
+                              'All',
+                              'Open',
+                              'Awaiting delivery',
+                              'Completed',
+                              'Overdue',
+                              'Draft',
+                              'Sent',
+                              'Partially received',
+                              'Fully received',
+                              'Closed',
+                              'Cancelled'
+                            ]
+                                .map((v) =>
+                                    DropdownMenuItem(value: v, child: Text(v)))
+                                .toList(),
+                            onChanged: (v) =>
+                                setState(() => filter = v ?? 'All')),
+                        DropdownButton<String?>(
+                            value: supplierFilter,
+                            hint: const Text('All suppliers'),
+                            items: [
+                              const DropdownMenuItem<String?>(
+                                  value: null, child: Text('All suppliers')),
+                              for (final supplier in suppliers)
+                                DropdownMenuItem<String?>(
+                                    value: supplier.id,
+                                    child: Text(supplier.name)),
+                            ],
+                            onChanged: (v) =>
+                                setState(() => supplierFilter = v)),
+                        OutlinedButton(
+                          onPressed: () async {
+                            final range = await showDateRangePicker(
+                                context: context,
+                                firstDate: DateTime(2000),
+                                lastDate: DateTime(2100),
+                                initialDateRange: orderRange);
+                            if (range != null) {
+                              setState(() => orderRange = range);
+                            }
+                          },
+                          child: Text(orderRange == null
+                              ? 'Order dates'
+                              : 'Order: ${MaterialLocalizations.of(context).formatShortDate(orderRange!.start)}–${MaterialLocalizations.of(context).formatShortDate(orderRange!.end)}'),
+                        ),
+                        OutlinedButton(
+                          onPressed: () async {
+                            final range = await showDateRangePicker(
+                                context: context,
+                                firstDate: DateTime(2000),
+                                lastDate: DateTime(2100),
+                                initialDateRange: deliveryRange);
+                            if (range != null) {
+                              setState(() => deliveryRange = range);
+                            }
+                          },
+                          child: Text(deliveryRange == null
+                              ? 'Expected delivery'
+                              : 'Delivery: ${MaterialLocalizations.of(context).formatShortDate(deliveryRange!.start)}–${MaterialLocalizations.of(context).formatShortDate(deliveryRange!.end)}'),
+                        ),
+                        if (orderRange != null || deliveryRange != null)
+                          TextButton(
+                              onPressed: () => setState(() {
+                                    orderRange = null;
+                                    deliveryRange = null;
+                                  }),
+                              child: const Text('Clear dates')),
+                      ]),
+                    if (orders.isEmpty)
+                      AppEmptyState(
+                        title: 'No purchase orders yet',
+                        message:
+                            'Create a purchase order to track supplier orders and incoming stock.',
+                        action: TextButton(
+                          onPressed: create,
+                          child: const Text('New Purchase Order'),
+                        ),
+                      ),
+                    for (final order
+                        in orders.where((order) => order.id == selectedId))
+                      FutureBuilder<PurchaseOrderProgress>(
+                          future: widget.repository.detail(order.id),
+                          builder: (context, snapshot) {
+                            final p = snapshot.data;
+                            if (p == null) return const SizedBox.shrink();
+                            final supplier = suppliers
+                                    .where((s) => s.id == order.supplierId)
+                                    .firstOrNull
+                                    ?.name ??
+                                'Supplier';
+                            final haystack =
+                                '${PurchaseOrderRepository.number(order)} $supplier '
+                                        '${order.supplierReference ?? ''}'
+                                    .toLowerCase();
+                            final today = DateUtils.dateOnly(DateTime.now());
+                            final expected = order.expectedDeliveryDate == null
+                                ? null
+                                : DateUtils.dateOnly(
+                                    order.expectedDeliveryDate!);
+                            final overdue = p.isOverdue(DateTime.now());
+                            final dueLabel = expected == null
+                                ? 'Expected not set'
+                                : overdue
+                                    ? 'Overdue · ${today.difference(expected).inDays} ${today.difference(expected).inDays == 1 ? 'day' : 'days'}'
+                                    : expected == today
+                                        ? 'Due today'
+                                        : 'Expected ${MaterialLocalizations.of(context).formatMediumDate(expected)}';
+                            final matchesStatus = filter == 'All' ||
+                                (filter == 'Open' &&
+                                    p.remainingTotal > 0 &&
+                                    {'sent', 'partially_received'}
+                                        .contains(p.status)) ||
+                                (filter == 'Awaiting delivery' &&
+                                    p.status == 'sent') ||
+                                (filter == 'Completed' &&
+                                    {'fully_received', 'closed'}
+                                        .contains(p.status)) ||
+                                (filter == 'Overdue' && overdue) ||
+                                label(p.status).toLowerCase() ==
+                                    filter.toLowerCase();
+                            bool inRange(DateTime value, DateTimeRange range) {
+                              final day = DateUtils.dateOnly(value);
+                              return !day.isBefore(range.start) &&
+                                  !day.isAfter(range.end);
+                            }
+
+                            if (selectedId != null && selectedId != order.id) {
+                              return const SizedBox.shrink();
+                            }
+                            if (selectedId == null &&
+                                (!haystack.contains(search.toLowerCase()) ||
+                                    !matchesStatus ||
+                                    (supplierFilter != null &&
+                                        supplierFilter != order.supplierId) ||
+                                    (orderRange != null &&
+                                        !inRange(
+                                            order.orderDate, orderRange!)) ||
+                                    (deliveryRange != null &&
+                                        (order.expectedDeliveryDate == null ||
+                                            !inRange(
+                                                order.expectedDeliveryDate!,
+                                                deliveryRange!))))) {
+                              return const SizedBox.shrink();
+                            }
+                            return Card(
+                                child: Column(children: [
+                              if (selectedId == null)
+                                ListTile(
+                                    title: Text(
+                                        '${PurchaseOrderRepository.number(order)} · $supplier'),
+                                    subtitle: Text(
+                                        '${label(p.status)} · Ordered ${MaterialLocalizations.of(context).formatMediumDate(order.orderDate)} · $dueLabel\n'
+                                        '${Quantity.format(p.ordered)} ordered · ${Quantity.format(p.receivedTotal)} received · ${Quantity.format(p.remainingTotal)} remaining · ${formatPeso(p.estimatedTotal)} expected'),
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () =>
+                                        _openQuickDetail(order, p, supplier)),
+                              if (selectedId == order.id)
+                                Padding(
+                                    key: _expandedOrderKey,
+                                    padding: const EdgeInsets.all(16),
+                                    child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          TextButton.icon(
+                                              onPressed: () => setState(
+                                                  () => selectedId = null),
+                                              icon:
+                                                  const Icon(Icons.arrow_back),
+                                              label: const Text(
+                                                  'Back to Purchase Orders')),
                                           Text(
-                                              'Completion: ${SupplierProcurementRepository.calendarDays(order.sentAt!, p.receivings.last.receivedAt)} days after sent'),
-                                      ],
-                                      const SizedBox(height: 12),
-                                      Text('Activity',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleMedium),
-                                      FutureBuilder<
-                                              List<PurchaseOrderActivity>>(
-                                          future: widget.repository
-                                              .activity(order.id),
-                                          builder: (context, snapshot) =>
-                                              Column(children: [
-                                                for (final event in snapshot
-                                                        .data ??
-                                                    <PurchaseOrderActivity>[])
-                                                  ListTile(
-                                                    dense: true,
-                                                    title: Text(event.title),
-                                                    subtitle: Text(
-                                                        '${MaterialLocalizations.of(context).formatMediumDate(event.at)} · ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(event.at))} · ${event.detail}${event.actorName == null ? '' : ' · ${event.actorName}'}'),
-                                                  ),
-                                              ])),
-                                      Wrap(spacing: 8, children: [
-                                        OutlinedButton.icon(
-                                            onPressed: () => setState(
-                                                () => selectedId = null),
-                                            icon: const Icon(Icons.arrow_back),
-                                            label: const Text('Back to list')),
-                                        OutlinedButton.icon(
-                                            onPressed: () =>
-                                                exportOrder(order, print: true),
-                                            icon: const Icon(
-                                                Icons.print_outlined),
-                                            label: const Text('Print PO')),
-                                        OutlinedButton.icon(
-                                            onPressed: () => exportOrder(order,
-                                                print: false),
-                                            icon: const Icon(
-                                                Icons.picture_as_pdf_outlined),
-                                            label: const Text('Save PDF')),
-                                        OutlinedButton(
-                                            onPressed: busy
-                                                ? null
-                                                : () => action(() async {
-                                                      final copy = await widget
-                                                          .repository
-                                                          .duplicate(
-                                                              widget.user,
-                                                              order.id);
-                                                      if (mounted) {
-                                                        setState(() =>
-                                                            selectedId =
-                                                                copy.id);
-                                                      }
-                                                    }),
-                                            child: const Text('Duplicate PO')),
-                                        if (p.status == 'draft')
-                                          OutlinedButton(
-                                              onPressed:
-                                                  busy ? null : () => create(p),
-                                              child: const Text('Edit draft')),
-                                        if (p.status == 'draft')
-                                          OutlinedButton(
-                                              onPressed: busy
-                                                  ? null
-                                                  : () => action(() => widget
-                                                      .repository
-                                                      .markSent(widget.user,
-                                                          order.id)),
-                                              child:
-                                                  const Text('Mark as Sent')),
-                                        if ((p.status == 'sent' ||
-                                                p.status ==
-                                                    'partially_received') &&
-                                            p.lines.any((line) =>
-                                                p.remaining(line) > 0))
-                                          FilledButton(
-                                              onPressed: busy
-                                                  ? null
-                                                  : () => widget
-                                                      .onReceive(order.id),
-                                              child: const Text(
-                                                  'Receive remaining')),
-                                        if (widget.user.can(PosPermission
-                                                .cancelPurchaseOrders) &&
-                                            [
-                                              'draft',
-                                              'sent',
-                                              'partially_received'
-                                            ].contains(p.status))
-                                          OutlinedButton(
-                                              onPressed: busy
-                                                  ? null
-                                                  : () async {
-                                                      final reason =
-                                                          TextEditingController();
-                                                      final text = await showDialog<
-                                                              String>(
-                                                          context: context,
-                                                          builder: (ctx) =>
-                                                              _OwnedTextControllers(
-                                                                  controllers: [
-                                                                    reason
-                                                                  ],
-                                                                  child: AlertDialog(
-                                                                      title: const Text(
-                                                                          'Cancel Purchase Order'),
-                                                                      content: TextField(
-                                                                          controller:
-                                                                              reason,
-                                                                          decoration:
-                                                                              const InputDecoration(labelText: 'Reason *')),
-                                                                      actions: [
-                                                                        TextButton(
-                                                                            onPressed: () =>
-                                                                                Navigator.pop(ctx),
-                                                                            child: const Text('Keep order')),
-                                                                        FilledButton(
-                                                                            onPressed: () =>
-                                                                                Navigator.pop(ctx, reason.text),
-                                                                            child: const Text('Cancel order'))
-                                                                      ])));
-                                                      if (text != null) {
-                                                        await action(() =>
-                                                            widget.repository
-                                                                .cancel(
-                                                                    widget.user,
-                                                                    order.id,
-                                                                    text));
-                                                      }
-                                                    },
-                                              child:
-                                                  const Text('Cancel order')),
-                                        if (widget.user.can(PosPermission
-                                                .cancelPurchaseOrders) &&
-                                            p.status == 'fully_received')
-                                          OutlinedButton(
-                                              onPressed: busy
-                                                  ? null
-                                                  : () => action(() =>
-                                                      widget.repository.close(
-                                                          widget.user,
-                                                          order.id)),
-                                              child: const Text('Close order')),
-                                      ]),
-                                    ])),
-                        ]));
-                      }),
-              ]))));
+                                              'Supplier reference: ${order.supplierReference ?? '—'}'),
+                                          Text(
+                                              'Expected delivery: ${order.expectedDeliveryDate == null ? 'Not set' : MaterialLocalizations.of(context).formatMediumDate(order.expectedDeliveryDate!)}'),
+                                          Text('Notes: ${order.notes ?? '—'}'),
+                                          Text(
+                                              'Remaining: ${Quantity.format(p.remainingTotal)}'),
+                                          if (p.receivedTotal > 0)
+                                            FutureBuilder<ReceivedCostVariance>(
+                                                future: widget.repository
+                                                    .receivedCostVariance(
+                                                        order.id),
+                                                builder: (context, snapshot) {
+                                                  final value = snapshot.data;
+                                                  if (value == null) {
+                                                    return const SizedBox
+                                                        .shrink();
+                                                  }
+                                                  final difference =
+                                                      value.differenceCents;
+                                                  return Text(
+                                                      'Expected value of received quantity: ${formatPeso(value.expectedCents)} · Actual received cost: ${formatPeso(value.actualCents)} · Variance: ${difference > 0 ? '+' : ''}${formatPeso(difference)}${value.percent == null ? '' : ' (${value.percent!.toStringAsFixed(1)}%)'}');
+                                                }),
+                                          if (order.cancelReason != null)
+                                            Text(
+                                                'Cancellation: ${order.cancelReason}'),
+                                          const SizedBox(height: 12),
+                                          FutureBuilder<
+                                                  Map<String, List<Quotation>>>(
+                                              future: widget.repository
+                                                  .sourceQuotationsForOrder(
+                                                      order.id),
+                                              builder:
+                                                  (context, sources) => Column(
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
+                                                          children: [
+                                                            Text('Items',
+                                                                style: Theme.of(
+                                                                        context)
+                                                                    .textTheme
+                                                                    .titleMedium),
+                                                            for (final line
+                                                                in p.lines)
+                                                              ListTile(
+                                                                  dense: true,
+                                                                  title: Text(products
+                                                                          .where((x) =>
+                                                                              x.id ==
+                                                                              line
+                                                                                  .productId)
+                                                                          .firstOrNull
+                                                                          ?.name ??
+                                                                      'Product'),
+                                                                  subtitle: Column(
+                                                                      crossAxisAlignment:
+                                                                          CrossAxisAlignment
+                                                                              .start,
+                                                                      children: [
+                                                                        Text(
+                                                                            'Ordered ${Quantity.format(line.orderedQtyMilli)} · Received ${Quantity.format(p.received[line.id] ?? 0)} · Remaining ${Quantity.format(p.remaining(line))} · Expected ${formatPeso(line.expectedUnitCostCents)}'),
+                                                                        for (final quote
+                                                                            in sources.data?[line.id] ??
+                                                                                <Quotation>[])
+                                                                          TextButton(
+                                                                              onPressed: widget.onOpenQuotation == null ? null : () => widget.onOpenQuotation!(quote.reference),
+                                                                              child: Text('Source: ${quote.reference}')),
+                                                                      ])),
+                                                            if ((sources.data
+                                                                        ?.isEmpty ??
+                                                                    false) &&
+                                                                (order.notes?.contains(
+                                                                        'For quotation') ??
+                                                                    false))
+                                                              const Text(
+                                                                  'Legacy sourcing note (unverified link)'),
+                                                          ])),
+                                          if (p.receivings.isNotEmpty) ...[
+                                            Text('Receiving history',
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .titleMedium),
+                                            for (final receipt in p.receivings)
+                                              ListTile(
+                                                  dense: true,
+                                                  title: Text(
+                                                      StockReceivingRepository
+                                                          .number(receipt)),
+                                                  subtitle: Text(
+                                                      '${MaterialLocalizations.of(context).formatMediumDate(receipt.receivedAt)} · ${receipt.externalReference?.isNotEmpty == true ? 'Supplier reference ${receipt.externalReference}' : 'No supplier reference'}'),
+                                                  onTap: widget
+                                                              .onOpenReceiving ==
+                                                          null
+                                                      ? null
+                                                      : () => widget
+                                                              .onOpenReceiving!(
+                                                          receipt.id)),
+                                          ],
+                                          FutureBuilder(
+                                            future: PurchaseReturnRepository(widget.repository.db)
+                                                .forPurchaseOrder(order.id),
+                                            builder: (context, snapshot) {
+                                              final returns = snapshot.data ?? <PurchaseReturn>[];
+                                              if (returns.isEmpty) return const SizedBox.shrink();
+                                              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                                Text('Purchase Returns', style: Theme.of(context).textTheme.titleMedium),
+                                                for (final row in returns) ListTile(dense: true,
+                                                  title: Text(PurchaseReturnRepository.number(row)),
+                                                  subtitle: Text('${row.status} · ${PurchaseReturnResolution.values.byName(row.resolution).label}')),
+                                              ]);
+                                            }),
+                                          if (order.sentAt != null) ...[
+                                            const SizedBox(height: 8),
+                                            Text(p.receivings.isEmpty
+                                                ? 'Open for ${SupplierProcurementRepository.calendarDays(order.sentAt!, DateTime.now())} days'
+                                                : 'First delivery: ${SupplierProcurementRepository.calendarDays(order.sentAt!, p.receivings.first.receivedAt)} days after sent${order.expectedDeliveryDate == null ? '' : ' · ${SupplierProcurementRepository.deliveryPerformance(order.expectedDeliveryDate!, p.receivings.first.receivedAt)}'}'),
+                                            if (p.receivings.isNotEmpty &&
+                                                {'fully_received', 'closed'}
+                                                    .contains(p.status))
+                                              Text(
+                                                  'Completion: ${SupplierProcurementRepository.calendarDays(order.sentAt!, p.receivings.last.receivedAt)} days after sent'),
+                                          ],
+                                          const SizedBox(height: 12),
+                                          Text('Activity',
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleMedium),
+                                          FutureBuilder<
+                                                  List<PurchaseOrderActivity>>(
+                                              future: widget.repository
+                                                  .activity(order.id),
+                                              builder: (context, snapshot) =>
+                                                  Column(children: [
+                                                    for (final event in snapshot
+                                                            .data ??
+                                                        <PurchaseOrderActivity>[])
+                                                      ListTile(
+                                                        dense: true,
+                                                        title:
+                                                            Text(event.title),
+                                                        subtitle: Text(
+                                                            '${MaterialLocalizations.of(context).formatMediumDate(event.at)} · ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(event.at))} · ${event.detail}${event.actorName == null ? '' : ' · ${event.actorName}'}'),
+                                                      ),
+                                                  ])),
+                                          Wrap(spacing: 8, children: [
+                                            OutlinedButton.icon(
+                                                onPressed: () => setState(
+                                                    () => selectedId = null),
+                                                icon: const Icon(
+                                                    Icons.arrow_back),
+                                                label:
+                                                    const Text('Back to list')),
+                                            OutlinedButton.icon(
+                                                onPressed: () => exportOrder(
+                                                    order,
+                                                    print: true),
+                                                icon: const Icon(
+                                                    Icons.print_outlined),
+                                                label: const Text('Print PO')),
+                                            OutlinedButton.icon(
+                                                onPressed: () => exportOrder(
+                                                    order,
+                                                    print: false),
+                                                icon: const Icon(Icons
+                                                    .picture_as_pdf_outlined),
+                                                label: const Text('Save PDF')),
+                                            OutlinedButton(
+                                                onPressed: busy
+                                                    ? null
+                                                    : () => action(() async {
+                                                          final copy =
+                                                              await widget
+                                                                  .repository
+                                                                  .duplicate(
+                                                                      widget
+                                                                          .user,
+                                                                      order.id);
+                                                          if (mounted) {
+                                                            setState(() =>
+                                                                selectedId =
+                                                                    copy.id);
+                                                          }
+                                                        }),
+                                                child:
+                                                    const Text('Duplicate PO')),
+                                            if (p.status == 'draft')
+                                              OutlinedButton(
+                                                  onPressed: busy
+                                                      ? null
+                                                      : () => create(p),
+                                                  child:
+                                                      const Text('Edit draft')),
+                                            if (p.status == 'draft')
+                                              OutlinedButton(
+                                                  onPressed: busy
+                                                      ? null
+                                                      : () => action(() =>
+                                                          widget.repository
+                                                              .markSent(
+                                                                  widget.user,
+                                                                  order.id)),
+                                                  child: const Text(
+                                                      'Mark as Sent')),
+                                            if ((p.status == 'sent' ||
+                                                    p.status ==
+                                                        'partially_received') &&
+                                                p.lines.any((line) =>
+                                                    p.remaining(line) > 0))
+                                              FilledButton(
+                                                  onPressed: busy
+                                                      ? null
+                                                      : () => widget
+                                                          .onReceive(order.id),
+                                                  child: const Text(
+                                                      'Receive remaining')),
+                                            if (widget.user.can(PosPermission
+                                                    .cancelPurchaseOrders) &&
+                                                [
+                                                  'draft',
+                                                  'sent',
+                                                  'partially_received'
+                                                ].contains(p.status))
+                                              OutlinedButton(
+                                                  onPressed: busy
+                                                      ? null
+                                                      : () async {
+                                                          final reason =
+                                                              TextEditingController();
+                                                          final text = await showDialog<
+                                                                  String>(
+                                                              context: context,
+                                                              builder: (ctx) =>
+                                                                  _OwnedTextControllers(
+                                                                      controllers: [
+                                                                        reason
+                                                                      ],
+                                                                      child: AlertDialog(
+                                                                          title: const Text(
+                                                                              'Cancel Purchase Order'),
+                                                                          content: TextField(
+                                                                              controller: reason,
+                                                                              decoration: const InputDecoration(labelText: 'Reason *')),
+                                                                          actions: [
+                                                                            TextButton(
+                                                                                onPressed: () => Navigator.pop(ctx),
+                                                                                child: const Text('Keep order')),
+                                                                            FilledButton(
+                                                                                onPressed: () => Navigator.pop(ctx, reason.text),
+                                                                                child: const Text('Cancel order'))
+                                                                          ])));
+                                                          if (text != null) {
+                                                            await action(() =>
+                                                                widget
+                                                                    .repository
+                                                                    .cancel(
+                                                                        widget
+                                                                            .user,
+                                                                        order
+                                                                            .id,
+                                                                        text));
+                                                          }
+                                                        },
+                                                  child: const Text(
+                                                      'Cancel order')),
+                                            if (widget.user.can(PosPermission
+                                                    .cancelPurchaseOrders) &&
+                                                p.status == 'fully_received')
+                                              OutlinedButton(
+                                                  onPressed: busy
+                                                      ? null
+                                                      : () => action(() =>
+                                                          widget.repository
+                                                              .close(
+                                                                  widget.user,
+                                                                  order.id)),
+                                                  child: const Text(
+                                                      'Close order')),
+                                          ]),
+                                        ])),
+                            ]));
+                          }),
+                  ]))));
 }

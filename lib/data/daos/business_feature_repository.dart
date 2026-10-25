@@ -64,8 +64,15 @@ class BusinessFeatureRepository {
     return Map<String, Object?>.from(jsonDecode(row.configurationJson) as Map);
   }
 
-  Future<Map<String, BusinessProduct>> allProductConfigurations() async {
-    final rows = await db.select(db.productBusinessConfigurations).get();
+  Future<Map<String, BusinessProduct>> allProductConfigurations(
+      {Iterable<String>? productIds}) async {
+    final ids = productIds?.toList();
+    if (ids != null && ids.isEmpty) return {};
+    final query = db.select(db.productBusinessConfigurations);
+    if (ids != null) {
+      query.where((c) => c.productId.isIn(ids));
+    }
+    final rows = await query.get();
     final byProduct = <String, Map<BusinessFeature, Map<String, Object?>>>{};
     for (final row in rows) {
       final feature = BusinessFeature.values

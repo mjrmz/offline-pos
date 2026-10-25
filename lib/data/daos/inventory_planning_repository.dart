@@ -72,6 +72,10 @@ class InventoryPlanningRepository {
       ), rma_reserved AS (
         SELECT product_id, COUNT(*) * 1000 AS qty FROM serial_units
         WHERE status = 'rma_reserved' GROUP BY product_id
+      ), order_reserved AS (
+        SELECT product_id, SUM(quantity_milli) AS qty
+        FROM stock_reservations WHERE status = 'active'
+        GROUP BY product_id
       ), costs AS (
         SELECT i.product_id, i.unit_cost_cents, r.received_at,
           r.supplier_id, ROW_NUMBER() OVER (
@@ -82,7 +86,8 @@ class InventoryPlanningRepository {
       SELECT p.id, p.reorder_level_qty_milli, p.target_stock_qty_milli,
         p.preferred_supplier_id,
         COALESCE(v.quantity_milli, 0) - COALESCE(reserved.qty, 0)
-          - COALESCE(rma_reserved.qty, 0) AS available_milli,
+          - COALESCE(rma_reserved.qty, 0)
+          - COALESCE(order_reserved.qty, 0) AS available_milli,
         COALESCE(inc.qty, 0) AS incoming_milli,
         COALESCE(layers.value_cents, 0) AS cost_value_cents,
         layers.oldest_at, latest.unit_cost_cents AS last_cost,
@@ -92,6 +97,7 @@ class InventoryPlanningRepository {
       FROM products p LEFT JOIN inventory v ON v.product_id = p.id
       LEFT JOIN reserved ON reserved.product_id = p.id
       LEFT JOIN rma_reserved ON rma_reserved.product_id = p.id
+      LEFT JOIN order_reserved ON order_reserved.product_id = p.id
       LEFT JOIN incoming inc ON inc.product_id = p.id
       LEFT JOIN layers ON layers.product_id = p.id
       LEFT JOIN costs latest ON latest.product_id = p.id AND latest.rank = 1

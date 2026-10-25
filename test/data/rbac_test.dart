@@ -184,7 +184,7 @@ void main() {
         .createRole('Stock Staff', '', {PosPermission.stockReceiving});
     await auth.createUserWithRole('Staff', code, 'staffPassword123');
     final backup = await BackupService(db, dir).create(BackupKind.manual);
-    expect(BackupService.verify(backup.file), 40);
+    expect(BackupService.verify(backup.file), 46);
     final raw = sqlite.sqlite3.open(backup.file.path);
     expect(
         raw.select(

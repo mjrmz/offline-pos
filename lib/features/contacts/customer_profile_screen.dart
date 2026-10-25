@@ -7,6 +7,7 @@ import '../../data/daos/customer_credit_repository.dart';
 import '../../data/daos/loyalty_repository.dart';
 import '../../data/daos/rma_repository.dart';
 import '../../data/daos/quotation_repository.dart';
+import '../../data/daos/sales_order_repository.dart';
 import '../../data/daos/directory_repository.dart';
 import '../../data/daos/customer_purchase_repository.dart';
 import '../../data/daos/pos_repository.dart';
@@ -15,7 +16,7 @@ import '../../hardware/printer/receipt_service.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/widgets/app_workspace.dart';
-import 'contacts_screen.dart';
+import 'customer_credit_panel.dart';
 import 'customer_purchases_panel.dart';
 import 'customer_profile_ui.dart';
 import 'rma_screen.dart';
@@ -80,6 +81,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
   String quoteStatus = 'All';
   int rmaPage = 0;
   int quotePage = 0;
+  int salesOrderPage = 0;
   int rewardPage = 0;
   AppDatabase get db => widget.repository.db;
   LoyaltyRepository get loyalty => LoyaltyRepository(db);
@@ -106,6 +108,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
       quoteStatus = 'All';
       rmaPage = 0;
       quotePage = 0;
+      salesOrderPage = 0;
       rewardPage = 0;
     }
   }
@@ -417,7 +420,7 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
   @override
   Widget build(BuildContext context) => DefaultTabController(
       key: ValueKey(currentCustomer.id),
-      length: 7,
+      length: widget.user.can(PosPermission.viewSalesOrders) ? 8 : 7,
       child: Scaffold(
           appBar: AppBar(
               automaticallyImplyLeading: false,
@@ -474,13 +477,15 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
                     onPressed: () => Navigator.pop(context),
                     icon: const Icon(Icons.close)),
               ],
-              bottom: const TabBar(isScrollable: true, tabs: [
+              bottom: TabBar(isScrollable: true, tabs: [
                 Tab(text: 'Overview'),
                 Tab(text: 'Purchases'),
                 Tab(text: 'Rewards'),
                 Tab(text: 'Credit'),
                 Tab(text: 'RMA'),
                 Tab(text: 'Quotations'),
+                if (widget.user.can(PosPermission.viewSalesOrders))
+                  Tab(text: 'Sales Orders'),
                 Tab(text: 'Notes')
               ])),
           body: FutureBuilder<_CustomerProfileData>(
@@ -695,14 +700,49 @@ class _CustomerProfileScreenState extends State<CustomerProfileScreen> {
                   ),
                   _rewardsTab(ledger, points),
                   widget.user.can(PosPermission.customerCredit)
-                      ? CustomerDetailsScreen(
+                      ? CustomerCreditPanel(
                           customer: currentCustomer,
                           repository: widget.repository,
-                          user: widget.user,
-                          embedded: true)
+                          user: widget.user)
                       : const Center(child: Text('Credit access required.')),
                   _rmaTab(rmaCounts),
                   _quotationTab(quoteCounts),
+                  if (widget.user.can(PosPermission.viewSalesOrders))
+                    FutureBuilder(
+                      future: () async {
+                        final repository = SalesOrderRepository(db);
+                        final page = await repository.page(
+                            customerId: currentCustomer.id,
+                            page: salesOrderPage);
+                        final states = await repository.fulfillmentStates(
+                            page.items.map((order) => order.id));
+                        return (page, states);
+                      }(),
+                      builder: (context, snapshot) {
+                        if (snapshot.hasError) {
+                          return Center(child: Text(safeMessage(snapshot.error!)));
+                        }
+                        if (!snapshot.hasData) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+                        final result = snapshot.data!.$1;
+                        final states = snapshot.data!.$2;
+                        return Padding(padding: const EdgeInsets.all(24),
+                          child: AppPagedListPanel(title: 'Sales Orders',
+                            total: result.totalCount,
+                            count: result.items.length,
+                            page: salesOrderPage,
+                            onPrevious: salesOrderPage > 0 ? () =>
+                                setState(() => salesOrderPage--) : null,
+                            onNext: (salesOrderPage + 1) * 50 < result.totalCount
+                                ? () => setState(() => salesOrderPage++) : null,
+                            itemBuilder: (context, index) {
+                              final order = result.items[index];
+                              return ListTile(title: Text(order.reference),
+                                subtitle: Text('${order.createdAt.toLocal().toString().split(' ').first}  •  ${order.status}  •  ${states[order.id] ?? 'Unfulfilled'}  •  ${order.fulfillmentMethod ?? 'No intent'}'),
+                                trailing: Text(formatPeso(order.totalCents)));
+                            }));
+                      }),
                   ListView(padding: const EdgeInsets.all(24), children: [
                     CustomerProfilePanel(
                         title: 'Internal notes',

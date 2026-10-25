@@ -9,6 +9,7 @@ import 'package:modern_offline_pos/data/daos/customer_credit_repository.dart';
 import 'package:modern_offline_pos/data/daos/directory_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/features/contacts/customer_profile_screen.dart';
+import 'package:modern_offline_pos/features/contacts/customer_credit_panel.dart';
 import 'package:modern_offline_pos/features/contacts/customer_profile_ui.dart';
 
 void main() {
@@ -53,6 +54,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Page 2 of 2'), findsOneWidget);
     await tester.tap(find.text('Credit'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Credit activity'), 300,
+        scrollable: find
+            .descendant(
+                of: find.byType(CustomerCreditPanel),
+                matching: find.byType(Scrollable))
+            .first);
     await tester.pumpAndSettle();
     expect(find.text('51 results'), findsOneWidget);
     expect(find.text('Next'), findsOneWidget);
@@ -203,8 +211,8 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('Credit'));
         await tester.pumpAndSettle();
-        expect(find.text('Outstanding credit'), findsOneWidget);
-        expect(find.text('Purchases'), findsOneWidget);
+        expect(find.text('Outstanding balance'), findsOneWidget);
+        expect(find.text('Open credit sales'), findsWidgets);
         await tester.tap(find.text('RMA'));
         await tester.pumpAndSettle();
         expect(find.text('RMA-001'), findsOneWidget);

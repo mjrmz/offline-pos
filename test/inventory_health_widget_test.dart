@@ -21,11 +21,11 @@ void main() {
     final fields = find.byType(TextField);
     await tester.enterText(fields.at(0), '90');
     await tester.enterText(fields.at(1), '60');
-    await tester.tap(find.text('Save'));
+    await tester.tap(find.text('Save changes'));
     await tester.pump();
     expect(find.textContaining('Dead stock must be at least'), findsOneWidget);
     await tester.enterText(fields.at(1), '180');
-    await tester.tap(find.text('Save'));
+    await tester.tap(find.text('Save changes'));
     await tester.pumpAndSettle();
     expect((await InventoryHealthRepository(db).settings()).slowMovingDays, 90);
   });
@@ -57,6 +57,48 @@ void main() {
     expect(find.text('Expired'), findsWidgets);
     expect(find.text('Cost Value'), findsNothing);
     expect((await db.select(db.inventory).getSingle()).quantityMilli, 2000);
+  });
+
+  testWidgets('expiry workspace fits desktop sizes in both themes',
+      (tester) async {
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    await db.customStatement(
+        "INSERT INTO products (id, name, price_cents, created_at) VALUES ('p', 'Batch product', 500, 1)");
+    final expiry = DateTime.now()
+            .subtract(const Duration(days: 3))
+            .millisecondsSinceEpoch ~/
+        1000;
+    await db.customStatement(
+        "INSERT INTO inventory_layers (id, product_id, source, quantity_received_milli, quantity_remaining_milli, unit_cost_cents, received_at, batch_number, expiry_date) VALUES ('layer','p','opening',2000,2000,100,1,'LOT-1',?)",
+        [expiry]);
+    for (final size in const [
+      Size(1366, 768),
+      Size(1600, 900),
+      Size(1920, 1080)
+    ]) {
+      for (final mode in [ThemeMode.light, ThemeMode.dark]) {
+        tester.view.physicalSize = size;
+        await tester.pumpWidget(MaterialApp(
+          theme: ThemeData.light(),
+          darkTheme: ThemeData.dark(),
+          themeMode: mode,
+          home: ExpiryMonitorScreen(
+            repository: InventoryHealthRepository(db),
+            user: const ActiveUser('owner', 'Owner', UserRole.owner),
+          ),
+        ));
+        await tester.pumpAndSettle();
+        expect(find.text('3 days overdue'), findsOneWidget);
+        expect(find.text('Expired'), findsWidgets);
+        expect(find.text('At-risk cost value'), findsOneWidget);
+        expect(find.byKey(const Key('expiry-list-panel')), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      }
+    }
   });
 
   testWidgets('expired adjustment prefill still requires explicit post',

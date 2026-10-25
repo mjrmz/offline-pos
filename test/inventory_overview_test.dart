@@ -10,6 +10,7 @@ import 'package:modern_offline_pos/data/daos/stock_receiving_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/features/inventory/inventory_overview.dart';
 import 'package:modern_offline_pos/features/inventory/inventory_workspace.dart';
+import 'package:modern_offline_pos/shared/widgets/app_workspace.dart';
 
 void main() {
   Future<(AppDatabase, PosRepository, AuthService)> setup(WidgetTester tester,
@@ -57,6 +58,8 @@ void main() {
             repository: repo, auth: auth, user: auth.current!)));
     await tester.pumpAndSettle();
     expect(find.text('Overview'), findsWidgets);
+    expect(tester.getTopLeft(find.byType(AppWorkspaceTabs)).dx,
+        tester.getTopLeft(find.text('Overview').last).dx);
     expect(find.text('Inventory overview'), findsNothing);
     expect(find.text('Products'), findsWidgets);
     expect(find.text('3'), findsWidgets);
@@ -77,6 +80,42 @@ void main() {
     expect(find.text('Sale'), findsWidgets);
     expect(find.text('-1 pc'), findsOneWidget);
     expect(find.text('View all movements'), findsNothing);
+  });
+
+  testWidgets('Tools keeps Expiry Monitor in the Inventory workspace',
+      (tester) async {
+    final (db, repo, auth) = await setup(tester);
+    await db.customStatement(
+        "INSERT INTO products (id, name, price_cents, created_at) VALUES ('expiry-product', 'Batch product', 500, 1)");
+    final expired = DateTime.now()
+            .subtract(const Duration(days: 2))
+            .millisecondsSinceEpoch ~/
+        1000;
+    await db.customStatement(
+        "INSERT INTO inventory_layers (id, product_id, source, quantity_received_milli, quantity_remaining_milli, unit_cost_cents, received_at, batch_number, expiry_date) VALUES ('expiry-layer','expiry-product','opening',2000,2000,100,1,'LOT-1',?)",
+        [expired]);
+    await tester.pumpWidget(MaterialApp(
+        home: InventoryWorkspace(
+            repository: repo, auth: auth, user: auth.current!)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tools').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Inventory utilities and maintenance tools.'),
+        findsOneWidget);
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Expiry Monitor'), findsOneWidget);
+    expect(find.text('Overview'), findsWidgets);
+    expect(find.text('LOT-1'), findsOneWidget);
+    expect(find.text('2 days overdue'), findsOneWidget);
+    expect(find.byKey(const Key('expiry-list-panel')), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilterChip, 'Near expiry'));
+    await tester.pumpAndSettle();
+    expect(find.text('LOT-1'), findsNothing);
+    await tester.tap(find.widgetWithText(FilterChip, 'Expired'));
+    await tester.pumpAndSettle();
+    expect(find.text('LOT-1'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('Overview KPI filters open existing Products filters',
@@ -151,7 +190,7 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.tap(find.widgetWithText(ChoiceChip, 'Sale'));
     await tester.pumpAndSettle();
-    expect(find.text('No inventory movements yet'), findsOneWidget);
+    expect(find.text('No movements match this filter'), findsOneWidget);
   });
 
   testWidgets('Movements show supplier reference without exposing UUID',

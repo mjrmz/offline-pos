@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -16,13 +17,19 @@ import '../../data/daos/directory_repository.dart';
 import '../../data/daos/pos_repository.dart';
 import '../../data/daos/business_feature_repository.dart';
 import '../../data/daos/stock_receiving_repository.dart';
+import '../../data/daos/purchase_return_repository.dart';
+import 'purchase_returns_screen.dart';
 import '../../data/daos/purchase_order_repository.dart';
+import '../../data/daos/paged_result.dart';
+import '../../shared/widgets/app_workspace.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/widgets/expiry_date_field.dart';
 import '../../shared/widgets/record_details_drawer.dart';
 import '../pos_checkout/checkout_screen.dart';
 import 'documents/receiving_pdf.dart';
+import '../../hardware/printer/label_printing.dart';
+import 'label_print_dialog.dart';
 
 String _pesoInput(int cents) =>
     '${cents ~/ 100}.${(cents % 100).toString().padLeft(2, '0')}';
@@ -42,6 +49,7 @@ class StockReceivingScreen extends StatefulWidget {
   final String? purchaseOrderId;
   final String? initialReceiptId;
   final ValueChanged<String>? onViewPurchaseOrder;
+  final ValueChanged<String>? onReturnToSupplier;
   const StockReceivingScreen(
       {super.key,
       required this.repository,
@@ -54,6 +62,7 @@ class StockReceivingScreen extends StatefulWidget {
       this.purchaseOrderId,
       this.initialReceiptId,
       this.onViewPurchaseOrder,
+      this.onReturnToSupplier,
       this.suggestedQuantityMilli});
   @override
   State<StockReceivingScreen> createState() => _StockReceivingScreenState();
@@ -67,6 +76,12 @@ class _StockReceivingScreenState extends State<StockReceivingScreen> {
   List<PosProduct> products = [];
   List<PosProduct> allProducts = [];
   List<StockReceiving> history = [];
+  PagedResult<StockReceiving>? historyResult;
+  List<String> historyReceivers = [];
+  int historyPage = 0;
+  bool historyLoading = false;
+  int historyGeneration = 0;
+  Timer? historySearchDebounce;
   Map<String, ReceivingHistorySummary> historySummary = {};
   String historySearch = '';
   String? historySupplierId;
@@ -765,10 +780,12 @@ class _StockReceivingScreenState extends State<StockReceivingScreen> {
     supplierId = widget.initialSupplierId;
     if (productId != null) view = 'new';
     if (widget.purchaseOrderId == null) {
-      refresh().then((_) {
+      refresh().then((_) async {
         if (!mounted || widget.initialReceiptId == null) return;
-        final receipt =
-            history.where((r) => r.id == widget.initialReceiptId).firstOrNull;
+        final receipt = await (widget.repository.db
+                .select(widget.repository.db.stockReceivings)
+              ..where((r) => r.id.equals(widget.initialReceiptId!)))
+            .getSingleOrNull();
         if (receipt != null) {
           setState(() => view = 'history');
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -783,6 +800,7 @@ class _StockReceivingScreenState extends State<StockReceivingScreen> {
 
   @override
   void dispose() {
+    historySearchDebounce?.cancel();
     HardwareKeyboard.instance.removeHandler(handleEscape);
     for (final controller in [...poQuantities.values, ...poCosts.values]) {
       controller.dispose();
@@ -812,8 +830,10 @@ class _StockReceivingScreenState extends State<StockReceivingScreen> {
         cost.text = _pesoInput(initial.costCents);
         sellingPrice.text = _pesoInput(initial.priceCents);
       }
-      final receivingRows = await widget.repository.history();
-      final summaries = await widget.repository.historySummaries();
+      final recent = await widget.repository.historyPage();
+      final summaries = await widget.repository
+          .historySummaries(receivingIds: recent.items.map((r) => r.id));
+      final receivers = await widget.repository.receiverNames();
       if (mounted) {
         setState(() {
           suppliers = supplierRows.where((s) => s.isActive).toList();
@@ -822,13 +842,56 @@ class _StockReceivingScreenState extends State<StockReceivingScreen> {
               .where((p) => p.isActive && !p.business.madeToOrder)
               .toList();
           allProducts = productRows;
-          history = receivingRows;
+          history = recent.items.take(5).toList();
           historySummary = summaries;
+          historyReceivers = receivers;
         });
       }
+      await loadHistory();
     } catch (failure) {
       if (mounted) setState(() => error = safeMessage(failure));
     }
+  }
+
+  Future<void> loadHistory() async {
+    final generation = ++historyGeneration;
+    if (mounted) setState(() => historyLoading = true);
+    try {
+      final result = await widget.repository.historyPage(
+        page: historyPage,
+        search: historySearch,
+        supplierId: historySupplierId,
+        actorName: historyActorName,
+        type: historyType,
+        from: historyDates?.start,
+        through: historyDates?.end,
+      );
+      final summaries = await widget.repository
+          .historySummaries(receivingIds: result.items.map((r) => r.id));
+      if (mounted && generation == historyGeneration) {
+        setState(() {
+          historyResult = result;
+          historySummary.addAll(summaries);
+          historyLoading = false;
+          error = null;
+        });
+      }
+    } catch (failure) {
+      if (mounted && generation == historyGeneration) {
+        setState(() {
+          historyLoading = false;
+          error = safeMessage(failure);
+        });
+      }
+    }
+  }
+
+  void changeHistoryFilter(VoidCallback update) {
+    setState(() {
+      update();
+      historyPage = 0;
+    });
+    loadHistory();
   }
 
   Future<void> addLine() async {
@@ -2260,12 +2323,71 @@ class _StockReceivingScreenState extends State<StockReceivingScreen> {
                       ),
                     ),
                 ])),
+            DrawerSection(title: 'Purchase returns', child: FutureBuilder(
+              future: PurchaseReturnRepository(widget.repository.db).forReceiving(record.id),
+              builder: (context, snapshot) {
+                final returns = snapshot.data ?? <PurchaseReturn>[];
+                if (returns.isEmpty) return const Text('No purchase returns for this receiving.');
+                return Column(children: [for (final row in returns)
+                  FutureBuilder(future: PurchaseReturnRepository(widget.repository.db).lines(row.id),
+                    builder: (context, lineSnapshot) {
+                    final lines = lineSnapshot.data ?? <PurchaseReturnLine>[];
+                    return ListTile(contentPadding: EdgeInsets.zero,
+                    title: Text(PurchaseReturnRepository.number(row)),
+                    subtitle: Text('${Quantity.format(lines.fold<int>(0, (n, l) => n + l.quantityMilli))} units · ${formatPeso(lines.fold<int>(0, (n, l) => n + l.returnValueCents))} · ${row.status} · ${PurchaseReturnResolution.values.byName(row.resolution).label}'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.pop(drawerContext);
+                      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => Scaffold(
+                        appBar: AppBar(title: const Text('Purchase Returns')),
+                        body: PurchaseReturnsScreen(
+                          repository: PurchaseReturnRepository(widget.repository.db),
+                          user: widget.user, initialReturnId: row.id))));
+                    });
+                  })]);
+              })),
           ],
         ),
         primaryAction: FilledButton(
             onPressed: () => exportReceipt(record, print: true),
             child: const Text('Print GRN')),
         secondaryActions: [
+          if (widget.user.can(PosPermission.stockReceiving))
+            OutlinedButton(
+                onPressed: () async {
+                  final rows = await widget.repository.items(record.id);
+                  final labels = <LabelItem>[];
+                  for (final row in rows) {
+                    final product = allProducts.where((p) => p.id == row.productId).firstOrNull;
+                    if (product == null) continue;
+                    if (product.serialTracking) {
+                      final serials = await widget.repository.serialsForItem(row.id);
+                      for (final serial in serials) {
+                        labels.add(LabelItem(product, 1, serialNumber: serial.serialNumber,
+                          batchNumber: row.batchNumber, expiryDate: row.expiryDate,
+                          receivingPriceCents: row.unitSellingPriceCents));
+                      }
+                    } else {
+                      labels.add(LabelItem(product,
+                        suggestedReceivingLabels(row.quantityMilli, weight: product.business.weight),
+                        batchNumber: row.batchNumber, expiryDate: row.expiryDate,
+                        receivingPriceCents: row.unitSellingPriceCents));
+                    }
+                  }
+                  if (!mounted || !drawerContext.mounted) return;
+                  Navigator.pop(drawerContext);
+                  showLabelPrintDialog(context, widget.repository.db, labels,
+                    products: widget.products, actorId: widget.user.id);
+                },
+                child: const Text('Print labels')),
+          if (widget.onReturnToSupplier != null &&
+              widget.user.can(PosPermission.stockReceiving))
+            OutlinedButton(
+                onPressed: () {
+                  Navigator.pop(drawerContext);
+                  widget.onReturnToSupplier!(record.id);
+                },
+                child: const Text('Return to supplier')),
           OutlinedButton(
               onPressed: () => exportReceipt(record, print: false),
               child: const Text('Save GRN PDF')),
@@ -2307,8 +2429,156 @@ class _StockReceivingScreenState extends State<StockReceivingScreen> {
     }
   }
 
+  Widget historyWorkspace(BuildContext context) => Scaffold(
+        body: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(),
+            child: AppWorkspacePadding(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AppPageHeader(
+                      title: 'Receiving history',
+                      subtitle:
+                          'Review supplier deliveries and finalized stock receipts.',
+                      action: FilledButton.icon(
+                        onPressed: () => setState(() => view = 'new'),
+                        icon: const Icon(Icons.add),
+                        label: const Text('New receiving'),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => setState(() => view = 'landing'),
+                      icon: const Icon(Icons.arrow_back),
+                      label: const Text('Back to receiving'),
+                    ),
+                    AppSearchField(
+                      hintText:
+                          'Search RCV, PO, supplier, reference, product, SKU',
+                      onChanged: (value) {
+                        historySearchDebounce?.cancel();
+                        historySearchDebounce = Timer(
+                          const Duration(milliseconds: 300),
+                          () {
+                            if (!mounted) return;
+                            changeHistoryFilter(
+                                () => historySearch = value.trim());
+                          },
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(spacing: 12, runSpacing: 6, children: [
+                      DropdownButton<String?>(
+                        value: historySupplierId,
+                        hint: const Text('All suppliers'),
+                        items: [
+                          const DropdownMenuItem<String?>(
+                              value: null, child: Text('All suppliers')),
+                          for (final supplier in allSuppliers)
+                            DropdownMenuItem<String?>(
+                                value: supplier.id, child: Text(supplier.name)),
+                        ],
+                        onChanged: (value) => changeHistoryFilter(
+                            () => historySupplierId = value),
+                      ),
+                      DropdownButton<String>(
+                        value: historyType,
+                        items: ['All', 'PO-based', 'Direct']
+                            .map((value) => DropdownMenuItem(
+                                value: value, child: Text(value)))
+                            .toList(),
+                        onChanged: (value) => changeHistoryFilter(
+                            () => historyType = value ?? 'All'),
+                      ),
+                      DropdownButton<String?>(
+                        value: historyActorName,
+                        hint: const Text('All receivers'),
+                        items: [
+                          const DropdownMenuItem<String?>(
+                              value: null, child: Text('All receivers')),
+                          for (final name in historyReceivers)
+                            DropdownMenuItem<String?>(
+                                value: name, child: Text(name)),
+                        ],
+                        onChanged: (value) =>
+                            changeHistoryFilter(() => historyActorName = value),
+                      ),
+                      OutlinedButton(
+                        onPressed: () async {
+                          final dates = await showDateRangePicker(
+                            context: context,
+                            firstDate: DateTime(2000),
+                            lastDate: DateTime(2100),
+                            initialDateRange: historyDates,
+                          );
+                          if (dates != null) {
+                            changeHistoryFilter(() => historyDates = dates);
+                          }
+                        },
+                        child: Text(historyDates == null
+                            ? 'Dates'
+                            : '${MaterialLocalizations.of(context).formatShortDate(historyDates!.start)}–${MaterialLocalizations.of(context).formatShortDate(historyDates!.end)}'),
+                      ),
+                      if (historyDates != null)
+                        TextButton(
+                          onPressed: () =>
+                              changeHistoryFilter(() => historyDates = null),
+                          child: const Text('Clear dates'),
+                        ),
+                    ]),
+                    const SizedBox(height: 12),
+                    Expanded(
+                        child: AppPagedListPanel(
+                      key: const Key('receiving-history-panel'),
+                      title: 'Receivings',
+                      total: historyResult?.totalCount ?? 0,
+                      count: historyResult?.items.length ?? 0,
+                      page: historyPage,
+                      loading: historyLoading || historyResult == null,
+                      error: error,
+                      onRetry: loadHistory,
+                      emptyTitle: historySearch.isNotEmpty
+                          ? 'No receivings match this search'
+                          : historySupplierId != null ||
+                                  historyActorName != null ||
+                                  historyType != 'All' ||
+                                  historyDates != null
+                              ? 'No receivings match these filters'
+                              : 'No receivings yet',
+                      onPrevious: () {
+                        setState(() => historyPage--);
+                        loadHistory();
+                      },
+                      onNext: () {
+                        setState(() => historyPage++);
+                        loadHistory();
+                      },
+                      itemBuilder: (context, index) {
+                        final record = historyResult!.items[index];
+                        final summary = historySummary[record.id];
+                        return AppEntityRow(
+                          title: StockReceivingRepository.number(record),
+                          subtitle: '${summary?.supplierName ?? 'Supplier'} · '
+                              '${MaterialLocalizations.of(context).formatMediumDate(record.receivedAt)} · '
+                              '${record.externalReference ?? 'No supplier reference'} · '
+                              '${summary?.poReference ?? 'Direct receiving'} · '
+                              '${summary?.actorName ?? 'Unknown / legacy'}\n'
+                              '${summary?.lineCount ?? 0} lines',
+                          amount: formatPeso(summary?.actualCostCents ?? 0),
+                          onTap: () => openReceivingDetail(record),
+                        );
+                      },
+                    )),
+                  ]),
+            ),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
+    if (view == 'history') return historyWorkspace(context);
     if (purchaseOrder != null && view == 'new') {
       return Scaffold(body: _poReceivingDocument(context));
     }

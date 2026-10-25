@@ -3,6 +3,7 @@ import '../../core/models/printer_settings.dart';
 import '../../data/daos/printer_settings_repository.dart';
 import '../../hardware/printer/receipt_printer.dart';
 import '../../hardware/printer/device_transports.dart';
+import '../../hardware/printer/label_printing.dart';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import '../../core/services/business_logo_store.dart';
@@ -13,11 +14,15 @@ class PrinterSettingsScreen extends StatefulWidget {
   final PrinterSettingsStore store;
   final ReceiptPrinter printer;
   final DevicePrinterClient devices;
+  final bool embedded;
+  final ValueChanged<bool>? onDirtyChanged;
   const PrinterSettingsScreen(
       {super.key,
       required this.store,
       required this.printer,
-      required this.devices});
+      required this.devices,
+      this.embedded = false,
+      this.onDirtyChanged});
   @override
   State<PrinterSettingsScreen> createState() => _PrinterSettingsScreenState();
 }
@@ -39,9 +44,45 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
   List<PrinterDevice> discovered = [];
   String? message;
   File? logo;
+  int section = 0;
+  List<LabelTemplate> labelTemplates = LabelTemplate.defaults;
+  int labelWidth = 80;
+  bool loaded = false;
+  String savedSignature = '';
+  String get signature => [
+        enabled,
+        drawer,
+        width,
+        connection.name,
+        deviceId,
+        deviceName,
+        host.text,
+        port.text,
+        storeName.text,
+        storeAddress.text,
+        storeContact.text,
+        receiptHeader.text,
+        receiptFooter.text
+      ].join('\u0000');
+  bool get dirty => loaded && signature != savedSignature;
+  void _edited() {
+    widget.onDirtyChanged?.call(dirty);
+  }
+
   @override
   void initState() {
     super.initState();
+    for (final field in [
+      storeName,
+      storeAddress,
+      storeContact,
+      receiptHeader,
+      receiptFooter,
+      host,
+      port,
+    ]) {
+      field.addListener(_previewChanged);
+    }
     BusinessLogoStore().load().then((file) {
       if (mounted) setState(() => logo = file);
     });
@@ -61,8 +102,22 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
         storeContact.text = s.storeContact;
         receiptHeader.text = s.receiptHeader;
         receiptFooter.text = s.receiptFooter;
+        savedSignature = signature;
+        loaded = true;
       });
+      _edited();
     });
+    LabelTemplateStore().load().then((value) {
+      if (mounted) setState(() => labelTemplates = value);
+    });
+    LabelPrintingPreferences().loadWidth().then((value) {
+      if (mounted) setState(() => labelWidth = value);
+    });
+  }
+
+  void _previewChanged() {
+    if (mounted) setState(() {});
+    _edited();
   }
 
   @override
@@ -132,7 +187,13 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
     if (settings == null) return;
     try {
       await widget.store.save(settings);
-      if (mounted) setState(() => message = 'Printer settings saved.');
+      if (mounted) {
+        setState(() {
+          message = 'Printer settings saved.';
+          savedSignature = signature;
+        });
+        _edited();
+      }
     } catch (_) {
       if (mounted) setState(() => message = 'Could not save printer settings.');
     }
@@ -181,19 +242,35 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        body: Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 860),
-            child: ListView(padding: const EdgeInsets.all(24), children: [
+  Widget build(BuildContext context) =>
+      widget.embedded ? _content() : Scaffold(body: _content());
+
+  Widget _content() => Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 860),
+          child: ListView(padding: const EdgeInsets.all(24), children: [
+            if (!widget.embedded)
               const AppPageHeader(
                 title: 'Printer & Receipt',
                 subtitle:
                     'Configure receipt identity, printer, and cash drawer.',
               ),
+            if (widget.embedded)
+              Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Wrap(spacing: 8, children: [
+                    for (var i = 0; i < 4; i++)
+                      ChoiceChip(
+                          label: Text(
+                              const ['Receipt', 'Printer', 'Cash Drawer', 'Label Printing'][i]),
+                          selected: section == i,
+                          onSelected: (_) => setState(() => section = i)),
+                  ])),
+            if (!widget.embedded || section == 1)
               const Text(
                   'ESC/POS printer. LAN uses raw TCP; USB requires a Windows printer driver; Bluetooth requires a paired Android printer.'),
+            if (!widget.embedded || section == 0) ...[
               const SizedBox(height: 24),
               Text('Receipt identity',
                   style: Theme.of(context).textTheme.titleLarge),
@@ -222,7 +299,7 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
                   TextButton(
                       onPressed: () async {
                         await BusinessLogoStore().remove();
-                        if (context.mounted) {
+                        if (mounted) {
                           AppThemeController.maybeOf(context)
                               ?.setLogoPath(null);
                         }
@@ -246,12 +323,52 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
                   controller: receiptFooter,
                   decoration: const InputDecoration(
                       labelText: 'Receipt footer (optional)')),
+              const SizedBox(height: 16),
+              Card(
+                  child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('RECEIPT PREVIEW',
+                                style: Theme.of(context).textTheme.labelMedium),
+                            const Divider(),
+                            Center(
+                                child: Text(
+                                    storeName.text.isEmpty
+                                        ? 'Business name'
+                                        : storeName.text,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium)),
+                            if (storeAddress.text.isNotEmpty)
+                              Center(child: Text(storeAddress.text)),
+                            if (storeContact.text.isNotEmpty)
+                              Center(child: Text(storeContact.text)),
+                            if (receiptHeader.text.isNotEmpty)
+                              Center(child: Text(receiptHeader.text)),
+                            const Divider(),
+                            const Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [Text('TOTAL'), Text('₱350.00')]),
+                            const Divider(),
+                            Center(
+                                child: Text(receiptFooter.text.isEmpty
+                                    ? 'Thank you!'
+                                    : receiptFooter.text)),
+                          ]))),
+            ],
+            if (!widget.embedded || section == 1) ...[
               const SizedBox(height: 20),
               Text('Printer', style: Theme.of(context).textTheme.titleLarge),
               SwitchListTile(
                   title: const Text('Enable printer'),
                   value: enabled,
-                  onChanged: (v) => setState(() => enabled = v)),
+                  onChanged: (v) {
+                    setState(() => enabled = v);
+                    _edited();
+                  }),
               DropdownButtonFormField<PrinterConnection>(
                   key: ValueKey(connection),
                   initialValue: connection,
@@ -271,12 +388,15 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
                             ? 'Bluetooth printer'
                             : 'Bluetooth (unsupported here)')),
                   ],
-                  onChanged: (value) => setState(() {
-                        connection = value ?? PrinterConnection.lan;
-                        deviceId = '';
-                        deviceName = '';
-                        discovered = [];
-                      })),
+                  onChanged: (value) {
+                    setState(() {
+                      connection = value ?? PrinterConnection.lan;
+                      deviceId = '';
+                      deviceName = '';
+                      discovered = [];
+                    });
+                    _edited();
+                  }),
               if (connection == PrinterConnection.lan) ...[
                 TextField(
                     controller: host,
@@ -295,11 +415,14 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
                   ListTile(
                       title: Text(device.name),
                       subtitle: Text(device.id),
-                      onTap: () => setState(() {
-                            deviceId = device.id;
-                            deviceName = device.name;
-                            message = null;
-                          })),
+                      onTap: () {
+                        setState(() {
+                          deviceId = device.id;
+                          deviceName = device.name;
+                          message = null;
+                        });
+                        _edited();
+                      }),
               ],
               DropdownButtonFormField<int>(
                   initialValue: width,
@@ -308,17 +431,60 @@ class _PrinterSettingsScreenState extends State<PrinterSettingsScreen> {
                     DropdownMenuItem(value: 58, child: Text('58 mm')),
                     DropdownMenuItem(value: 80, child: Text('80 mm'))
                   ],
-                  onChanged: (v) => setState(() => width = v ?? 80)),
+                  onChanged: (v) {
+                    setState(() => width = v ?? 80);
+                    _edited();
+                  }),
+            ],
+            if (!widget.embedded || section == 2) ...[
+              Text('Cash Drawer',
+                  style: Theme.of(context).textTheme.titleLarge),
               SwitchListTile(
                   title: const Text('Cash drawer through printer'),
                   value: drawer,
-                  onChanged: (v) => setState(() => drawer = v)),
-              if (message != null) Text(message!),
-              FilledButton(onPressed: save, child: const Text('Save')),
+                  onChanged: (v) {
+                    setState(() => drawer = v);
+                    _edited();
+                  }),
+            ],
+            if (!widget.embedded || section == 3) ...[
+              const SizedBox(height: 20),
+              Text('Label Printing', style: Theme.of(context).textTheme.titleLarge),
+              const Text('Uses the currently configured ESC/POS printer. Labels print on 58 mm or 80 mm continuous thermal paper.'),
+              DropdownButtonFormField<LabelTemplate>(
+                key: ValueKey(labelTemplates.first),
+                initialValue: labelTemplates.first,
+                decoration: const InputDecoration(labelText: 'Default label template'),
+                items: [for (final option in labelTemplates)
+                  DropdownMenuItem(value: option, child: Text(option.name))],
+                onChanged: (value) async {
+                  if (value == null) return;
+                  final next = [value, ...labelTemplates.where((t) => t != value)];
+                  await LabelTemplateStore().save(next);
+                  if (mounted) setState(() => labelTemplates = next);
+                }),
+              DropdownButtonFormField<int>(
+                key: ValueKey(labelWidth),
+                initialValue: labelWidth,
+                decoration: const InputDecoration(labelText: 'Default label paper width'),
+                items: const [DropdownMenuItem(value: 58, child: Text('58 mm')),
+                  DropdownMenuItem(value: 80, child: Text('80 mm'))],
+                onChanged: (value) async {
+                  if (value == null) return;
+                  await LabelPrintingPreferences().saveWidth(value);
+                  if (mounted) setState(() => labelWidth = value);
+                }),
+            ],
+            if (message != null) Text(message!),
+            Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton(
+                    onPressed: dirty ? save : null,
+                    child: const Text('Save changes'))),
+            if (!widget.embedded || section == 1)
               OutlinedButton(
                   onPressed: test, child: const Text('Test printer')),
-            ]),
-          ),
+          ]),
         ),
       );
 }

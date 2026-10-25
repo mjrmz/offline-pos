@@ -68,7 +68,7 @@ class BackupService {
         'ok');
   }
 
-  static int verify(File file, {int maxSchemaVersion = 40}) {
+  static int verify(File file, {int maxSchemaVersion = 49}) {
     if (!file.existsSync() || file.lengthSync() == 0) {
       throw StateError('Backup is missing or empty');
     }
@@ -98,6 +98,8 @@ class BackupService {
         'cash_sessions',
         'audit_logs',
         if (version >= 40) ...['roles', 'role_permissions'],
+        if (version >= 41) ...['promotions', 'promotion_product_targets', 'promotion_category_targets'],
+        if (version >= 42) 'sale_promotion_applications',
         if (version >= 37) 'inventory_health_settings',
         if (version >= 22) 'rma_lifecycle_events',
         if (version >= 23) 'serial_warranty_snapshots',
@@ -236,7 +238,8 @@ class BackupService {
             'walk_in_name',
             'walk_in_contact',
             'held_reference'
-          ]
+          ],
+          if (version >= 42) 'discount_source',
         ],
         'sale_items': [
           'id',
@@ -255,6 +258,7 @@ class BackupService {
           if (version >= 2) 'line_total_cents',
           if (version >= 5) 'product_name',
           if (version >= 35) 'manual_discount_cents',
+          if (version >= 42) 'promotion_discount_cents',
         ],
         'payments': ['id', 'sale_id', 'method', 'amount_cents'],
         'users': [
@@ -745,6 +749,12 @@ class BackupService {
             'requested_by',
             'authorized_by',
             'authorized_at'
+          ],
+        if (version >= 42)
+          'sale_promotion_applications': [
+            'id', 'sale_id', 'promotion_id', 'promotion_reference',
+            'promotion_name', 'promotion_type', 'stacking_mode', 'priority',
+            'eligible_subtotal_cents', 'discount_cents', 'created_at'
           ],
       };
       for (final entry in columns.entries) {

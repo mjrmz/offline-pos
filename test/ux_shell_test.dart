@@ -66,13 +66,16 @@ void main() {
     expect(find.text('ADMIN & SETTINGS'), findsOneWidget);
     expect(find.byType(NavigationBar), findsNothing);
     expect(find.byKey(const Key('desktop-pos-two-pane')), findsOneWidget);
-    expect(find.text('Point of Sale'), findsNothing);
+    expect(find.text('Point of Sale'), findsOneWidget);
+    expect(find.byKey(const Key('sidebar-business-name')), findsOneWidget);
     expect(find.byKey(const Key('pos-shift-status')), findsOneWidget);
     expect(find.byKey(const Key('sidebar-account')), findsOneWidget);
     expect(find.textContaining('Vertex POS  /'), findsNothing);
     await tester.tap(find.byKey(const Key('pos-sidebar-toggle')));
     await tester.pumpAndSettle();
     expect(find.text('SELL'), findsNothing);
+    expect(find.byKey(const Key('sidebar-business-name')), findsNothing);
+    expect(find.byKey(const Key('sidebar-brand-logo')), findsOneWidget);
     expect(find.byTooltip('Inventory'), findsOneWidget);
   });
 
@@ -84,6 +87,7 @@ void main() {
     expect(tester.getTopLeft(sidebar).dy, 0);
     expect(tester.getSize(sidebar).height, 768);
     expect(tester.getBottomLeft(account).dy, 768);
+    expect(find.byKey(const Key('sidebar-navigation')), findsOneWidget);
     expect(
         find.descendant(
             of: account, matching: find.byIcon(Icons.account_circle_outlined)),
@@ -173,6 +177,58 @@ void main() {
     expect(find.text('Stock Receiving'), findsNothing);
     expect(find.text('Inventory'), findsWidgets);
     expect(find.text('Backup & Recovery'), findsNothing);
+  });
+
+  testWidgets('Settings keeps inventory health and product features inline',
+      (tester) async {
+    await mount(tester, const Size(1366, 768));
+    await tester.scrollUntilVisible(find.byTooltip('Settings'), 200,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(
+        find.text('Manage your application, business, and device preferences.'),
+        findsOneWidget);
+    expect(find.text('Business identity'), findsOneWidget);
+    expect(find.text('Sidebar preview'), findsOneWidget);
+    await tester.tap(find.descendant(
+        of: find.byKey(const Key('settings-navigation')),
+        matching: find.text('Inventory')));
+    await tester.pumpAndSettle();
+    expect(find.text('Stock health'), findsWidgets);
+    expect(find.text('Slow moving after (days)'), findsOneWidget);
+    expect(find.byType(AppBar), findsNothing);
+    await tester.tap(find.text('Product capabilities'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Choose any combination'), findsOneWidget);
+    expect(find.byType(AppBar), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Settings embeds team and receipt hardware screens',
+      (tester) async {
+    await mount(tester, const Size(1600, 900));
+    await tester.scrollUntilVisible(find.byTooltip('Settings'), 200,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Team & Access'));
+    await tester.pumpAndSettle();
+    expect(find.text('Roles & Permissions'), findsOneWidget);
+    expect(find.text('Add user'), findsOneWidget);
+    expect(find.byType(AppBar), findsNothing);
+    await tester.tap(find.text('Receipt & Hardware'));
+    await tester.pumpAndSettle();
+    expect(find.text('RECEIPT PREVIEW'), findsOneWidget);
+    await tester.tap(find.text('Printer'));
+    await tester.pumpAndSettle();
+    expect(find.text('Enable printer'), findsOneWidget);
+    expect(find.byType(AppBar), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('global shift status keeps cashier in POS when closed',

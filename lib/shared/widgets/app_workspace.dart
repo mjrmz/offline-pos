@@ -2,6 +2,47 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_layout.dart';
 
+/// Shared outer gutter for top-level record workspaces.
+class AppWorkspacePadding extends StatelessWidget {
+  const AppWorkspacePadding({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, constraints) => Padding(
+          padding: AppLayout.workspacePadding(constraints.maxWidth),
+          child: child,
+        ),
+      );
+}
+
+/// Equal-width metrics, with a maximum of four columns on desktop.
+class AppMetricGrid extends StatelessWidget {
+  const AppMetricGrid({super.key, required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, bounds) {
+          final columns = bounds.maxWidth >= 760
+              ? 4
+              : bounds.maxWidth >= 420
+                  ? 2
+                  : 1;
+          final width =
+              (bounds.maxWidth - (columns - 1) * AppLayout.space12) / columns;
+          return Wrap(
+            spacing: AppLayout.space12,
+            runSpacing: AppLayout.space12,
+            children: [
+              for (final child in children)
+                SizedBox(width: width, child: child),
+            ],
+          );
+        },
+      );
+}
+
 class AppPageHeader extends StatelessWidget {
   const AppPageHeader(
       {super.key, required this.title, this.subtitle, this.action});
@@ -123,6 +164,47 @@ class AppEmptyState extends StatelessWidget {
       );
 }
 
+class AppLoadingState extends StatelessWidget {
+  const AppLoadingState({super.key, this.label = 'Loading records…'});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, bounds) => Center(
+          child: bounds.maxHeight < 80
+              ? SizedBox(
+                  width: bounds.maxHeight.clamp(0, 20),
+                  height: bounds.maxHeight.clamp(0, 20),
+                  child: const CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Column(mainAxisSize: MainAxisSize.min, children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: AppLayout.space12),
+                  Text(label, style: Theme.of(context).textTheme.bodySmall),
+                ]),
+        ),
+      );
+}
+
+class AppErrorState extends StatelessWidget {
+  const AppErrorState(
+      {super.key, required this.title, this.message, required this.onRetry});
+  final String title;
+  final String? message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => AppEmptyState(
+        title: title,
+        message: message,
+        action: OutlinedButton.icon(
+          onPressed: onRetry,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Retry'),
+        ),
+      );
+}
+
 class AppStatusBadge extends StatelessWidget {
   const AppStatusBadge({super.key, required this.label, required this.color});
 
@@ -175,6 +257,7 @@ AppStatusTone appStatusTone(String label) {
     return AppStatusTone.danger;
   }
   if (value.contains('completed') ||
+      value.contains('fully received') ||
       value.contains('converted') ||
       value.contains('ready') ||
       value.contains('healthy') ||
@@ -182,6 +265,8 @@ AppStatusTone appStatusTone(String label) {
     return AppStatusTone.success;
   }
   if (value.contains('await') ||
+      value.contains('partial') ||
+      value.contains('near expiry') ||
       value.contains('low stock') ||
       value.contains('pending')) {
     return AppStatusTone.warning;
@@ -242,7 +327,7 @@ class AppMetricTile extends StatelessWidget {
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(
-                horizontal: AppLayout.space16, vertical: AppLayout.space8),
+                horizontal: AppLayout.space16, vertical: AppLayout.space12),
             child:
                 Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
@@ -257,13 +342,16 @@ class AppMetricTile extends StatelessWidget {
                       color: scheme.onSurfaceVariant),
               ]),
               const SizedBox(height: AppLayout.space4),
-              Text(value,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context)
-                      .textTheme
-                      .headlineSmall
-                      ?.copyWith(fontSize: 28, fontWeight: FontWeight.w700)),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(value,
+                    maxLines: 1,
+                    style: Theme.of(context)
+                        .textTheme
+                        .headlineSmall
+                        ?.copyWith(fontSize: 28, fontWeight: FontWeight.w700)),
+              ),
               if (detail != null)
                 Text(detail!,
                     maxLines: 1,
@@ -324,14 +412,11 @@ class AppEntityRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: AppLayout.space8),
+    return DecoratedBox(
+      decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: scheme.outlineVariant))),
       child: Material(
-        color: scheme.surfaceContainerLow,
-        shape: RoundedRectangleBorder(
-            borderRadius: AppLayout.panelRadius,
-            side: BorderSide(color: scheme.outlineVariant)),
-        clipBehavior: Clip.antiAlias,
+        color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
           child: ConstrainedBox(
@@ -443,10 +528,21 @@ class AppPaginationFooter extends StatelessWidget {
 /// A bounded record workspace. The parent supplies a finite height (normally
 /// through Expanded); only the rows scroll, while the title and footer stay put.
 class AppPagedListPanel extends StatelessWidget {
-  const AppPagedListPanel({super.key, required this.title, required this.total,
-    required this.count, required this.itemBuilder, this.loading = false,
-    this.page = 0, this.onPrevious, this.onNext, this.emptyTitle = 'No records found',
-    this.emptyMessage = 'Try adjusting your search or filters.'});
+  const AppPagedListPanel(
+      {super.key,
+      required this.title,
+      required this.total,
+      required this.count,
+      required this.itemBuilder,
+      this.loading = false,
+      this.page = 0,
+      this.onPrevious,
+      this.onNext,
+      this.columnHeader,
+      this.emptyTitle = 'No records found',
+      this.emptyMessage = 'Try adjusting your search or filters.',
+      this.error,
+      this.onRetry});
 
   final String title;
   final int total;
@@ -456,52 +552,87 @@ class AppPagedListPanel extends StatelessWidget {
   final IndexedWidgetBuilder itemBuilder;
   final VoidCallback? onPrevious;
   final VoidCallback? onNext;
+  final Widget? columnHeader;
   final String emptyTitle;
   final String emptyMessage;
+  final String? error;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final pages = (total + 49) ~/ 50;
     return Container(
-      decoration: BoxDecoration(color: scheme.surface,
-        border: Border.all(color: scheme.outlineVariant),
-        borderRadius: BorderRadius.circular(14)),
+      decoration: BoxDecoration(
+          color: scheme.surface,
+          border: Border.all(color: scheme.outlineVariant),
+          borderRadius: AppLayout.panelRadius),
       clipBehavior: Clip.antiAlias,
       child: Column(children: [
-        Padding(padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-          child: Row(children: [
-            Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
-            const Spacer(),
-            Text('$total ${total == 1 ? 'result' : 'results'}',
-              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
-          ])),
+        Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            child: Row(children: [
+              Expanded(
+                  child: Text(title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700))),
+              const SizedBox(width: AppLayout.space8),
+              Text('$total ${total == 1 ? 'result' : 'results'}',
+                  style:
+                      TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
+            ])),
         Divider(height: 1, color: scheme.outlineVariant),
-        Expanded(child: loading
-          ? const Center(child: CircularProgressIndicator())
-          : count == 0
-            ? LayoutBuilder(builder: (context, bounds) => bounds.maxHeight < 170
-                ? Center(child: Text(emptyTitle))
-                : AppEmptyState(title: emptyTitle, message: emptyMessage))
-            : Scrollbar(child: ListView.separated(
-                padding: const EdgeInsets.all(10),
-                itemCount: count,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: itemBuilder))),
+        if (columnHeader != null) ...[
+          columnHeader!,
+          Divider(height: 1, color: scheme.outlineVariant),
+        ],
+        Expanded(
+            child: loading
+                ? const AppLoadingState()
+                : error != null && onRetry != null
+                    ? AppErrorState(
+                        title: 'Unable to load $title',
+                        message: error,
+                        onRetry: onRetry!)
+                    : count == 0
+                        ? LayoutBuilder(
+                            builder: (context, bounds) => bounds.maxHeight < 170
+                                ? Center(child: Text(emptyTitle))
+                                : AppEmptyState(
+                                    title: emptyTitle, message: emptyMessage))
+                        : Scrollbar(
+                            child: ListView.separated(
+                                padding: EdgeInsets.zero,
+                                itemCount: count,
+                                separatorBuilder: (_, __) =>
+                                    const SizedBox.shrink(),
+                                itemBuilder: itemBuilder))),
         if (pages > 1) ...[
           Divider(height: 1, color: scheme.outlineVariant),
-          Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Row(children: [
-              Text('Showing ${page * 50 + 1}–${page * 50 + count} of $total',
-                style: Theme.of(context).textTheme.bodySmall),
-              const Spacer(),
-              Text('Page ${page + 1} of $pages', style: Theme.of(context).textTheme.bodySmall),
-              const SizedBox(width: 12),
-              if (page > 0) TextButton.icon(onPressed: onPrevious,
-                icon: const Icon(Icons.chevron_left), label: const Text('Previous')),
-              if (page + 1 < pages) TextButton.icon(onPressed: onNext,
-                icon: const Icon(Icons.chevron_right), label: const Text('Next')),
-            ])),
+          Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: Row(children: [
+                Text('Showing ${page * 50 + 1}–${page * 50 + count} of $total',
+                    style: Theme.of(context).textTheme.bodySmall),
+                const Spacer(),
+                Text('Page ${page + 1} of $pages',
+                    style: Theme.of(context).textTheme.bodySmall),
+                const SizedBox(width: 12),
+                if (page > 0)
+                  TextButton.icon(
+                      onPressed: onPrevious,
+                      icon: const Icon(Icons.chevron_left),
+                      label: const Text('Previous')),
+                if (page + 1 < pages)
+                  TextButton.icon(
+                      onPressed: onNext,
+                      icon: const Icon(Icons.chevron_right),
+                      label: const Text('Next')),
+              ])),
         ],
       ]),
     );

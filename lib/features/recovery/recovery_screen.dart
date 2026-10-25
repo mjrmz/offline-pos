@@ -15,6 +15,7 @@ class RecoveryScreen extends StatefulWidget {
   final Future<void> Function(File)? onDelete;
   final Future<void> Function()? onRecheck;
   final List<FileSystemEntity> Function(Directory)? listBackupEntries;
+  final bool showHealth;
   const RecoveryScreen(
       {super.key,
       required this.backupDirectory,
@@ -25,7 +26,8 @@ class RecoveryScreen extends StatefulWidget {
       this.onRecheck,
       this.onCreate,
       this.onDelete,
-      this.listBackupEntries});
+      this.listBackupEntries,
+      this.showHealth = true});
   @override
   State<RecoveryScreen> createState() => _RecoveryScreenState();
 }
@@ -82,8 +84,9 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
           context: context,
           builder: (_) => AlertDialog(
                   title: Text(title),
-                  content: const Text(
-                      'This replaces current local data. Keep a separate copy before proceeding.'),
+                  content: Text(title.startsWith('Delete')
+                      ? 'This permanently removes the selected backup.'
+                      : 'This replaces current local data. Keep a separate copy before proceeding.'),
                   actions: [
                     TextButton(
                         onPressed: () => Navigator.pop(context, false),
@@ -143,24 +146,34 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
   @override
   Widget build(BuildContext context) =>
       ListView(padding: const EdgeInsets.all(16), children: [
-        Text('System health', style: Theme.of(context).textTheme.headlineSmall),
-        Card(
-            child: Column(children: [
-          ListTile(
-              leading: const Icon(Icons.storage),
-              title: const Text('Database'),
-              trailing: Text(widget.databaseStatus)),
-          ListTile(
-              leading: const Icon(Icons.verified_user),
-              title: const Text('License'),
-              trailing: Text(widget.licenseStatus)),
-          ListTile(
-              leading: const Icon(Icons.backup),
-              title: const Text('Backups'),
-              trailing:
-                  Text('${entries.where((e) => e.$2 != null).length} valid, '
-                      '${entries.where((e) => e.$2 == null).length} invalid')),
-        ])),
+        if (!widget.showHealth) ...[
+          Text('Backup & Recovery',
+              style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          const Text('Database protection and restore points.'),
+          const SizedBox(height: 16),
+        ],
+        if (widget.showHealth)
+          Text('System health',
+              style: Theme.of(context).textTheme.headlineSmall),
+        if (widget.showHealth)
+          Card(
+              child: Column(children: [
+            ListTile(
+                leading: const Icon(Icons.storage),
+                title: const Text('Database'),
+                trailing: Text(widget.databaseStatus)),
+            ListTile(
+                leading: const Icon(Icons.verified_user),
+                title: const Text('License'),
+                trailing: Text(widget.licenseStatus)),
+            ListTile(
+                leading: const Icon(Icons.backup),
+                title: const Text('Backups'),
+                trailing: Text(
+                    '${entries.where((e) => e.$2 != null).length} valid, '
+                    '${entries.where((e) => e.$2 == null).length} invalid')),
+          ])),
         if (message != null) Text(message!),
         if (widget.auth == null) ...[
           TextField(
@@ -173,52 +186,75 @@ class _RecoveryScreenState extends State<RecoveryScreen> {
               decoration:
                   const InputDecoration(labelText: 'Owner password in backup')),
         ],
-        TextButton(
-            onPressed: busy ? null : refresh,
-            child: const Text('Recheck backups')),
-        if (widget.onRecheck != null)
-          TextButton(
-              onPressed: busy
-                  ? null
-                  : () async {
-                      try {
-                        await widget.onRecheck!();
-                      } catch (e) {
-                        if (mounted) setState(() => message = safeMessage(e));
-                      }
-                    },
-              child: const Text('Recheck database')),
-        if (widget.auth != null)
-          FilledButton(
-              onPressed: busy ? null : create,
-              child: const Text('Create manual backup')),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          if (widget.auth != null)
+            FilledButton.icon(
+                onPressed: busy ? null : create,
+                icon: const Icon(Icons.add),
+                label: const Text('Create backup')),
+          OutlinedButton(
+              onPressed: busy ? null : refresh,
+              child: const Text('Verify backups')),
+          if (widget.onRecheck != null)
+            TextButton(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        try {
+                          await widget.onRecheck!();
+                        } catch (e) {
+                          if (mounted) setState(() => message = safeMessage(e));
+                        }
+                      },
+                child: const Text('Recheck database')),
+        ]),
         const SizedBox(height: 16),
-        Text('Backups', style: Theme.of(context).textTheme.titleLarge),
+        Text('Backup history', style: Theme.of(context).textTheme.titleLarge),
         if (entries.isEmpty)
           const Card(
               child: Padding(
                   padding: EdgeInsets.all(24),
                   child: Text(
                       'No backups found. Create a manual backup to protect this device.'))),
-        for (final entry in entries)
-          Card(
-              child: ListTile(
-            title: Text(entry.$2 == null
-                ? 'Unverified backup'
-                : '${entry.$2!.kind.name} backup · ${entry.$2!.createdAt}'),
-            subtitle: Text(entry.$2 == null
-                ? 'Invalid: ${entry.$3}'
-                : '${entry.$2!.kind.name} · ${entry.$2!.createdAt} · schema ${entry.$2!.schemaVersion} · ${entry.$2!.bytes} bytes · integrity ok'),
-            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-              if (entry.$2 != null)
-                TextButton(
-                    onPressed: busy ? null : () => restore(entry.$2!),
-                    child: const Text('Restore')),
-              if (widget.onDelete != null)
-                TextButton(
-                    onPressed: busy ? null : () => delete(entry.$1),
-                    child: const Text('Delete')),
-            ]),
-          )),
+        if (entries.isNotEmpty)
+          SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(columns: const [
+                DataColumn(label: Text('Backup')),
+                DataColumn(label: Text('Created')),
+                DataColumn(label: Text('Type')),
+                DataColumn(label: Text('Schema')),
+                DataColumn(label: Text('Size')),
+                DataColumn(label: Text('Integrity')),
+                DataColumn(label: Text('Actions')),
+              ], rows: [
+                for (final entry in entries)
+                  DataRow(cells: [
+                    DataCell(Text(entry.$1.uri.pathSegments.last)),
+                    DataCell(Text(entry.$2?.createdAt.toString() ?? '—')),
+                    DataCell(Text(entry.$2?.kind.name ?? '—')),
+                    DataCell(Text(entry.$2?.schemaVersion.toString() ?? '—')),
+                    DataCell(
+                        Text(entry.$2 == null ? '—' : '${entry.$2!.bytes} B')),
+                    DataCell(Text(entry.$2 == null ? 'Invalid' : 'Valid')),
+                    DataCell(PopupMenuButton<String>(
+                        tooltip: 'Backup actions',
+                        enabled: !busy,
+                        onSelected: (action) {
+                          if (action == 'restore' && entry.$2 != null) {
+                            restore(entry.$2!);
+                          }
+                          if (action == 'delete') delete(entry.$1);
+                        },
+                        itemBuilder: (_) => [
+                              if (entry.$2 != null)
+                                const PopupMenuItem(
+                                    value: 'restore', child: Text('Restore')),
+                              if (widget.onDelete != null)
+                                const PopupMenuItem(
+                                    value: 'delete', child: Text('Delete')),
+                            ])),
+                  ])
+              ])),
       ]);
 }

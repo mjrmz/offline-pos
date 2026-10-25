@@ -283,7 +283,7 @@ void main() {
     final dir = await Directory.systemTemp.createTemp('loyalty-backup-');
     try {
       final backup = await BackupService(db, dir).create(BackupKind.manual);
-      expect(BackupService.verify(backup.file), 40);
+      expect(BackupService.verify(backup.file), 46);
       await db.close();
       final restored = AppDatabase.forTesting(NativeDatabase(backup.file));
       try {

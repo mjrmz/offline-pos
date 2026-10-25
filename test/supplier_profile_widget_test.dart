@@ -6,6 +6,7 @@ import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
 import 'package:modern_offline_pos/data/daos/directory_repository.dart';
 import 'package:modern_offline_pos/data/daos/stock_receiving_repository.dart';
+import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/features/contacts/supplier_profile_drawer.dart';
 import 'package:modern_offline_pos/shared/widgets/app_workspace.dart';
 
@@ -55,6 +56,7 @@ void main() {
             'Products',
             'Purchase Orders',
             'Receiving',
+            'Payables',
             'Performance',
             'Overview'
           ]) {
@@ -62,6 +64,10 @@ void main() {
                 tester.widget<AppWorkspaceTabs>(find.byType(AppWorkspaceTabs));
             tabs.onSelected(tabs.labels.indexOf(label));
             await tester.pumpAndSettle();
+            if (label == 'Payables') {
+              expect(find.text('Record payment'), findsOneWidget);
+              expect(find.text('No tracked Receiving payables.'), findsOneWidget);
+            }
             expect(tester.takeException(), isNull,
                 reason:
                     'Switching to $label must not reuse another tab payload');
@@ -70,4 +76,39 @@ void main() {
       });
     }
   }
+
+  testWidgets('supplier payment shows allocations before confirmation', (tester) async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final auth = AuthService(AuthRepository(db));
+    final id = await auth.bootstrap('Owner', 'password123', 'Q?', 'answer');
+    await auth.login(id, 'password123');
+    final supplier = await DirectoryRepository(db)
+        .saveSupplier(auth.current!, name: 'Supplier');
+    final product = await PosRepository(db).saveProduct(
+        name: 'Widget', priceCents: 900, costCents: 500, startingStock: 0);
+    await StockReceivingRepository(db).receive(auth.current!, supplier.id,
+        [ReceivingLineRequest(product, 10000, 500)]);
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SizedBox(
+        width: 800, child: SupplierProfileDrawer(supplier: supplier,
+            user: auth.current!, repository: StockReceivingRepository(db))))));
+    await tester.pumpAndSettle();
+    final tabs = tester.widget<AppWorkspaceTabs>(find.byType(AppWorkspaceTabs));
+    tabs.onSelected(tabs.labels.indexOf('Payables'));
+    await tester.pumpAndSettle();
+    expect(find.text('Aging'), findsOneWidget);
+    expect(find.text('Supplier Statement'), findsOneWidget);
+    await tester.tap(find.text('Supplier Statement'));
+    await tester.pumpAndSettle();
+    expect(find.text('Statement activity'), findsOneWidget);
+    await tester.tap(find.text('Close'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Record payment'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).first, '10');
+    await tester.tap(find.text('Preview'));
+    await tester.pumpAndSettle();
+    expect(find.text('Allocation preview'), findsOneWidget);
+    expect(find.text('₱10.00'), findsWidgets);
+  });
 }

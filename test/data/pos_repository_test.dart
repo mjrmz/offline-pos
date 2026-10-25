@@ -227,7 +227,8 @@ class _DelayedRepository extends PosRepository {
       String? walkInName,
       String? walkInContact,
       String? heldReference,
-      ManualDiscount? manualDiscount}) async {
+      ManualDiscount? manualDiscount,
+      String? salesOrderId}) async {
     await gate.future;
     return super.completeCashSale(items, cashReceivedCents, cashierId,
         quotationId: quotationId,
@@ -237,6 +238,7 @@ class _DelayedRepository extends PosRepository {
         walkInName: walkInName,
         walkInContact: walkInContact,
         heldReference: heldReference,
-        manualDiscount: manualDiscount);
+        manualDiscount: manualDiscount,
+        salesOrderId: salesOrderId);
   }
 }

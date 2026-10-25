@@ -8,7 +8,8 @@ import '../../shared/widgets/app_workspace.dart';
 
 class UsersScreen extends StatefulWidget {
   final AuthService auth;
-  const UsersScreen({super.key, required this.auth});
+  final bool embedded;
+  const UsersScreen({super.key, required this.auth, this.embedded = false});
   @override
   State<UsersScreen> createState() => _UsersScreenState();
 }
@@ -857,30 +858,33 @@ class _UsersScreenState extends State<UsersScreen> {
                     trailing: Text(
                         '${MaterialLocalizations.of(context).formatMediumDate(a.createdAt.toLocal())}, ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(a.createdAt.toLocal()))}')));
           }),
-        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-          Text(
-              '${activityPage * 50 + 1}–${(activityPage * 50 + activity.length).clamp(0, activityCount)} of $activityCount'),
-          TextButton(
-              onPressed: activityPage == 0
-                  ? null
-                  : () {
-                      setState(() => activityPage--);
-                      refresh();
-                    },
-              child: const Text('Previous')),
-          TextButton(
-              onPressed: (activityPage + 1) * 50 >= activityCount
-                  ? null
-                  : () {
-                      setState(() => activityPage++);
-                      refresh();
-                    },
-              child: const Text('Next'))
-        ]),
+        if (activityCount > 50)
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            Text(
+                '${activityPage * 50 + 1}–${(activityPage * 50 + activity.length).clamp(0, activityCount)} of $activityCount'),
+            TextButton(
+                onPressed: activityPage == 0
+                    ? null
+                    : () {
+                        setState(() => activityPage--);
+                        refresh();
+                      },
+                child: const Text('Previous')),
+            TextButton(
+                onPressed: (activityPage + 1) * 50 >= activityCount
+                    ? null
+                    : () {
+                        setState(() => activityPage++);
+                        refresh();
+                      },
+                child: const Text('Next'))
+          ]),
       ]);
   @override
-  Widget build(BuildContext context) => Scaffold(
-          body: ListView(padding: const EdgeInsets.all(24), children: [
+  Widget build(BuildContext context) {
+    final content = AppWorkspacePadding(
+        child: ListView(padding: EdgeInsets.zero, children: [
+      if (!widget.embedded)
         AppPageHeader(
             title: 'Users & Roles',
             subtitle:
@@ -889,21 +893,30 @@ class _UsersScreenState extends State<UsersScreen> {
                 onPressed: () => credentialDialog(),
                 icon: const Icon(Icons.add),
                 label: const Text('Add user'))),
-        AppWorkspaceTabs(labels: const [
-          'Users',
-          'Roles & Permissions',
-          'Security',
-          'Activity'
-        ], selectedIndex: tab, onSelected: (v) => setState(() => tab = v)),
-        const SizedBox(height: 20),
-        if (error != null)
-          Text(error!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error)),
-        switch (tab) {
-          0 => usersTab(),
-          1 => rolesTab(),
-          2 => securityTab(),
-          _ => activityTab()
-        },
-      ]));
+      if (widget.embedded)
+        Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+                onPressed: () => credentialDialog(),
+                icon: const Icon(Icons.add),
+                label: const Text('Add user'))),
+      AppWorkspaceTabs(labels: const [
+        'Users',
+        'Roles & Permissions',
+        'Security',
+        'Activity'
+      ], selectedIndex: tab, onSelected: (v) => setState(() => tab = v)),
+      const SizedBox(height: 20),
+      if (error != null)
+        Text(error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error)),
+      switch (tab) {
+        0 => usersTab(),
+        1 => rolesTab(),
+        2 => securityTab(),
+        _ => activityTab()
+      },
+    ]));
+    return widget.embedded ? content : Scaffold(body: content);
+  }
 }

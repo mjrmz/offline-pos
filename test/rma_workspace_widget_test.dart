@@ -1,4 +1,4 @@
-﻿import 'package:drift/native.dart';
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/core/models/active_user.dart';
@@ -38,9 +38,9 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.byKey(const ValueKey('rma-row-wide')), findsOneWidget);
         expect(tester.getSize(find.byKey(const ValueKey('rma-row-wide'))).width,
-            lessThanOrEqualTo(1460));
+            lessThanOrEqualTo(width));
         expect(find.byKey(const ValueKey('active-workspace-heading')),
-            findsOneWidget);
+            findsNothing);
         expect(
             tester
                 .getSize(find.byKey(const ValueKey('workspace-customer')))
@@ -109,19 +109,21 @@ void main() {
         isTrue);
     await tester.tap(find.widgetWithText(ChoiceChip, 'All'));
     await tester.pumpAndSettle();
-    expect(tester.getTopLeft(find.byKey(const ValueKey('rma-row-queue-0'))).dy,
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.byKey(const ValueKey('rma-row-queue-7'))).dy,
         lessThan(768));
     expect(tester.takeException(), isNull);
     await tester.enterText(
         find.byKey(const ValueKey('rma-search')), 'POS-000124');
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('rma-row-queue-0')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('rma-row-queue-0')));
+    expect(find.byKey(const ValueKey('rma-row-queue-7')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('rma-row-queue-7')));
     await tester.pumpAndSettle();
-    expect(find.text('RMA-2026-000000'), findsWidgets);
+    expect(find.text('RMA-2026-000007'), findsWidgets);
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('rma-row-queue-0')), findsOneWidget);
+    expect(find.byKey(const ValueKey('rma-row-queue-7')), findsOneWidget);
     expect(
         tester
             .widget<TextField>(find.descendant(
@@ -138,21 +140,28 @@ void main() {
       'SN-124'
     ]) {
       await tester.enterText(find.byKey(const ValueKey('rma-search')), term);
+      await tester.pump(const Duration(milliseconds: 500));
       await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('rma-row-queue-0')), findsOneWidget,
+      expect(
+          find.byKey(ValueKey(term == 'RMA-2026-000000'
+              ? 'rma-row-queue-0'
+              : 'rma-row-queue-7')),
+          findsOneWidget,
           reason: 'Search should match $term');
     }
     await tester.enterText(
         find.byKey(const ValueKey('rma-search')), 'no match');
+    await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
-    expect(find.text('No Customer RMAs found'), findsOneWidget);
+    expect(find.text('No RMAs match this search'), findsOneWidget);
     await tester.enterText(find.byKey(const ValueKey('rma-search')), '');
+    await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(ChoiceChip, 'Rejected / Cancelled'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('workspace-inbound')));
     await tester.pumpAndSettle();
-    expect(find.text('No Supplier RMAs found'), findsOneWidget);
+    expect(find.text('No Supplier RMAs yet'), findsOneWidget);
     expect(find.text('New Supplier RMA'), findsOneWidget);
   });
 

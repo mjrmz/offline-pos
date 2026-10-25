@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:drift/drift.dart' hide Column;
 
 import '../../core/models/active_user.dart';
 import '../../core/models/product.dart';
@@ -17,16 +17,26 @@ import '../../data/daos/stock_count_repository.dart';
 import '../pos_checkout/checkout_screen.dart';
 import 'inventory_overview.dart';
 import 'stock_receiving_screen.dart';
+import 'purchase_returns_screen.dart';
+import '../../data/daos/purchase_return_repository.dart';
 import 'purchase_orders_screen.dart';
 import 'stock_counts_screen.dart';
 import 'expiry_monitor_screen.dart';
 import '../../data/daos/inventory_health_repository.dart';
+import '../../data/daos/inventory_movement_repository.dart';
+import '../../data/daos/paged_result.dart';
+import 'label_print_dialog.dart';
+import 'import_wizard.dart';
+import '../../data/daos/import_repository.dart';
 
 class InventoryWorkspace extends StatefulWidget {
   final PosRepository repository;
   final AuthService auth;
   final ActiveUser user;
   final String? initialProductId;
+  final String? initialCatalogProductId;
+  final String? initialReceiptId;
+  final bool createPurchaseOrderOnOpen;
   final String? initialSupplierId;
   final int? suggestedQuantityMilli;
   final String? initialPurchaseProductId;
@@ -47,6 +57,9 @@ class InventoryWorkspace extends StatefulWidget {
       required this.auth,
       required this.user,
       this.initialProductId,
+      this.initialCatalogProductId,
+      this.initialReceiptId,
+      this.createPurchaseOrderOnOpen = false,
       this.initialSupplierId,
       this.suggestedQuantityMilli,
       this.initialPurchaseProductId,
@@ -78,6 +91,26 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   String? adjustmentBatch;
   int? adjustmentQuantityMilli;
   late String productFilter = widget.initialFilter;
+  bool expiryOpen = false;
+  String? returnReceivingId;
+
+  void _startPurchaseReturn(String receiptId) {
+    setState(() {
+      returnReceivingId = receiptId;
+      view = tabs.indexOf('Purchase Returns');
+    });
+  }
+
+  List<String> get tabs => [
+        'Overview',
+        if (widget.user.can(PosPermission.manageCatalog)) 'Products',
+        if (widget.user.can(PosPermission.stockReceiving)) 'Purchase Orders',
+        if (widget.user.can(PosPermission.stockReceiving)) 'Receiving',
+        if (widget.user.can(PosPermission.stockReceiving)) 'Purchase Returns',
+        if (widget.user.can(PosPermission.stockCount)) 'Stock Counts',
+        'Movements',
+        'Tools',
+      ];
 
   void _openReceivingDetail(String receiptId) {
     Navigator.of(context).push(MaterialPageRoute<void>(
@@ -88,6 +121,10 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
         user: widget.user,
         auth: widget.auth,
         initialReceiptId: receiptId,
+        onReturnToSupplier: (id) {
+          Navigator.of(context).pop();
+          _startPurchaseReturn(id);
+        },
         onViewPurchaseOrder: _openPurchaseOrderDetail,
       ),
     ));
@@ -120,35 +157,15 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   }
 
   void _openExpiry() {
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (routeContext) => ExpiryMonitorScreen(
-        repository: InventoryHealthRepository(widget.repository.db),
-        user: widget.user,
-        onAdjust: widget.user.can(PosPermission.stockAdjust)
-            ? (batch) {
-                Navigator.pop(routeContext);
-                setState(() {
-                  adjustmentProductId = batch.productId;
-                  adjustmentBatch = batch.batchNumber;
-                  adjustmentQuantityMilli = batch.quantityMilli;
-                  view = widget.user.can(PosPermission.manageCatalog) ? 4 : 3;
-                });
-              }
-            : null,
-      ),
-    ));
+    setState(() {
+      expiryOpen = true;
+      view = tabs.length - 1;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final labels = <String>[
-      'Overview',
-      if (widget.user.can(PosPermission.manageCatalog)) 'Products',
-      if (widget.user.can(PosPermission.stockReceiving)) 'Purchase Orders',
-      if (widget.user.can(PosPermission.stockReceiving)) 'Receiving',
-      if (widget.user.can(PosPermission.stockCount)) 'Stock Counts',
-      'Movements',
-    ];
+    final labels = tabs;
     final selected = view.clamp(0, labels.length - 1);
     final label = labels[selected];
     return Material(
@@ -170,59 +187,38 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
                               onPressed: widget.onReturnToQuotation,
                               child: const Text('Return to quotation')),
                         ])))),
-          Center(
-              child: SizedBox(
-                  width: MediaQuery.sizeOf(context).width.clamp(0.0, 1280.0),
-                  child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
-                        child: AppWorkspaceTabs(
-                          labels: labels,
-                          selectedIndex: selected,
-                          onSelected: (index) => setState(() {
-                            final name = labels[index];
-                            view = index;
-                            if (name != 'Stock Counts') {
-                              adjustmentProductId = null;
-                              adjustmentBatch = null;
-                              adjustmentQuantityMilli = null;
-                            }
-                            if (name == 'Products') {
-                              productFilter = 'All';
-                            }
-                            if (name == 'Purchase Orders') {
-                              purchaseProductId = null;
-                            }
-                          }),
-                          trailing: PopupMenuButton<String>(
-                              tooltip: 'Inventory tools',
-                              onSelected: (value) {
-                                if (value == 'expiry') _openExpiry();
-                              },
-                              itemBuilder: (_) => const [
-                                    PopupMenuItem(
-                                        value: 'expiry',
-                                        child: Text('Expiry Monitor'))
-                                  ],
-                              child: const Padding(
-                                  padding: EdgeInsets.all(8),
-                                  child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(Icons.more_horiz),
-                                        Text('Tools')
-                                      ]))),
-                        ),
-                      )))),
+          AppWorkspacePadding(
+              child: AppWorkspaceTabs(
+            labels: labels,
+            selectedIndex: selected,
+            onSelected: (index) => setState(() {
+              final name = labels[index];
+              view = index;
+              if (name != 'Stock Counts') {
+                adjustmentProductId = null;
+                adjustmentBatch = null;
+                adjustmentQuantityMilli = null;
+              }
+              if (name == 'Products') {
+                productFilter = 'All';
+              }
+              if (name == 'Purchase Orders') {
+                purchaseProductId = null;
+              }
+              if (name == 'Purchase Returns') {
+                returnReceivingId = null;
+              }
+            }),
+          )),
           const Divider(height: 1),
           const SizedBox(height: 8),
           Expanded(
               child: switch (label) {
             'Products' => ProductScreen(
-                key: ValueKey(productFilter),
+                key: ValueKey((productFilter, widget.initialCatalogProductId)),
                 repository: widget.repository,
                 auth: widget.auth,
+                initialProductId: widget.initialCatalogProductId,
                 onCreatePurchaseOrder: labels.contains('Purchase Orders')
                     ? (id) async {
                         final plan = (await InventoryPlanningRepository(
@@ -252,6 +248,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
                 initialProductId: purchaseProductId,
                 initialExistingOrderId: widget.initialPurchaseOrderId,
                 initialSelectedOrderId: widget.initialPurchaseViewOrderId,
+                createOnOpen: widget.createPurchaseOrderOnOpen,
                 initialLines: widget.initialPurchaseLines,
                 initialSupplierId:
                     purchaseSupplierId ?? widget.initialPurchaseSupplierId,
@@ -276,6 +273,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
                     widget.initialProductId),
                 purchaseOrderId: receivingPurchaseOrderId,
                 initialProductId: receivingProductId ?? widget.initialProductId,
+                initialReceiptId: widget.initialReceiptId,
                 initialSupplierId: widget.initialSupplierId,
                 suggestedQuantityMilli: widget.suggestedQuantityMilli,
                 repository: StockReceivingRepository(widget.repository.db),
@@ -283,7 +281,13 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
                 products: widget.repository,
                 auth: widget.auth,
                 user: widget.user,
-                onViewPurchaseOrder: _openPurchaseOrderDetail),
+                onViewPurchaseOrder: _openPurchaseOrderDetail,
+                onReturnToSupplier: _startPurchaseReturn),
+            'Purchase Returns' => PurchaseReturnsScreen(
+                key: ValueKey(returnReceivingId),
+                repository: PurchaseReturnRepository(widget.repository.db),
+                user: widget.user,
+                initialReceivingId: returnReceivingId),
             'Stock Counts' => StockCountsScreen(
                 key: ValueKey('$adjustmentProductId:$adjustmentBatch'),
                 repository: StockCountRepository(widget.repository.db),
@@ -292,6 +296,57 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
                 initialAdjustmentBatch: adjustmentBatch,
                 initialAdjustmentQtyMilli: adjustmentQuantityMilli),
             'Movements' => _Movements(repository: widget.repository),
+            'Tools' => expiryOpen
+                ? ExpiryMonitorScreen(
+                    repository: InventoryHealthRepository(widget.repository.db),
+                    user: widget.user,
+                    embedded: true,
+                    onBack: () => setState(() => expiryOpen = false),
+                    onAdjust: widget.user.can(PosPermission.stockAdjust)
+                        ? (batch) => setState(() {
+                              adjustmentProductId = batch.productId;
+                              adjustmentBatch = batch.batchNumber;
+                              adjustmentQuantityMilli = batch.quantityMilli;
+                              view = labels.indexOf('Stock Counts');
+                            })
+                        : null,
+                  )
+                : _InventoryTools(
+                    onOpenExpiry: _openExpiry,
+                    onOpenImport: widget.user
+                                .can(PosPermission.manageCatalog) ||
+                            widget.user.can(PosPermission.manageContacts) ||
+                            widget.user.can(PosPermission.stockReceiving)
+                        ? () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                                builder: (_) => ImportWizard(
+                                    repository:
+                                        ImportRepository(widget.repository.db),
+                                    user: widget.user,
+                                    onViewMovements: () {
+                                      Navigator.of(context).pop();
+                                      setState(() => view = labels.indexOf('Movements'));
+                                    },
+                                    onViewImported: (kind) {
+                                      Navigator.of(context).pop();
+                                      if (kind == ImportKind.openingInventory) {
+                                        setState(() =>
+                                            view = labels.indexOf('Overview'));
+                                      } else if (kind == ImportKind.products &&
+                                          labels.contains('Products')) {
+                                        setState(() =>
+                                            view = labels.indexOf('Products'));
+                                      }
+                                    })))
+                        : null,
+                    onOpenLabels:
+                        widget.user.can(PosPermission.manageCatalog) ||
+                                widget.user.can(PosPermission.stockReceiving)
+                            ? () => showLabelPrintDialog(
+                                context, widget.repository.db, [],
+                                products: widget.repository,
+                                actorId: widget.user.id)
+                            : null),
             _ => InventoryOverview(
                 repository: widget.repository,
                 showCosts: widget.user.can(PosPermission.reports),
@@ -316,6 +371,86 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   }
 }
 
+class _InventoryTools extends StatelessWidget {
+  const _InventoryTools(
+      {required this.onOpenExpiry, this.onOpenLabels, this.onOpenImport});
+  final VoidCallback onOpenExpiry;
+  final VoidCallback? onOpenLabels;
+  final VoidCallback? onOpenImport;
+
+  @override
+  Widget build(BuildContext context) => AppWorkspacePadding(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const AppPageHeader(
+              title: 'Tools',
+              subtitle: 'Inventory utilities and maintenance tools.'),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Expiry Monitor',
+                          style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 8),
+                      const Text('Review expired and near-expiry batches.'),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                          onPressed: onOpenExpiry,
+                          icon: const Icon(Icons.open_in_new),
+                          label: const Text('Open')),
+                    ]),
+              ),
+            ),
+          ),
+          if (onOpenLabels != null)
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 440),
+              child: Card(
+                  child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Label Printing',
+                                style: Theme.of(context).textTheme.titleMedium),
+                            const SizedBox(height: 8),
+                            const Text(
+                                'Create and print product, barcode, batch, expiry, and serial labels.'),
+                            const SizedBox(height: 16),
+                            OutlinedButton.icon(
+                                onPressed: onOpenLabels,
+                                icon: const Icon(Icons.print_outlined),
+                                label: const Text('Open')),
+                          ]))),
+            ),
+          if (onOpenImport != null)
+            ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 440),
+                child: Card(
+                    child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Import Data',
+                                  style:
+                                      Theme.of(context).textTheme.titleMedium),
+                              const SizedBox(height: 8),
+                              const Text(
+                                  'Import products, customers, and suppliers from CSV files.'),
+                              const SizedBox(height: 16),
+                              OutlinedButton.icon(
+                                  onPressed: onOpenImport,
+                                  icon: const Icon(Icons.upload_file),
+                                  label: const Text('Open')),
+                            ])))),
+        ]),
+      );
+}
+
 class _Movements extends StatefulWidget {
   final PosRepository repository;
   const _Movements({required this.repository});
@@ -326,28 +461,34 @@ class _Movements extends StatefulWidget {
 class _MovementsState extends State<_Movements> {
   String query = '';
   String filter = 'All';
-  late final Future<
+  int page = 0;
+  Timer? searchDebounce;
+  late Future<
       (
-        List<InventoryMovement>,
+        PagedResult<InventoryMovement>,
         Map<String, PosProduct>,
         Map<String, String>
       )> rows = _load();
 
+  @override
+  void dispose() {
+    searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  void reload() => setState(() => rows = _load());
+
   Future<
       (
-        List<InventoryMovement>,
+        PagedResult<InventoryMovement>,
         Map<String, PosProduct>,
         Map<String, String>
       )> _load() async {
-    final movements = await (widget.repository.db
-            .select(widget.repository.db.inventoryMovements)
-          ..orderBy([
-            (m) =>
-                OrderingTerm(expression: m.createdAt, mode: OrderingMode.desc)
-          ])
-          ..limit(100))
-        .get();
-    final products = await widget.repository.products();
+    final movementPage = await InventoryMovementRepository(widget.repository.db)
+        .page(page: page, search: query, type: filter);
+    final movements = movementPage.items;
+    final products = await widget.repository
+        .productsByIds(movements.map((m) => m.productId));
     final ids = movements.map((m) => m.referenceId).whereType<String>().toSet();
     final references = <String, String>{};
     if (ids.isNotEmpty) {
@@ -376,6 +517,13 @@ class _MovementsState extends State<_Movements> {
       for (final adjustment in adjustments) {
         references[adjustment.id] = adjustment.reference;
       }
+      final returns = await (widget.repository.db
+              .select(widget.repository.db.purchaseReturns)
+            ..where((r) => r.id.isIn(ids)))
+          .get();
+      for (final row in returns) {
+        references[row.id] = PurchaseReturnRepository.number(row);
+      }
       final linkedLineIds = adjustments
           .map((a) => a.stockCountLineId)
           .whereType<String>()
@@ -402,13 +550,15 @@ class _MovementsState extends State<_Movements> {
         }
       }
     }
-    return (movements, {for (final p in products) p.id: p}, references);
+    return (movementPage, {for (final p in products) p.id: p}, references);
   }
 
   String _type(String reason) => switch (reason) {
         'initial_stock' => 'Opening stock',
+        'opening_inventory_import' => 'Opening Inventory',
         'supplier_receiving' || 'batch_received' || 'receiving' => 'Receiving',
         'sale' => 'Sale',
+        'purchase_return' => 'Purchase Return',
         'refund' || 'item_refund' || 'void' => 'Return / Refund',
         'adjustment' => 'Adjustment',
         'stock_adjustment_increase' ||
@@ -489,93 +639,108 @@ class _MovementsState extends State<_Movements> {
   }
 
   @override
-  Widget build(BuildContext context) => Material(
-      color: Colors.transparent,
-      child: FutureBuilder<
-              (
-                List<InventoryMovement>,
-                Map<String, PosProduct>,
-                Map<String, String>
-              )>(
-          future: rows,
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final products = snapshot.data!.$2;
-            final matches = snapshot.data!.$1
-                .where((row) =>
-                    (query.isEmpty ||
-                        (products[row.productId]
-                                ?.name
-                                .toLowerCase()
-                                .contains(query) ??
-                            false)) &&
-                    (filter == 'All' || _type(row.reason) == filter))
-                .toList();
-            return Center(
-                child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 1280),
-                    child: ListView.builder(
-                        padding: const EdgeInsets.all(20),
-                        itemCount: matches.length + 1,
-                        itemBuilder: (context, index) {
-                          if (index == 0) {
-                            return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text('Inventory movements',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .headlineSmall),
-                                  const SizedBox(height: 20),
-                                  TextField(
-                                      decoration: const InputDecoration(
-                                          prefixIcon: Icon(Icons.search),
-                                          labelText: 'Search product'),
-                                      onChanged: (value) => setState(() =>
-                                          query = value.trim().toLowerCase())),
-                                  const SizedBox(height: 16),
-                                  Wrap(spacing: 8, runSpacing: 4, children: [
-                                    for (final choice in [
-                                      'All',
-                                      'Receiving',
-                                      'Sale',
-                                      'Opening stock',
-                                      'Return / Refund',
-                                      'Adjustment',
-                                      'RMA'
-                                    ])
-                                      ChoiceChip(
-                                          label: Text(choice),
-                                          selected: filter == choice,
-                                          onSelected: (_) =>
-                                              setState(() => filter = choice)),
-                                  ]),
-                                  const SizedBox(height: 16),
-                                  if (matches.isEmpty)
-                                    const Padding(
-                                        padding: EdgeInsets.all(24),
-                                        child:
-                                            Text('No inventory movements yet')),
-                                ]);
-                          }
-                          final row = matches[index - 1];
-                          return Card(
-                              child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 16),
-                                  child: InkWell(
-                                      onTap: _type(row.reason) == 'Adjustment'
-                                          ? () => _adjustmentDetail(row)
-                                          : null,
-                                      child: InventoryMovementRow(
-                                          movement: row,
-                                          product: products[row.productId],
-                                          reference: row.referenceId == null
-                                              ? null
-                                              : snapshot.data!
-                                                  .$3[row.referenceId]))));
-                        })));
-          }));
+  Widget build(BuildContext context) => AppWorkspacePadding(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const AppPageHeader(
+            title: 'Inventory movements',
+            subtitle: 'Review stock changes and their source records.',
+          ),
+          AppSearchField(
+            hintText: 'Search product, SKU, or reference',
+            onChanged: (value) {
+              searchDebounce?.cancel();
+              searchDebounce = Timer(const Duration(milliseconds: 300), () {
+                if (!mounted) return;
+                setState(() {
+                  query = value.trim();
+                  page = 0;
+                  rows = _load();
+                });
+              });
+            },
+          ),
+          const SizedBox(height: 12),
+          Wrap(spacing: 8, runSpacing: 4, children: [
+            for (final choice in const [
+              'All',
+              'Receiving',
+              'Purchase Return',
+              'Sale',
+              'Opening Inventory',
+              'Return / Refund',
+              'Adjustment',
+              'RMA'
+            ])
+              ChoiceChip(
+                label: Text(choice),
+                selected: filter == choice,
+                onSelected: (_) => setState(() {
+                  filter = choice;
+                  page = 0;
+                  rows = _load();
+                }),
+              ),
+          ]),
+          const SizedBox(height: 16),
+          Expanded(
+              child: FutureBuilder<
+                  (
+                    PagedResult<InventoryMovement>,
+                    Map<String, PosProduct>,
+                    Map<String, String>
+                  )>(
+            future: rows,
+            builder: (context, snapshot) {
+              final result = snapshot.data;
+              if (snapshot.hasError) {
+                return AppPagedListPanel(
+                  title: 'Movements',
+                  total: 0,
+                  count: 0,
+                  itemBuilder: (_, __) => const SizedBox.shrink(),
+                  error: 'Unable to load inventory movements.',
+                  onRetry: reload,
+                );
+              }
+              return AppPagedListPanel(
+                key: const Key('movement-list-panel'),
+                title: 'Movements',
+                total: result?.$1.totalCount ?? 0,
+                count: result?.$1.items.length ?? 0,
+                page: page,
+                loading: result == null,
+                emptyTitle: query.isNotEmpty
+                    ? 'No movements match this search'
+                    : filter != 'All'
+                        ? 'No movements match this filter'
+                        : 'No inventory movements yet',
+                onPrevious: () => setState(() {
+                  page--;
+                  rows = _load();
+                }),
+                onNext: () => setState(() {
+                  page++;
+                  rows = _load();
+                }),
+                itemBuilder: (context, index) {
+                  final row = result!.$1.items[index];
+                  return InkWell(
+                    onTap: _type(row.reason) == 'Adjustment'
+                        ? () => _adjustmentDetail(row)
+                        : null,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: InventoryMovementRow(
+                        movement: row,
+                        product: result.$2[row.productId],
+                        reference: result.$3[row.referenceId],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          )),
+        ]),
+      );
 }

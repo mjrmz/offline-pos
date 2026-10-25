@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../shared/widgets/app_workspace.dart';
 import 'package:drift/drift.dart' show Value;
 
 import '../../core/models/active_user.dart';
@@ -595,101 +596,99 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
         if (snapshot.connectionState != ConnectionState.done) {
           return const Center(child: CircularProgressIndicator());
         }
-        return Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+        return AppWorkspacePadding(
             child: Column(children: [
-              Row(children: [
-                Text(selected?.reference ?? 'Stock Counts',
-                    style: Theme.of(context).textTheme.titleLarge),
-                const Spacer(),
-                if (selected != null)
-                  TextButton.icon(
-                      onPressed: () => setState(() => selected = null),
-                      icon: const Icon(Icons.arrow_back),
-                      label: const Text('Back')),
-                if (selected == null) ...[
-                  OutlinedButton(
-                      onPressed: busy ? null : _newCount,
-                      child: const Text('+ New Stock Count')),
-                  const SizedBox(width: 8),
-                  if (widget.user.can(PosPermission.stockAdjust))
-                    FilledButton.tonal(
-                        onPressed: busy ? null : () => _adjust(),
-                        child: const Text('Adjust Stock')),
-                ]
-              ]),
-              const SizedBox(height: 10),
-              if (selected == null) ...[
-                Row(children: [
-                  SegmentedButton<bool>(
-                      segments: const [
-                        ButtonSegment(value: false, label: Text('Counts')),
-                        ButtonSegment(value: true, label: Text('Adjustments'))
-                      ],
-                      selected: {
-                        adjustments
-                      },
-                      onSelectionChanged: (v) =>
-                          setState(() => adjustments = v.first)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                      child: TextField(
-                          decoration: const InputDecoration(
-                              isDense: true,
-                              prefixIcon: Icon(Icons.search),
-                              hintText: 'Search'),
-                          onChanged: (s) =>
-                              setState(() => search = s.toLowerCase()))),
-                ]),
-                const SizedBox(height: 8),
-                Expanded(child: adjustments ? _adjustmentList() : _countList()),
-              ] else ...[
-                _countHeader(),
-                Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                            'Products ${lines.length}    Matched ${lines.where((l) => status(l) == 'Matched').length}    '
-                            'Short ${lines.where((l) => status(l) == 'Short').length}    '
-                            'Over ${lines.where((l) => status(l) == 'Over').length}    '
-                            'Variances ${lines.where((l) => status(l) == 'Short' || status(l) == 'Over').length}'))),
-                const SizedBox(height: 8),
-                Row(children: [
-                  DropdownButton<String>(
-                      value: filter,
-                      items: ['All', 'Uncounted', 'Matched', 'Variance']
-                          .map(
-                              (s) => DropdownMenuItem(value: s, child: Text(s)))
-                          .toList(),
-                      onChanged: (s) => setState(() => filter = s!)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                      child: TextField(
-                          decoration: const InputDecoration(
-                              isDense: true,
-                              prefixIcon: Icon(Icons.search),
-                              hintText: 'Product, SKU, barcode'),
-                          onChanged: (s) =>
-                              setState(() => search = s.toLowerCase()))),
-                ]),
-                const SizedBox(height: 8),
-                const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 12),
-                    child: Row(children: [
-                      Expanded(flex: 3, child: Text('PRODUCT')),
-                      Expanded(child: Text('EXPECTED')),
-                      SizedBox(width: 105, child: Text('COUNTED')),
-                      Expanded(child: Text('VARIANCE')),
-                      SizedBox(width: 60, child: Text('UNIT')),
-                      SizedBox(width: 85, child: Text('STATUS')),
-                      SizedBox(width: 48, child: Text('NOTES')),
-                      SizedBox(width: 48),
-                    ])),
-                Expanded(child: _lineList()),
-                if (selected!.status == 'draft') _footer(),
-              ]
-            ]));
+          Row(children: [
+            Text(selected?.reference ?? 'Stock Counts',
+                style: Theme.of(context).textTheme.titleLarge),
+            const Spacer(),
+            if (selected != null)
+              TextButton.icon(
+                  onPressed: () => setState(() => selected = null),
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Back')),
+            if (selected == null) ...[
+              OutlinedButton(
+                  onPressed: busy ? null : _newCount,
+                  child: const Text('+ New Stock Count')),
+              const SizedBox(width: 8),
+              if (widget.user.can(PosPermission.stockAdjust))
+                FilledButton.tonal(
+                    onPressed: busy ? null : () => _adjust(),
+                    child: const Text('Adjust Stock')),
+            ]
+          ]),
+          const SizedBox(height: 10),
+          if (selected == null) ...[
+            Row(children: [
+              SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('Counts')),
+                    ButtonSegment(value: true, label: Text('Adjustments'))
+                  ],
+                  selected: {
+                    adjustments
+                  },
+                  onSelectionChanged: (v) =>
+                      setState(() => adjustments = v.first)),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: TextField(
+                      decoration: const InputDecoration(
+                          isDense: true,
+                          prefixIcon: Icon(Icons.search),
+                          hintText: 'Search'),
+                      onChanged: (s) =>
+                          setState(() => search = s.toLowerCase()))),
+            ]),
+            const SizedBox(height: 8),
+            Expanded(child: adjustments ? _adjustmentList() : _countList()),
+          ] else ...[
+            _countHeader(),
+            Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                        'Products ${lines.length}    Matched ${lines.where((l) => status(l) == 'Matched').length}    '
+                        'Short ${lines.where((l) => status(l) == 'Short').length}    '
+                        'Over ${lines.where((l) => status(l) == 'Over').length}    '
+                        'Variances ${lines.where((l) => status(l) == 'Short' || status(l) == 'Over').length}'))),
+            const SizedBox(height: 8),
+            Row(children: [
+              DropdownButton<String>(
+                  value: filter,
+                  items: ['All', 'Uncounted', 'Matched', 'Variance']
+                      .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                      .toList(),
+                  onChanged: (s) => setState(() => filter = s!)),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: TextField(
+                      decoration: const InputDecoration(
+                          isDense: true,
+                          prefixIcon: Icon(Icons.search),
+                          hintText: 'Product, SKU, barcode'),
+                      onChanged: (s) =>
+                          setState(() => search = s.toLowerCase()))),
+            ]),
+            const SizedBox(height: 8),
+            const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: Row(children: [
+                  Expanded(flex: 3, child: Text('PRODUCT')),
+                  Expanded(child: Text('EXPECTED')),
+                  SizedBox(width: 105, child: Text('COUNTED')),
+                  Expanded(child: Text('VARIANCE')),
+                  SizedBox(width: 60, child: Text('UNIT')),
+                  SizedBox(width: 85, child: Text('STATUS')),
+                  SizedBox(width: 48, child: Text('NOTES')),
+                  SizedBox(width: 48),
+                ])),
+            Expanded(child: _lineList()),
+            if (selected!.status == 'draft') _footer(),
+          ]
+        ]));
       });
 
   Widget _countList() => ListView(children: [

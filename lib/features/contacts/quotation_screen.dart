@@ -14,12 +14,16 @@ import '../../data/database.dart';
 import '../../data/daos/directory_repository.dart';
 import '../../data/daos/pos_repository.dart';
 import '../../data/daos/quotation_repository.dart';
+import '../../data/daos/sales_order_repository.dart';
 import '../../data/daos/purchase_order_repository.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/widgets/expiry_date_field.dart';
 import '../../shared/widgets/transaction_picker.dart';
 import '../../shared/widgets/app_workspace.dart';
+import '../../shared/theme/app_layout.dart';
+import '../../shared/widgets/app_confirm_dialog.dart';
+import '../../shared/widgets/app_feedback.dart';
 import '../../hardware/printer/receipt_service.dart';
 import '../pos_checkout/checkout_screen.dart';
 import 'documents/quotation_pdf.dart';
@@ -33,6 +37,7 @@ class QuotationScreen extends StatefulWidget {
   final AuthService? auth;
   final ReceiptService? receipts;
   final String? initialQuotationReference;
+  final bool createOnOpen;
   final void Function(String productId, String? supplierId, int quantityMilli,
       String quotationReference)? onReceiveStock;
   final void Function(String productId, String? supplierId, int quantityMilli,
@@ -54,6 +59,7 @@ class QuotationScreen extends StatefulWidget {
       this.auth,
       this.receipts,
       this.initialQuotationReference,
+      this.createOnOpen = false,
       this.onReceiveStock,
       this.onCreatePurchaseOrder,
       this.onAddToPurchaseOrder,
@@ -68,6 +74,8 @@ class _QuotationScreenState extends State<QuotationScreen> {
   List<Quotation> rows = [];
   List<PosProduct> products = [];
   Map<String, int> availabilityMilli = {};
+  Map<String, (int, int)> stockSnapshot = {};
+  bool catalogLoaded = false;
   List<Customer> customers = [];
   Map<String, int> quoteTotals = {};
   Map<String, int> quoteItemCounts = {};
@@ -81,6 +89,11 @@ class _QuotationScreenState extends State<QuotationScreen> {
   String query = '';
   String filter = 'all';
   int listPage = 0;
+  int resultTotal = 0;
+  Map<String, int> overview = {};
+  bool listLoading = false;
+  int requestGeneration = 0;
+  Timer? searchDebounce;
   bool initialQuotationOpened = false;
   String statusOf(Quotation quote) => quote.status == 'open' &&
           quote.validUntil != null &&
@@ -134,29 +147,62 @@ class _QuotationScreenState extends State<QuotationScreen> {
   @override
   void initState() {
     super.initState();
-    refresh();
+    refresh().then((_) {
+      if (mounted && widget.createOnOpen) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) create();
+        });
+      }
+    });
   }
 
-  Future<void> refresh() async {
+  @override
+  void dispose() {
+    searchDebounce?.cancel();
+    super.dispose();
+  }
+
+  Future<void> refresh({bool listOnly = false}) async {
+    final generation = ++requestGeneration;
+    if (mounted) setState(() => listLoading = true);
     try {
-      final quotes = await widget.repository.history();
-      final catalog = await widget.products.products();
-      final stock = await widget.products.stockLevels();
-      final directory = await widget.directory.customers();
-      final itemLists =
-          await Future.wait(quotes.map((q) => widget.repository.items(q.id)));
-      final receiptRows = await Future.wait(quotes.map((q) async =>
-          q.convertedSaleId == null
-              ? null
-              : await (widget.repository.db.select(widget.repository.db.sales)
-                    ..where((s) => s.id.equals(q.convertedSaleId!)))
-                  .getSingleOrNull()));
+      final pageResult = await widget.repository
+          .page(page: listPage, search: query, status: filter);
+      final quotes = pageResult.items;
+      final useCachedCatalog = listOnly && catalogLoaded;
+      final metrics = listOnly ? overview : await widget.repository.overview();
+      final catalog =
+          useCachedCatalog ? products : await widget.products.products();
+      final stock = useCachedCatalog
+          ? stockSnapshot
+          : await widget.products.stockLevels();
+      final directory =
+          useCachedCatalog ? customers : await widget.directory.customers();
+      final itemsByQuote =
+          await widget.repository.itemsFor(quotes.map((q) => q.id));
+      final itemLists = [
+        for (final quote in quotes) itemsByQuote[quote.id] ?? <QuotationItem>[]
+      ];
+      final receiptNumbers = await widget.repository.receiptNumbersFor(quotes);
       final purchaseOrders = PurchaseOrderRepository(widget.repository.db);
-      final orderProgress = await Future.wait((await purchaseOrders.list())
-          .map((order) => purchaseOrders.detail(order.id)));
-      final sourceLinks = await widget.repository.db
-          .select(widget.repository.db.purchaseOrderLineSourceLinks)
-          .get();
+      final sourceLinks = quotes.isEmpty
+          ? <PurchaseOrderLineSourceLink>[]
+          : await (widget.repository.db
+                  .select(widget.repository.db.purchaseOrderLineSourceLinks)
+                ..where(
+                    (link) => link.quotationId.isIn(quotes.map((q) => q.id))))
+              .get();
+      final linkedLines = sourceLinks.isEmpty
+          ? <PurchaseOrderLine>[]
+          : await (widget.repository.db
+                  .select(widget.repository.db.purchaseOrderLines)
+                ..where((line) => line.id
+                    .isIn(sourceLinks.map((link) => link.purchaseOrderLineId))))
+              .get();
+      final orderProgress = (await purchaseOrders.progressFor(
+              linkedLines.map((line) => line.purchaseOrderId).toSet()))
+          .values
+          .toList();
       final quotationIds = {
         for (final quote in quotes) quote.reference: quote.id
       };
@@ -202,10 +248,15 @@ class _QuotationScreenState extends State<QuotationScreen> {
                   .madeToOrder !=
               true;
 
-      if (mounted) {
+      if (mounted && generation == requestGeneration) {
         setState(() {
           rows = quotes;
+          resultTotal = pageResult.totalCount;
+          overview = metrics;
+          listLoading = false;
           products = catalog;
+          stockSnapshot = stock;
+          catalogLoaded = true;
           availabilityMilli = {
             for (final entry in stock.entries)
               entry.key: entry.value.$1 - entry.value.$2
@@ -266,18 +317,17 @@ class _QuotationScreenState extends State<QuotationScreen> {
           };
           quoteReceipts = {
             for (var index = 0; index < quotes.length; index++)
-              if (receiptRows[index]?.receiptNumber != null)
-                quotes[index].id: receiptRows[index]!.receiptNumber!
+              if (quotes[index].convertedSaleId != null &&
+                  receiptNumbers[quotes[index].convertedSaleId] != null)
+                quotes[index].id: receiptNumbers[quotes[index].convertedSaleId]!
           };
           error = null;
         });
         if (!initialQuotationOpened &&
             widget.initialQuotationReference != null) {
           initialQuotationOpened = true;
-          final selected = quotes
-              .where((quote) =>
-                  quote.reference == widget.initialQuotationReference)
-              .firstOrNull;
+          final selected = await widget.repository
+              .byReference(widget.initialQuotationReference!);
           if (selected != null) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (mounted) showQuote(selected);
@@ -286,7 +336,12 @@ class _QuotationScreenState extends State<QuotationScreen> {
         }
       }
     } catch (failure) {
-      if (mounted) setState(() => error = safeMessage(failure));
+      if (mounted && generation == requestGeneration) {
+        setState(() {
+          error = safeMessage(failure);
+          listLoading = false;
+        });
+      }
     }
   }
 
@@ -2463,21 +2518,15 @@ class _QuotationScreenState extends State<QuotationScreen> {
 
   Future<void> _cancelFromDetail(
       Quotation quote, BuildContext detailContext) async {
-    final confirmed = await showDialog<bool>(
-        context: detailContext,
-        builder: (context) => AlertDialog(
-              title: const Text('Cancel quotation?'),
-              content: Text(
-                  '${quote.reference} will remain readable, but cannot be converted.'),
-              actions: [
-                TextButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    child: const Text('Keep quotation')),
-                FilledButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    child: const Text('Cancel quotation')),
-              ],
-            ));
+    final confirmed = await showAppDestructiveConfirmDialog(
+      context: detailContext,
+      title: 'Cancel quotation',
+      impact:
+          '${quote.reference} will remain readable, but cannot be converted.',
+      reversible: false,
+      cancelLabel: 'Keep quotation',
+      confirmLabel: 'Cancel quotation',
+    );
     if (confirmed != true) return;
     try {
       await widget.repository.cancel(widget.user, quote.id);
@@ -2757,6 +2806,13 @@ class _QuotationScreenState extends State<QuotationScreen> {
                                       label: const Text('Send / Share')),
                                 ]))),
                       ])),
+                  FutureBuilder<SalesOrder?>(
+                    future: SalesOrderRepository(widget.repository.db)
+                        .fromQuotation(quote.id),
+                    builder: (context, snapshot) => snapshot.data == null
+                        ? const SizedBox.shrink()
+                        : Padding(padding: const EdgeInsets.all(12),
+                            child: Text('Sales Order: ${snapshot.data!.reference}'))),
                   if (quote.status == 'open')
                     Padding(
                       padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
@@ -2784,6 +2840,30 @@ class _QuotationScreenState extends State<QuotationScreen> {
                               icon: const Icon(Icons.block_outlined),
                               label: const Text('Cancel quotation'),
                             ),
+                            if (quote.customerId != null &&
+                                widget.user.can(PosPermission.manageSalesOrders))
+                              OutlinedButton.icon(
+                                onPressed: () async {
+                                  try {
+                                    final order = await SalesOrderRepository(
+                                        widget.repository.db).convertQuotation(
+                                        widget.user, quote.id);
+                                    if (context.mounted) {
+                                      Navigator.pop(context);
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(SnackBar(content: Text(
+                                              'Created ${order.reference}')));
+                                    }
+                                  } catch (e) {
+                                    if (context.mounted) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(SnackBar(content:
+                                              Text(e.toString())));
+                                    }
+                                  }
+                                },
+                                icon: const Icon(Icons.assignment_outlined),
+                                label: const Text('Create Sales Order')),
                             if (quote.validUntil == null ||
                                 !quote.validUntil!.isBefore(DateTime.now()))
                               FilledButton(
@@ -2846,147 +2926,152 @@ class _QuotationScreenState extends State<QuotationScreen> {
     final file = File('${directory.path}${Platform.pathSeparator}$filename');
     await file.writeAsBytes(bytes, flush: true);
     if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Saved ${file.path}')));
+      showAppFeedback(context, 'Saved ${file.path}');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final visible = rows.where((row) =>
-      (filter == 'all' || filter == statusOf(row) ||
-        (filter == 'awaiting stock' && row.status == 'open' &&
-          (quoteAwaitingCounts[row.id] ?? 0) > 0) ||
-        (filter == 'ready' && row.status == 'open' &&
-          (quoteItemCounts[row.id] ?? 0) > 0 &&
-          (quoteUnlinkedCounts[row.id] ?? 0) == 0 &&
-          (quoteAwaitingCounts[row.id] ?? 0) == 0)) &&
-      '${row.reference} ${row.customerNameSnapshot ?? 'Walk-in'} ${quoteProductNames[row.id] ?? ''}'
-        .toLowerCase().contains(query)).toList();
     return Stack(children: [
-        Scaffold(
-            body: LayoutBuilder(builder: (context, viewport) =>
-              SingleChildScrollView(
-                physics: viewport.maxWidth < 600 ? null : const NeverScrollableScrollPhysics(),
-                child: SizedBox(
-                  height: viewport.maxWidth < 600 && viewport.maxHeight < 1800
-                      ? 1800 : viewport.maxHeight,
-                  child: Padding(padding: const EdgeInsets.all(24), child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start, children: [
-          AppPageHeader(
-            title: 'Quotations',
-            subtitle:
-                'Create and manage customer price offers before checkout.',
-            action: FilledButton.icon(
-              onPressed: create,
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('New quotation'),
+      Scaffold(
+          body: LayoutBuilder(
+              builder: (context, viewport) => SingleChildScrollView(
+                  physics: viewport.maxWidth < 600
+                      ? null
+                      : const NeverScrollableScrollPhysics(),
+                  child: SizedBox(
+                      height:
+                          viewport.maxWidth < 600 && viewport.maxHeight < 1800
+                              ? 1800
+                              : viewport.maxHeight,
+                      child: Padding(
+                          padding:
+                              AppLayout.workspacePadding(viewport.maxWidth),
+                          child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                AppPageHeader(
+                                  title: 'Quotations',
+                                  subtitle:
+                                      'Create and manage customer price offers before checkout.',
+                                  action: FilledButton.icon(
+                                    onPressed: create,
+                                    icon: const Icon(Icons.add, size: 18),
+                                    label: const Text('New quotation'),
+                                  ),
+                                ),
+                                if (error != null)
+                                  Text(error!,
+                                      style: TextStyle(
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .error)),
+                                AppMetricGrid(children: [
+                                  _metric(
+                                      context, 'Open', overview['open'] ?? 0),
+                                  _metric(context, 'Expired',
+                                      overview['expired'] ?? 0),
+                                  _metric(context, 'Awaiting stock',
+                                      overview['awaiting stock'] ?? 0),
+                                  _metric(context, 'Converted',
+                                      overview['converted'] ?? 0),
+                                  _metric(
+                                      context, 'Ready', overview['ready'] ?? 0),
+                                ]),
+                                const SizedBox(height: 20),
+                                AppSearchField(
+                                    hintText:
+                                        'Search quotation, customer, or product',
+                                    onChanged: (value) {
+                                      searchDebounce?.cancel();
+                                      setState(() {
+                                        query = value.trim();
+                                        listPage = 0;
+                                      });
+                                      searchDebounce = Timer(
+                                          const Duration(milliseconds: 300),
+                                          () => refresh(listOnly: true));
+                                    }),
+                                const SizedBox(height: 12),
+                                Wrap(spacing: 8, children: [
+                                  for (final status in [
+                                    'all',
+                                    'open',
+                                    'awaiting stock',
+                                    'ready',
+                                    'expired',
+                                    'converted',
+                                    'cancelled'
+                                  ])
+                                    AppFilterChip(
+                                        label: status[0].toUpperCase() +
+                                            status.substring(1),
+                                        selected: filter == status,
+                                        onSelected: () {
+                                          searchDebounce?.cancel();
+                                          setState(() {
+                                            filter = status;
+                                            listPage = 0;
+                                          });
+                                          refresh(listOnly: true);
+                                        }),
+                                ]),
+                                const SizedBox(height: 16),
+                                Expanded(
+                                    child: AppPagedListPanel(
+                                  key: const Key('quotation-list-panel'),
+                                  title: 'Quotations',
+                                  total: resultTotal,
+                                  count: rows.length,
+                                  page: listPage,
+                                  loading: listLoading,
+                                  error: error,
+                                  onRetry: refresh,
+                                  emptyTitle: query.isNotEmpty
+                                      ? 'No quotations match this search'
+                                      : filter != 'all'
+                                          ? 'No quotations match these filters'
+                                          : 'No quotations yet',
+                                  onPrevious: () {
+                                    setState(() => listPage--);
+                                    refresh(listOnly: true);
+                                  },
+                                  onNext: () {
+                                    setState(() => listPage++);
+                                    refresh(listOnly: true);
+                                  },
+                                  itemBuilder: (context, index) {
+                                    final row = rows[index];
+                                    return AppEntityRow(
+                                      title: row.reference,
+                                      subtitle:
+                                          '${row.customerNameSnapshot ?? 'Walk-in customer'} · ${row.validUntil == null ? 'No expiry' : 'Valid until ${MaterialLocalizations.of(context).formatMediumDate(row.validUntil!)}'}\n${quoteItemCounts[row.id] ?? 0} items · ${formatPeso(quoteTotals[row.id] ?? 0)} · ${row.status != 'open' ? statusOf(row) : (quoteUnlinkedCounts[row.id] ?? 0) > 0 ? 'Next: Link ${quoteUnlinkedCounts[row.id]} custom item(s) to Inventory' : (quoteNeedsOrderCounts[row.id] ?? 0) > 0 ? 'Next: Order ${quoteNeedsOrderCounts[row.id]} item(s)' : (quoteOrderedCounts[row.id] ?? 0) > 0 ? 'Next: Await PO delivery' : 'Ready for checkout'}',
+                                      status: AppSemanticStatusBadge(
+                                          label:
+                                              statusOf(row)[0].toUpperCase() +
+                                                  statusOf(row).substring(1)),
+                                      onTap: () => showQuote(row),
+                                    );
+                                  },
+                                )),
+                              ])))))),
+      if (editor != null) ...[
+        const ModalBarrier(dismissible: false, color: Colors.black54),
+        Center(
+            child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 1200,
+              maxHeight: MediaQuery.sizeOf(context).height * .88,
             ),
+            child: editor!,
           ),
-          if (error != null)
-            Text(error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          Wrap(spacing: 12, runSpacing: 12, children: [
-            _metric(
-                context,
-                'Open',
-                rows
-                    .where((r) =>
-                        r.status == 'open' &&
-                        (r.validUntil == null ||
-                            !r.validUntil!.isBefore(DateTime.now())))
-                    .length),
-            _metric(
-                context,
-                'Expired',
-                rows
-                    .where((r) =>
-                        r.status == 'open' &&
-                        r.validUntil != null &&
-                        r.validUntil!.isBefore(DateTime.now()))
-                    .length),
-            _metric(
-                context,
-                'Awaiting stock',
-                rows
-                    .where((r) =>
-                        r.status == 'open' &&
-                        (quoteAwaitingCounts[r.id] ?? 0) > 0)
-                    .length),
-            _metric(context, 'Converted',
-                rows.where((r) => r.status == 'converted').length),
-            _metric(
-                context,
-                'Ready',
-                rows
-                    .where((r) =>
-                        r.status == 'open' &&
-                        (quoteItemCounts[r.id] ?? 0) > 0 &&
-                        (quoteUnlinkedCounts[r.id] ?? 0) == 0 &&
-                        (quoteAwaitingCounts[r.id] ?? 0) == 0)
-                    .length),
-          ]),
-          const SizedBox(height: 20),
-          AppSearchField(
-              hintText: 'Search quotation, customer, or product',
-              onChanged: (value) =>
-                  setState(() { query = value.toLowerCase(); listPage = 0; })),
-          const SizedBox(height: 12),
-          Wrap(spacing: 8, children: [
-            for (final status in [
-              'all',
-              'open',
-              'awaiting stock',
-              'ready',
-              'expired',
-              'converted',
-              'cancelled'
-            ])
-              AppFilterChip(
-                  label: status[0].toUpperCase() + status.substring(1),
-                  selected: filter == status,
-                  onSelected: () => setState(() { filter = status; listPage = 0; })),
-          ]),
-          const SizedBox(height: 16),
-          Expanded(child: AppPagedListPanel(
-            key: const Key('quotation-list-panel'),
-            title: 'Quotations', total: visible.length,
-            count: visible.skip(listPage * 50).take(50).length,
-            page: listPage,
-            emptyTitle: 'No quotations found',
-            onPrevious: () => setState(() => listPage--),
-            onNext: () => setState(() => listPage++),
-            itemBuilder: (context, index) {
-              final row = visible[listPage * 50 + index];
-              return AppEntityRow(
-                  title: row.reference,
-                  subtitle:
-                      '${row.customerNameSnapshot ?? 'Walk-in customer'} · ${row.validUntil == null ? 'No expiry' : 'Valid until ${MaterialLocalizations.of(context).formatMediumDate(row.validUntil!)}'}\n${quoteItemCounts[row.id] ?? 0} items · ${formatPeso(quoteTotals[row.id] ?? 0)} · ${row.status != 'open' ? statusOf(row) : (quoteUnlinkedCounts[row.id] ?? 0) > 0 ? 'Next: Link ${quoteUnlinkedCounts[row.id]} custom item(s) to Inventory' : (quoteNeedsOrderCounts[row.id] ?? 0) > 0 ? 'Next: Order ${quoteNeedsOrderCounts[row.id]} item(s)' : (quoteOrderedCounts[row.id] ?? 0) > 0 ? 'Next: Await PO delivery' : 'Ready for checkout'}',
-                  status: AppSemanticStatusBadge(
-                      label: statusOf(row)[0].toUpperCase() +
-                          statusOf(row).substring(1)),
-                  onTap: () => showQuote(row),
-                );
-            },
-          )),
-        ])))))) ,
-        if (editor != null) ...[
-          const ModalBarrier(dismissible: false, color: Colors.black54),
-          Center(
-              child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: 1200,
-                maxHeight: MediaQuery.sizeOf(context).height * .88,
-              ),
-              child: editor!,
-            ),
-          )),
-        ],
-      ]);
+        )),
+      ],
+    ]);
   }
 
   Widget _metric(BuildContext context, String label, int value) =>
-      AppMetricTile(label: label, value: '$value', width: 175);
+      AppMetricTile(label: label, value: '$value');
 }

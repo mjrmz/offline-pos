@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import '../../core/models/active_user.dart';
 import '../../core/models/quantity.dart';
 import '../../core/services/sales_service.dart';
 import '../../data/daos/management_report_repository.dart';
+import '../../data/daos/promotion_analytics_repository.dart';
 import '../../data/daos/inventory_health_repository.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/utils/safe_message.dart';
@@ -21,6 +23,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   late ReportPeriod period = ReportPeriod.named('This month', DateTime.now());
   Future<ManagementReport>? report;
   Future<InventoryHealthSnapshot>? inventoryHealth;
+  Future<PromotionDiscountSummary>? promotionSummary;
   int tab = 0;
 
   @override
@@ -40,6 +43,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ManagementReportRepository(widget.sales.repository.db).load(period);
         inventoryHealth =
             InventoryHealthRepository(widget.sales.repository.db).load();
+        final user = widget.sales.auth.current;
+        promotionSummary =
+            user != null && user.can(PosPermission.viewPromotions)
+                ? PromotionAnalyticsRepository(widget.sales.repository.db)
+                    .discountSummary(user,
+                        PromotionPeriod(period.start, period.end, period.label))
+                : null;
       });
 
   Future<void> selectPeriod(String value) async {
@@ -64,7 +74,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-          body: ListView(padding: const EdgeInsets.all(20), children: [
+          body: AppWorkspacePadding(
+              child: ListView(padding: EdgeInsets.zero, children: [
         const AppPageHeader(
           title: 'Reports',
           subtitle: 'Business performance and operational insights.',
@@ -134,7 +145,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 _ => inventory(d),
               };
             }),
-      ]));
+      ])));
 
   Widget heading(String title) => Padding(
       padding: const EdgeInsets.only(top: 20, bottom: 8),
@@ -405,6 +416,34 @@ class _ReportsScreenState extends State<ReportsScreen> {
           ('Transactions', '${d.transactions}'),
           ('Average sale', formatPeso(d.averageSaleCents)),
         ]),
+        if (promotionSummary != null) ...[
+          heading('DISCOUNTS'),
+          FutureBuilder<PromotionDiscountSummary>(
+              future: promotionSummary,
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Text(safeMessage(snapshot.error!));
+                }
+                if (!snapshot.hasData) return const LinearProgressIndicator();
+                final summary = snapshot.data!;
+                return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      metrics([
+                        (
+                          'Automatic promotions',
+                          formatPeso(summary.promotionCents)
+                        ),
+                        ('Manual discounts', formatPeso(summary.manualCents)),
+                        ('Total discounts', formatPeso(summary.totalCents)),
+                        ('Sales with promotions', '${summary.promotedSales}'),
+                      ]),
+                      if (summary.topPromotion != null)
+                        Text(
+                            'Top promotion by discount given: ${summary.topPromotion}'),
+                    ]);
+              }),
+        ],
         const SizedBox(height: 12),
         trend(d, salesOnly: true),
         const SizedBox(height: 12),

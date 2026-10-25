@@ -4,9 +4,13 @@ import '../../core/models/active_user.dart';
 import '../../core/models/quantity.dart';
 import '../../data/database.dart';
 import '../../data/daos/purchase_order_repository.dart';
+import '../../data/daos/purchase_return_repository.dart';
+import '../inventory/purchase_returns_screen.dart';
 import '../../data/daos/stock_receiving_repository.dart';
 import '../../data/daos/supplier_analysis_repository.dart';
 import '../../data/daos/supplier_procurement_repository.dart';
+import '../../data/daos/supplier_payables_repository.dart';
+import 'supplier_statement_dialog.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/utils/safe_message.dart';
 import '../../shared/widgets/app_workspace.dart';
@@ -244,6 +248,8 @@ class _SupplierProfileDrawerState extends State<SupplierProfileDrawer> {
                 'Products',
                 'Purchase Orders',
                 'Receiving',
+                'Purchase Returns',
+                'Payables',
                 'Performance'
               ],
               selectedIndex: tab,
@@ -275,7 +281,7 @@ class _SupplierProfileDrawerState extends State<SupplierProfileDrawer> {
                                         if (tab == 0 ||
                                             tab == 1 ||
                                             tab == 2 ||
-                                            tab == 5)
+                                            tab == 7)
                                           periodPicker(),
                                         const SizedBox(height: 10),
                                         Expanded(
@@ -290,10 +296,270 @@ class _SupplierProfileDrawerState extends State<SupplierProfileDrawer> {
                                                       : products(),
                                                   3 => orders(),
                                                   4 => receivings(),
+                                                  5 => purchaseReturns(),
+                                                  6 => payables(),
                                                   _ => performance(),
                                                 })),
                                       ]))),
       ])));
+
+  Future<void> recordSupplierPayment() async {
+    final repo = SupplierPayablesRepository(widget.repository.db);
+    final amount = TextEditingController();
+    final notes = TextEditingController();
+    String method = 'cash';
+    DateTime paidAt = DateTime.now();
+    String? receivingId;
+    List<SupplierAllocation>? preview;
+    String? error;
+    final choices = await repo.payables(widget.supplier.id, openOnly: true);
+    if (!mounted) return;
+    final posted = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+            builder: (context, update) => AlertDialog(
+                  title: const Text('Record supplier payment'),
+                  content: SizedBox(
+                      width: 470,
+                      child: SingleChildScrollView(
+                          child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        TextField(
+                            controller: amount,
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            decoration: const InputDecoration(labelText: 'Amount'),
+                            onChanged: (_) => update(() => preview = null)),
+                        DropdownButtonFormField<String>(
+                            initialValue: method,
+                            decoration: const InputDecoration(labelText: 'Payment method'),
+                            items: const [
+                              DropdownMenuItem(value: 'cash', child: Text('Cash')),
+                              DropdownMenuItem(value: 'gcash', child: Text('GCash')),
+                              DropdownMenuItem(value: 'other', child: Text('Other')),
+                              DropdownMenuItem(value: 'card', child: Text('Card')),
+                            ],
+                            onChanged: (value) => update(() { method = value!; preview = null; })),
+                        DropdownButtonFormField<String?>(
+                            initialValue: receivingId,
+                            decoration: const InputDecoration(labelText: 'Allocation'),
+                            items: [
+                              const DropdownMenuItem<String?>(value: null, child: Text('Automatic · oldest first')),
+                              for (final row in choices)
+                                DropdownMenuItem<String?>(value: row.receivingId,
+                                    child: Text(row.reference)),
+                            ],
+                            onChanged: (value) => update(() { receivingId = value; preview = null; })),
+                        TextField(controller: notes,
+                            decoration: const InputDecoration(labelText: 'Notes (optional)')),
+                        ListTile(
+                            title: const Text('Payment date'),
+                            subtitle: Text(date(paidAt)),
+                            trailing: const Icon(Icons.calendar_today_outlined),
+                            onTap: () async {
+                              final picked = await showDatePicker(
+                                  context: dialogContext,
+                                  initialDate: paidAt,
+                                  firstDate: DateTime(2000),
+                                  lastDate: DateTime.now());
+                              if (picked != null) {
+                                update(() => paidAt = DateTime(
+                                    picked.year, picked.month, picked.day,
+                                    23, 59, 59));
+                              }
+                            }),
+                        if (error != null) Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error))),
+                        if (preview != null) ...[
+                          const SizedBox(height: 12),
+                          const Align(alignment: Alignment.centerLeft,
+                              child: Text('Allocation preview')),
+                          for (final part in preview!)
+                            ListTile(dense: true, title: Text(part.payable.reference),
+                                trailing: Text(formatPeso(part.cents))),
+                          const Text('Remaining payment: ₱0.00'),
+                        ],
+                      ]))),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+                        child: const Text('Cancel')),
+                    FilledButton(
+                        onPressed: () async {
+                          final cents = tryParsePeso(amount.text);
+                          if (cents == null || cents <= 0) {
+                            update(() => error = 'Enter a positive amount.');
+                            return;
+                          }
+                          try {
+                            if (preview == null) {
+                              final next = await repo.preview(widget.supplier.id, cents,
+                                  receivingId: receivingId);
+                              update(() { preview = next; error = null; });
+                            } else {
+                              await repo.record(widget.user!, widget.supplier.id,
+                                  cents, method, paidAt,
+                                  receivingId: receivingId, notes: notes.text);
+                              if (dialogContext.mounted) Navigator.pop(dialogContext, true);
+                            }
+                          } catch (e) {
+                            update(() { error = safeMessage(e); preview = null; });
+                          }
+                        },
+                        child: Text(preview == null ? 'Preview' : 'Confirm payment')),
+                  ],
+                )));
+    amount.dispose();
+    notes.dispose();
+    if (posted == true && mounted) setState(() {});
+  }
+
+  Widget payables() => FutureBuilder(
+      future: Future.wait<dynamic>([
+        SupplierPayablesRepository(widget.repository.db)
+            .payables(widget.supplier.id, page: page),
+        SupplierPayablesRepository(widget.repository.db)
+            .outstanding(widget.supplier.id),
+        SupplierPayablesRepository(widget.repository.db)
+            .legacyCount(widget.supplier.id),
+        SupplierPayablesRepository(widget.repository.db)
+            .payments(widget.supplier.id),
+        SupplierPayablesRepository(widget.repository.db)
+            .ledger(widget.supplier.id),
+        SupplierPayablesRepository(widget.repository.db)
+            .metrics(widget.supplier.id),
+        SupplierPayablesRepository(widget.repository.db)
+            .aging(widget.supplier.id),
+      ]),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return queryError(snapshot.error!);
+        if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+        final rows = snapshot.data![0] as List<SupplierPayable>;
+        final total = snapshot.data![1] as int;
+        final legacy = snapshot.data![2] as int;
+        final payments = snapshot.data![3] as List<SupplierPayment>;
+        final ledger = snapshot.data![4] as List<SupplierLedgerEntry>;
+        final totals = snapshot.data![5] as SupplierPayableMetrics;
+        final aging = snapshot.data![6] as SupplierAgingSummary;
+        return ListView(children: [
+          Row(children: [
+            Expanded(child: metrics([
+              ('Outstanding balance', formatPeso(total)),
+              ('Open payables', '${totals.openCount}'),
+              ('Payments this month', formatPeso(totals.paymentsThisMonthCents)),
+              ('Supplier credits', formatPeso(totals.creditsCents)),
+            ])),
+            if (widget.user?.can(PosPermission.manageExpenseFunds) == true)
+              Column(children: [
+                FilledButton.icon(onPressed: total > 0 ? recordSupplierPayment : null,
+                    icon: const Icon(Icons.payments_outlined),
+                    label: const Text('Record payment')),
+                TextButton.icon(onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) => SupplierStatementDialog(
+                        supplier: currentSupplier,
+                        repository: SupplierPayablesRepository(widget.repository.db),
+                        user: widget.user!)),
+                    icon: const Icon(Icons.description_outlined),
+                    label: const Text('Supplier Statement')),
+              ]),
+          ]),
+          heading('Aging'),
+          const Text('Aging is based on finalized Receiving date.'),
+          metrics([
+            ('Current', formatPeso(aging.currentCents)),
+            ('1–30 days', formatPeso(aging.days1To30Cents)),
+            ('31–60 days', formatPeso(aging.days31To60Cents)),
+            ('61–90 days', formatPeso(aging.days61To90Cents)),
+            ('90+ days', formatPeso(aging.daysOver90Cents)),
+          ]),
+          if (legacy > 0) Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text('$legacy historical Receiving records have unknown settlement and are excluded from the outstanding balance.')),
+          heading('Receiving payables'),
+          for (final row in rows)
+            Card(child: ListTile(
+              title: Text('${row.reference} · ${row.status}'),
+              subtitle: Text('Supplier invoice: ${row.invoice ?? 'None'} · '
+                  'Finalized ${date(row.finalizedDate)} · '
+                  'Age ${row.ageDays(DateTime.now())} days\n'
+                  'Original ${formatPeso(row.originalCents)} · Paid ${formatPeso(row.paidCents)} · '
+                  'Credits ${formatPeso(row.creditCents)}'
+                  '${row.unappliedCreditCents > 0 ? ' · Unapplied credit ${formatPeso(row.unappliedCreditCents)}' : ''}'),
+              trailing: Text(formatPeso(row.remainingCents)),
+            )),
+          if (rows.isEmpty) const Text('No tracked Receiving payables.'),
+          Row(children: [
+            TextButton(onPressed: page > 0 ? () => setState(() => page--) : null,
+                child: const Text('Previous')),
+            TextButton(onPressed: rows.length == 50 ? () => setState(() => page++) : null,
+                child: const Text('Next')),
+          ]),
+          heading('Payments'),
+          for (final payment in payments)
+            ListTile(title: Text(SupplierPayablesRepository.number(payment)),
+                subtitle: Text('${payment.paymentMethod.toUpperCase()} · ${date(payment.paidAt)}'),
+                trailing: Text(formatPeso(payment.amountCents))),
+          heading('Payable ledger'),
+          for (final entry in ledger)
+            ListTile(
+                title: Text('${entry.reference} · ${entry.type}'),
+                subtitle: Text('${date(entry.date)} · Purchase ${formatPeso(entry.purchaseCents)} · '
+                    'Payment / credit ${formatPeso(entry.settlementCents)}'),
+                trailing: Text(formatPeso(entry.balanceCents))),
+        ]);
+      });
+
+  Widget purchaseReturns() => FutureBuilder(
+      future: PurchaseReturnRepository(widget.repository.db)
+          .page(page: page, supplierId: widget.supplier.id),
+      builder: (context, snapshot) {
+        final result = snapshot.data;
+        if (snapshot.hasError) return queryError(snapshot.error!);
+        if (result == null) return const Center(child: CircularProgressIndicator());
+        return Column(children: [
+          if (widget.user?.can(PosPermission.stockReceiving) == true)
+            Align(alignment: Alignment.centerRight,
+              child: FilledButton(onPressed: () async {
+                await Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => Scaffold(
+                  appBar: AppBar(title: const Text('Purchase Returns')),
+                  body: PurchaseReturnsScreen(
+                    repository: PurchaseReturnRepository(widget.repository.db),
+                    user: widget.user!, initialSupplierId: widget.supplier.id))));
+                if (mounted) setState(() {});
+              },
+                child: const Text('New Purchase Return'))),
+          Expanded(child: result.items.isEmpty
+            ? const Center(child: Text('No purchase returns for this supplier'))
+            : FutureBuilder(future: PurchaseReturnRepository(widget.repository.db)
+                .summaries(result.items.map((r) => r.id)),
+                builder: (context, totals) => ListView(children: [for (final row in result.items)
+                  ListTile(title: Text(PurchaseReturnRepository.number(row)),
+                    subtitle: Text('${date(row.returnDate)} · ${totals.data?[row.id]?.items ?? 0} items · ${formatPeso(totals.data?[row.id]?.valueCents ?? 0)} · ${PurchaseReturnResolution.values.byName(row.resolution).label}'),
+                      trailing: Text(row.status),
+                      onTap: widget.user?.can(PosPermission.stockReceiving) == true
+                          ? () async {
+                              await Navigator.of(context).push(MaterialPageRoute<void>(
+                                  builder: (_) => Scaffold(
+                                        appBar: AppBar(title: const Text('Purchase Returns')),
+                                        body: PurchaseReturnsScreen(
+                                            repository: PurchaseReturnRepository(
+                                                widget.repository.db),
+                                            user: widget.user!,
+                                            initialSupplierId: widget.supplier.id,
+                                            initialReturnId: row.id),
+                                      )));
+                              if (mounted) setState(() {});
+                            }
+                          : null)]))),
+          Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            Text('${result.totalCount} returns'),
+            IconButton(onPressed: page > 0 ? () => setState(() => page--) : null,
+              icon: const Icon(Icons.chevron_left)),
+            IconButton(onPressed: (page + 1) * 50 < result.totalCount
+              ? () => setState(() => page++) : null, icon: const Icon(Icons.chevron_right)),
+          ])
+        ]);
+      });
 
   Future<
       ({
@@ -969,6 +1235,34 @@ class _SupplierProfileDrawerState extends State<SupplierProfileDrawer> {
                 trailing: Text(formatPeso(item.actualCents))),
           heading('Cost summary'),
           Text('Actual value: ${formatPeso(actual)}'),
+          FutureBuilder(
+              future: Future.wait<dynamic>([
+                SupplierPayablesRepository(widget.repository.db).forReceiving(receipt),
+                SupplierPayablesRepository(widget.repository.db).paymentsForReceiving(receipt.id),
+              ]),
+              builder: (context, payableSnapshot) {
+                if (!payableSnapshot.hasData) return const SizedBox.shrink();
+                final payable = payableSnapshot.data![0] as SupplierPayable?;
+                if (payable == null) {
+                  return const ListTile(title: Text('Payable'),
+                      subtitle: Text('Legacy settlement unknown'));
+                }
+                final history = payableSnapshot.data![1] as List<(SupplierPayment, int)>;
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  heading('Payable'),
+                  Text('Original ${formatPeso(payable.originalCents)} · '
+                      'Paid ${formatPeso(payable.paidCents)} · '
+                      'Supplier credits ${formatPeso(payable.creditCents)} · '
+                      'Remaining ${formatPeso(payable.remainingCents)}'),
+                  if (payable.unappliedCreditCents > 0)
+                    Text('Unapplied supplier credit: ${formatPeso(payable.unappliedCreditCents)}'),
+                  if (history.isNotEmpty) heading('Payment history'),
+                  for (final (payment, cents) in history)
+                    ListTile(title: Text(SupplierPayablesRepository.number(payment)),
+                        subtitle: Text('${payment.paymentMethod.toUpperCase()} · ${date(payment.paidAt)}'),
+                        trailing: Text(formatPeso(cents))),
+                ]);
+              }),
           Text(expected == 0
               ? 'Expected comparison unavailable'
               : 'Linked PO expected: ${formatPeso(expected)} · Actual: ${formatPeso(comparable)} · Variance: ${formatPeso(comparable - expected)}'),

@@ -7,6 +7,7 @@ import '../database.dart';
 import 'auth_repository.dart';
 import 'business_feature_repository.dart';
 import 'pos_repository.dart';
+import 'paged_result.dart';
 
 class QuoteLineRequest {
   final String? productId;
@@ -35,9 +36,196 @@ class QuotationRepository {
 
   Future<List<Quotation>> history() => (db.select(db.quotations)
         ..orderBy([
-          (q) => OrderingTerm(expression: q.createdAt, mode: OrderingMode.desc)
+          (q) => OrderingTerm(expression: q.createdAt, mode: OrderingMode.desc),
+          (q) => OrderingTerm(expression: q.id, mode: OrderingMode.desc),
         ]))
       .get();
+
+  Future<Quotation?> byReference(String reference) =>
+      (db.select(db.quotations)
+            ..where((quote) => quote.reference.equals(reference)))
+          .getSingleOrNull();
+
+  // Readiness uses the same physical stock, active layaway reservation, RMA
+  // serial reservation and made-to-order exclusion as the quotation workspace.
+  static const _pageSource = '''
+    WITH layaway_reserved AS (
+      SELECT li.product_id, SUM(li.quantity_milli) AS quantity
+      FROM layaway_items li JOIN layaways l ON l.id = li.layaway_id
+      WHERE l.status = 'active' GROUP BY li.product_id
+    ), rma_reserved AS (
+      SELECT product_id, COUNT(*) * 1000 AS quantity
+      FROM serial_units WHERE status = 'rma_reserved' GROUP BY product_id
+    ), order_reserved AS (
+      SELECT product_id, SUM(quantity_milli) AS quantity
+      FROM stock_reservations WHERE status = 'active'
+      GROUP BY product_id
+    ), stock AS (
+      SELECT p.id, COALESCE(i.quantity_milli, 0)
+        - COALESCE(l.quantity, 0) - COALESCE(r.quantity, 0)
+        - COALESCE(o.quantity, 0) AS available
+      FROM products p
+      LEFT JOIN inventory i ON i.product_id = p.id
+      LEFT JOIN layaway_reserved l ON l.product_id = p.id
+      LEFT JOIN rma_reserved r ON r.product_id = p.id
+      LEFT JOIN order_reserved o ON o.product_id = p.id
+    ), flags AS (
+      SELECT q.id, q.reference, q.customer_name_snapshot, q.created_at,
+        q.valid_until, q.status,
+        (SELECT COUNT(*) FROM quotation_items qi
+          WHERE qi.quotation_id = q.id) AS item_count,
+        (SELECT COUNT(*) FROM quotation_items qi
+          WHERE qi.quotation_id = q.id AND qi.product_id IS NULL) AS unlinked_count,
+        (SELECT COUNT(*) FROM quotation_items qi
+          LEFT JOIN stock st ON st.id = qi.product_id
+          WHERE qi.quotation_id = q.id AND qi.product_id IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM product_business_configurations config
+              WHERE config.product_id = qi.product_id
+                AND config.feature_id = 'madeToOrderTracking'
+                AND json_extract(config.configuration_json, '\$.enabled') = 1
+            )
+            AND COALESCE(st.available, 0) < qi.quantity_milli
+        ) AS awaiting_count
+      FROM quotations q
+    )
+  ''';
+
+  Future<PagedResult<Quotation>> page({
+    int page = 0,
+    String search = '',
+    String status = 'all',
+    DateTime? now,
+  }) async {
+    if (page < 0) throw ArgumentError.value(page, 'page');
+    final conditions = <String>[];
+    final variables = <Variable>[];
+    final term = search.trim().toLowerCase();
+    if (term.isNotEmpty) {
+      conditions.add('''(
+        instr(lower(f.reference), ?) > 0
+        OR instr(lower(COALESCE(f.customer_name_snapshot, 'Walk-in')), ?) > 0
+        OR EXISTS (SELECT 1 FROM quotation_items qi
+          WHERE qi.quotation_id = f.id
+            AND instr(lower(qi.product_name_snapshot), ?) > 0)
+      )''');
+      variables.addAll(List.generate(3, (_) => Variable.withString(term)));
+    }
+    final instant = (now ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
+    switch (status) {
+      case 'all':
+        break;
+      case 'open':
+        conditions.add("f.status = 'open' AND (f.valid_until IS NULL OR f.valid_until >= ?)");
+        variables.add(Variable.withInt(instant));
+        break;
+      case 'expired':
+        conditions.add("f.status = 'open' AND f.valid_until < ?");
+        variables.add(Variable.withInt(instant));
+        break;
+      case 'awaiting stock':
+        conditions.add("f.status = 'open' AND f.awaiting_count > 0");
+        break;
+      case 'ready':
+        conditions.add("f.status = 'open' AND f.item_count > 0 AND f.unlinked_count = 0 AND f.awaiting_count = 0");
+        break;
+      case 'converted':
+      case 'cancelled':
+        conditions.add('f.status = ?');
+        variables.add(Variable.withString(status));
+        break;
+      default:
+        throw ArgumentError.value(status, 'status');
+    }
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
+    return db.transaction(() async {
+      final total = (await db.customSelect(
+        '$_pageSource SELECT COUNT(*) AS total FROM flags f $where',
+        variables: variables,
+      ).getSingle()).read<int>('total');
+      final ids = (await db.customSelect(
+        '$_pageSource SELECT f.id FROM flags f $where '
+        'ORDER BY f.created_at DESC, f.id DESC LIMIT 50 OFFSET ?',
+        variables: [...variables, Variable.withInt(page * 50)],
+      ).get()).map((row) => row.read<String>('id')).toList();
+      if (ids.isEmpty) {
+        return PagedResult(items: <Quotation>[], totalCount: total, page: page);
+      }
+      final quotes = await (db.select(db.quotations)
+            ..where((q) => q.id.isIn(ids)))
+          .get();
+      final byId = {for (final quote in quotes) quote.id: quote};
+      return PagedResult(
+          items: [for (final id in ids) byId[id]!], totalCount: total, page: page);
+    });
+  }
+
+  Future<Map<String, int>> overview({DateTime? now}) async {
+    final instant = (now ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
+    final result = await db.customSelect('''
+      $_pageSource
+      SELECT
+        SUM(CASE WHEN f.status = 'open' AND
+          (f.valid_until IS NULL OR f.valid_until >= ?) THEN 1 ELSE 0 END) AS open_count,
+        SUM(CASE WHEN f.status = 'open' AND f.valid_until < ? THEN 1 ELSE 0 END) AS expired_count,
+        SUM(CASE WHEN f.status = 'open' AND f.awaiting_count > 0 THEN 1 ELSE 0 END) AS awaiting_count,
+        SUM(CASE WHEN f.status = 'converted' THEN 1 ELSE 0 END) AS converted_count,
+        SUM(CASE WHEN f.status = 'open' AND f.item_count > 0 AND
+          f.unlinked_count = 0 AND f.awaiting_count = 0 THEN 1 ELSE 0 END) AS ready_count
+      FROM flags f
+    ''', variables: [Variable.withInt(instant), Variable.withInt(instant)])
+        .getSingle();
+    return {
+      'open': result.read<int?>('open_count') ?? 0,
+      'expired': result.read<int?>('expired_count') ?? 0,
+      'awaiting stock': result.read<int?>('awaiting_count') ?? 0,
+      'converted': result.read<int?>('converted_count') ?? 0,
+      'ready': result.read<int?>('ready_count') ?? 0,
+    };
+  }
+
+  /// Fetches list metadata in bounded batches instead of one query per quote.
+  Future<Map<String, List<QuotationItem>>> itemsFor(
+      Iterable<String> quotationIds) async {
+    final ids = quotationIds.toList();
+    if (ids.isEmpty) return {};
+    final grouped = <String, List<QuotationItem>>{
+      for (final id in ids) id: [],
+    };
+    for (var start = 0; start < ids.length; start += 900) {
+      final batch = ids.skip(start).take(900).toList();
+      final items = await (db.select(db.quotationItems)
+            ..where((item) => item.quotationId.isIn(batch)))
+          .get();
+      for (final item in items) {
+        grouped[item.quotationId]?.add(item);
+      }
+    }
+    return grouped;
+  }
+
+  Future<Map<String, String>> receiptNumbersFor(
+      Iterable<Quotation> quotations) async {
+    final saleIds = quotations
+        .map((quote) => quote.convertedSaleId)
+        .whereType<String>()
+        .toSet();
+    if (saleIds.isEmpty) return {};
+    final receiptNumbers = <String, String>{};
+    final ids = saleIds.toList();
+    for (var start = 0; start < ids.length; start += 900) {
+      final batch = ids.skip(start).take(900).toList();
+      final sales = await (db.select(db.sales)
+            ..where((sale) => sale.id.isIn(batch)))
+          .get();
+      for (final sale in sales) {
+        if (sale.receiptNumber != null) {
+          receiptNumbers[sale.id] = sale.receiptNumber!;
+        }
+      }
+    }
+    return receiptNumbers;
+  }
 
   Future<List<QuotationItem>> items(String id) =>
       (db.select(db.quotationItems)..where((i) => i.quotationId.equals(id)))

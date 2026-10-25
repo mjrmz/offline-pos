@@ -3,6 +3,31 @@ import '../../core/models/active_user.dart';
 import '../database.dart';
 import 'auth_repository.dart';
 import 'cash_session_repository.dart';
+import 'paged_result.dart';
+
+class CashRecord {
+  final BusinessCashMovement? movement;
+  final PettyCashEntry? legacy;
+  const CashRecord.movement(this.movement) : legacy = null;
+  const CashRecord.legacy(this.legacy) : movement = null;
+}
+
+class CashExpenseOverview {
+  final int month, today, petty, drawer;
+  final Map<String, int> categoryTotals;
+  final BusinessCashMovement? lastPettyCashAdded;
+  final Map<String, BusinessCashMovement?> fundOpenings;
+  final Map<String, bool> fundActivity;
+  const CashExpenseOverview(
+      this.month,
+      this.today,
+      this.petty,
+      this.drawer,
+      this.categoryTotals,
+      this.lastPettyCashAdded,
+      this.fundOpenings,
+      this.fundActivity);
+}
 
 class CashActivityRepository {
   final AppDatabase db;
@@ -76,13 +101,297 @@ class CashActivityRepository {
             .audit(user.id, 'cash_category.save', id ?? clean);
       });
 
-  Future<List<BusinessCashMovement>> history() =>
-      (db.select(db.businessCashMovements)
+  Future<List<BusinessCashMovement>> history({int? limit}) => (db
+          .select(db.businessCashMovements)
+        ..orderBy([
+          (m) => OrderingTerm(expression: m.createdAt, mode: OrderingMode.desc),
+          (m) => OrderingTerm(expression: m.id, mode: OrderingMode.desc)
+        ])
+        ..limit(limit ?? 9223372036854775807))
+      .get();
+
+  Future<PagedResult<BusinessCashMovement>> page({
+    int page = 0,
+    bool expensesOnly = false,
+    String search = '',
+    String fund = 'all',
+    String type = 'all',
+    String? categoryId,
+    String? userId,
+    DateTime? from,
+    DateTime? until,
+  }) async {
+    final conditions = <String>[];
+    final variables = <Variable<Object>>[];
+    if (expensesOnly) {
+      conditions.add("type = 'expense'");
+    } else if (type != 'all') {
+      conditions.add('type = ?');
+      variables.add(Variable.withString(type));
+    }
+    if (fund != 'all') {
+      conditions.add('(source = ? OR destination = ?)');
+      variables.addAll([Variable.withString(fund), Variable.withString(fund)]);
+    }
+    if (categoryId != null) {
+      conditions.add('category_id = ?');
+      variables.add(Variable.withString(categoryId));
+    }
+    if (userId != null) {
+      conditions.add('recorded_by_user_id = ?');
+      variables.add(Variable.withString(userId));
+    }
+    if (from != null) {
+      conditions.add('created_at >= ?');
+      variables.add(Variable.withInt(from.millisecondsSinceEpoch ~/ 1000));
+    }
+    if (until != null) {
+      conditions.add('created_at < ?');
+      variables.add(Variable.withInt(until.millisecondsSinceEpoch ~/ 1000));
+    }
+    final term = search.trim().toLowerCase();
+    if (term.isNotEmpty) {
+      conditions.add('''(instr(lower(COALESCE(category_name, '')), ?) > 0 OR
+        instr(lower(COALESCE(payee, '')), ?) > 0 OR
+        instr(lower(COALESCE(note, '')), ?) > 0 OR
+        instr(lower(COALESCE(reference, '')), ?) > 0)''');
+      for (var i = 0; i < 4; i++) {
+        variables.add(Variable.withString(term));
+      }
+    }
+    final where = conditions.isEmpty ? '' : 'WHERE ${conditions.join(' AND ')}';
+    final count = await db
+        .customSelect(
+            'SELECT COUNT(*) AS total FROM business_cash_movements $where',
+            variables: variables)
+        .getSingle();
+    final ids = await db.customSelect('''SELECT id FROM business_cash_movements
+      $where ORDER BY created_at DESC, id DESC LIMIT 50 OFFSET ?''',
+        variables: [...variables, Variable.withInt(page * 50)]).get();
+    final ordered = ids.map((row) => row.read<String>('id')).toList();
+    final rows = ordered.isEmpty
+        ? <BusinessCashMovement>[]
+        : await (db.select(db.businessCashMovements)
+              ..where((row) => row.id.isIn(ordered)))
+            .get();
+    final byId = {for (final row in rows) row.id: row};
+    return PagedResult(
+        items: [for (final id in ordered) byId[id]!],
+        totalCount: count.read<int>('total'),
+        page: page);
+  }
+
+  Future<PagedResult<CashRecord>> recordsPage({
+    int page = 0,
+    bool expensesOnly = false,
+    String search = '',
+    String fund = 'all',
+    String type = 'all',
+    String? categoryId,
+    String? categoryName,
+    String? userId,
+    DateTime? from,
+    DateTime? until,
+  }) async {
+    final movement = <String>[];
+    final movementVars = <Variable<Object>>[];
+    final legacy = <String>[];
+    final legacyVars = <Variable<Object>>[];
+    if (expensesOnly) {
+      movement.add("type = 'expense'");
+    } else if (type != 'all') {
+      movement.add('type = ?');
+      movementVars.add(Variable.withString(type));
+    }
+    if (fund != 'all') {
+      movement.add('(source = ? OR destination = ?)');
+      movementVars
+          .addAll([Variable.withString(fund), Variable.withString(fund)]);
+      if (fund != 'drawer') legacy.add('0');
+    }
+    if (type != 'all' && type != 'expense' && !expensesOnly) legacy.add('0');
+    if (categoryId != null) {
+      movement.add('category_id = ?');
+      movementVars.add(Variable.withString(categoryId));
+      if (categoryName == null) {
+        legacy.add('0');
+      } else {
+        legacy.add('category = ?');
+        legacyVars.add(Variable.withString(categoryName));
+      }
+    }
+    if (userId != null) {
+      movement.add('recorded_by_user_id = ?');
+      movementVars.add(Variable.withString(userId));
+      legacy.add('user_id = ?');
+      legacyVars.add(Variable.withString(userId));
+    }
+    if (from != null) {
+      movement.add('created_at >= ?');
+      movementVars.add(Variable.withInt(from.millisecondsSinceEpoch ~/ 1000));
+      legacy.add('created_at >= ?');
+      legacyVars.add(Variable.withInt(from.millisecondsSinceEpoch ~/ 1000));
+    }
+    if (until != null) {
+      movement.add('created_at < ?');
+      movementVars.add(Variable.withInt(until.millisecondsSinceEpoch ~/ 1000));
+      legacy.add('created_at < ?');
+      legacyVars.add(Variable.withInt(until.millisecondsSinceEpoch ~/ 1000));
+    }
+    final term = search.trim().toLowerCase();
+    if (term.isNotEmpty) {
+      movement.add('''(instr(lower(COALESCE(category_name, '')), ?) > 0 OR
+        instr(lower(COALESCE(payee, '')), ?) > 0 OR
+        instr(lower(COALESCE(note, '')), ?) > 0 OR
+        instr(lower(COALESCE(reference, '')), ?) > 0)''');
+      for (var i = 0; i < 4; i++) {
+        movementVars.add(Variable.withString(term));
+      }
+      legacy.add('''(instr(lower(category), ?) > 0 OR
+        instr(lower(COALESCE(note, '')), ?) > 0)''');
+      legacyVars.addAll([Variable.withString(term), Variable.withString(term)]);
+    }
+    final movementWhere =
+        movement.isEmpty ? '' : 'WHERE ${movement.join(' AND ')}';
+    final legacyWhere = legacy.isEmpty ? '' : 'WHERE ${legacy.join(' AND ')}';
+    final source =
+        '''SELECT 0 AS kind, id, created_at FROM business_cash_movements $movementWhere
+      UNION ALL SELECT 1 AS kind, id, created_at FROM petty_cash_entries $legacyWhere''';
+    final variables = [...movementVars, ...legacyVars];
+    final count = await db
+        .customSelect('SELECT COUNT(*) AS total FROM ($source)',
+            variables: variables)
+        .getSingle();
+    final idRows = await db.customSelect('''SELECT kind, id FROM ($source)
+      ORDER BY created_at DESC, kind ASC, id DESC LIMIT 50 OFFSET ?''',
+        variables: [...variables, Variable.withInt(page * 50)]).get();
+    final movementIds = <String>[];
+    final legacyIds = <String>[];
+    for (final row in idRows) {
+      (row.read<int>('kind') == 0 ? movementIds : legacyIds)
+          .add(row.read<String>('id'));
+    }
+    final movementRows = movementIds.isEmpty
+        ? <BusinessCashMovement>[]
+        : await (db.select(db.businessCashMovements)
+              ..where((row) => row.id.isIn(movementIds)))
+            .get();
+    final legacyRows = legacyIds.isEmpty
+        ? <PettyCashEntry>[]
+        : await (db.select(db.pettyCashEntries)
+              ..where((row) => row.id.isIn(legacyIds)))
+            .get();
+    final movementsById = {for (final row in movementRows) row.id: row};
+    final legacyById = {for (final row in legacyRows) row.id: row};
+    return PagedResult(items: [
+      for (final row in idRows)
+        row.read<int>('kind') == 0
+            ? CashRecord.movement(movementsById[row.read<String>('id')]!)
+            : CashRecord.legacy(legacyById[row.read<String>('id')]!)
+    ], totalCount: count.read<int>('total'), page: page);
+  }
+
+  Future<CashExpenseOverview> expenseOverview(DateTime now) async {
+    final monthStart =
+        DateTime(now.year, now.month).millisecondsSinceEpoch ~/ 1000;
+    final monthEnd =
+        DateTime(now.year, now.month + 1).millisecondsSinceEpoch ~/ 1000;
+    final todayStart =
+        DateTime(now.year, now.month, now.day).millisecondsSinceEpoch ~/ 1000;
+    final todayEnd =
+        DateTime(now.year, now.month, now.day + 1).millisecondsSinceEpoch ~/
+            1000;
+    final aggregate = await db.customSelect('''SELECT
+      COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? THEN amount_cents ELSE 0 END), 0) AS month_total,
+      COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? THEN amount_cents ELSE 0 END), 0) AS today_total,
+      COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? AND source = 'petty' THEN amount_cents ELSE 0 END), 0) AS petty_total,
+      COALESCE(SUM(CASE WHEN created_at >= ? AND created_at < ? AND source = 'drawer' THEN amount_cents ELSE 0 END), 0) AS drawer_total
+      FROM business_cash_movements WHERE type = 'expense' ''', variables: [
+      Variable.withInt(monthStart),
+      Variable.withInt(monthEnd),
+      Variable.withInt(todayStart),
+      Variable.withInt(todayEnd),
+      Variable.withInt(monthStart),
+      Variable.withInt(monthEnd),
+      Variable.withInt(monthStart),
+      Variable.withInt(monthEnd),
+    ]).getSingle();
+    final categories = await db
+        .customSelect('''SELECT COALESCE(category_name, 'Uncategorized') AS name,
+      SUM(amount_cents) AS total FROM business_cash_movements
+      WHERE type = 'expense' AND created_at >= ? AND created_at < ?
+      GROUP BY COALESCE(category_name, 'Uncategorized') ORDER BY total DESC''',
+            variables: [
+          Variable.withInt(monthStart),
+          Variable.withInt(monthEnd)
+        ]).get();
+    final latest = await (db.select(db.businessCashMovements)
+          ..where((row) =>
+              row.destination.equals('petty') &
+              row.type.equals('replenishment'))
+          ..orderBy([
+            (row) => OrderingTerm(
+                expression: row.createdAt, mode: OrderingMode.desc),
+            (row) => OrderingTerm(expression: row.id, mode: OrderingMode.desc)
+          ])
+          ..limit(1))
+        .getSingleOrNull();
+    final openings = <String, BusinessCashMovement?>{};
+    final activity = <String, bool>{};
+    for (final fund in ['petty', 'company']) {
+      openings[fund] = await (db.select(db.businessCashMovements)
+            ..where((row) =>
+                row.type.equals('opening') & row.destination.equals(fund))
             ..orderBy([
-              (m) =>
-                  OrderingTerm(expression: m.createdAt, mode: OrderingMode.desc)
-            ]))
-          .get();
+              (row) => OrderingTerm(
+                  expression: row.createdAt, mode: OrderingMode.desc)
+            ])
+            ..limit(1))
+          .getSingleOrNull();
+      final count = await db
+          .customSelect('''SELECT EXISTS(SELECT 1 FROM business_cash_movements
+        WHERE source = ? OR destination = ?) AS has_activity''', variables: [
+        Variable.withString(fund),
+        Variable.withString(fund)
+      ]).getSingle();
+      activity[fund] = count.read<int>('has_activity') != 0;
+    }
+    return CashExpenseOverview(
+        aggregate.read<int>('month_total'),
+        aggregate.read<int>('today_total'),
+        aggregate.read<int>('petty_total'),
+        aggregate.read<int>('drawer_total'),
+        {
+          for (final row in categories)
+            row.read<String>('name'): row.read<int>('total')
+        },
+        latest,
+        openings,
+        activity);
+  }
+
+  Future<bool> hasReversal(String id) async {
+    final result = await db.customSelect(
+        '''SELECT EXISTS(SELECT 1 FROM business_cash_movements
+      WHERE reversal_of_id = ?) AS found''',
+        variables: [Variable.withString(id)]).getSingle();
+    return result.read<int>('found') != 0;
+  }
+
+  Future<int> fundBalanceBefore(BusinessCashMovement row, String fund) async {
+    final result = await db.customSelect('''SELECT COALESCE(SUM(
+      CASE WHEN destination = ? THEN amount_cents ELSE 0 END -
+      CASE WHEN source = ? THEN amount_cents ELSE 0 END), 0) AS total
+      FROM business_cash_movements
+      WHERE created_at < ? OR (created_at = ? AND id < ?)''', variables: [
+      Variable.withString(fund),
+      Variable.withString(fund),
+      Variable.withInt(row.createdAt.millisecondsSinceEpoch ~/ 1000),
+      Variable.withInt(row.createdAt.millisecondsSinceEpoch ~/ 1000),
+      Variable.withString(row.id),
+    ]).getSingle();
+    return result.read<int>('total');
+  }
 
   Future<int> balance(String fund) async {
     if (fund == 'drawer') {
@@ -91,25 +400,22 @@ class CashActivityRepository {
           ? 0
           : await CashSessionRepository(db).expected(session.id);
     }
-    final rows = await history();
-    var total = 0;
-    for (final row in rows) {
-      if (row.source == fund) total -= row.amountCents;
-      if (row.destination == fund) total += row.amountCents;
-    }
-    return total;
+    final result = await db.customSelect('''SELECT COALESCE(SUM(
+      CASE WHEN destination = ? THEN amount_cents ELSE 0 END -
+      CASE WHEN source = ? THEN amount_cents ELSE 0 END), 0) AS total
+      FROM business_cash_movements''', variables: [
+      Variable.withString(fund),
+      Variable.withString(fund)
+    ]).getSingle();
+    return result.read<int>('total');
   }
 
   Future<int> reimbursementDue() async {
-    final rows = await history();
-    return rows.fold<int>(
-        0,
-        (sum, row) =>
-            sum +
-            (row.source == 'personal' && row.type == 'expense'
-                ? row.amountCents
-                : 0) -
-            (row.destination == 'personal' ? row.amountCents : 0));
+    final result = await db.customSelect('''SELECT COALESCE(SUM(
+      CASE WHEN source = 'personal' AND type = 'expense' THEN amount_cents ELSE 0 END -
+      CASE WHEN destination = 'personal' THEN amount_cents ELSE 0 END), 0) AS total
+      FROM business_cash_movements''').getSingle();
+    return result.read<int>('total');
   }
 
   Future<BusinessCashMovement> expense(

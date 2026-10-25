@@ -88,7 +88,7 @@ void main() {
         home:
             BusinessFeaturesScreen(repository: features, user: auth.current!)));
     await tester.pumpAndSettle();
-    expect(find.text('Settings → Business Features'), findsOneWidget);
+    expect(find.text('Business Features'), findsOneWidget);
     await tester.tap(find.widgetWithText(
         SwitchListTile, BusinessFeature.weightBasedPricing.displayName));
     await tester.pumpAndSettle();

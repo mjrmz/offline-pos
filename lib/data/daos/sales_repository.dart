@@ -26,12 +26,14 @@ class SaleDetail {
   final Map<String, List<String>> serialNumbersByItem;
   final List<Payment> payments;
   final List<SaleItemRefund> itemRefunds;
+  final List<SalePromotionApplication> promotionApplications;
   const SaleDetail(this.summary, this.items, this.productNames, this.reversal,
       [this.paymentAmountCents = 0,
       this.cashAmountCents = 0,
       this.serialNumbersByItem = const {},
       this.payments = const [],
-      this.itemRefunds = const []]);
+      this.itemRefunds = const [],
+      this.promotionApplications = const []]);
 }
 
 class DailyReport {
@@ -366,6 +368,11 @@ class SalesRepository {
     final itemRefunds = await (db.select(db.saleItemRefunds)
           ..where((r) => r.saleId.equals(saleId)))
         .get();
+    final promotionApplications = await (db.select(db.salePromotionApplications)
+          ..where((p) => p.saleId.equals(saleId))
+          ..orderBy([(p) => OrderingTerm.desc(p.priority),
+            (p) => OrderingTerm.asc(p.promotionReference)]))
+        .get();
     return SaleDetail(
         summary,
         items,
@@ -377,7 +384,8 @@ class SalesRepository {
             .fold<int>(0, (sum, row) => sum + row.amountCents),
         serialNumbersByItem,
         payment,
-        itemRefunds);
+        itemRefunds,
+        promotionApplications);
   }
 
   Future<void> reverse(ActiveUser actor, String saleId, String kind,
@@ -396,6 +404,10 @@ class SalesRepository {
         if (sale == null) throw StateError('Sale not found');
         if (sale.status != 'completed') {
           throw StateError('Sale already voided or refunded');
+        }
+        if (kind == 'void' && (await (db.select(db.salesOrderFulfillments)
+              ..where((f) => f.saleId.equals(saleId))).get()).isNotEmpty) {
+          throw StateError('A Sales Order fulfillment sale cannot be voided; use the normal refund workflow');
         }
         if ((await (db.select(db.saleItemRefunds)
                   ..where((r) => r.saleId.equals(saleId)))

@@ -236,6 +236,16 @@ class CustomerCreditRepository {
     return row.read<int>('balance');
   }
 
+  Future<int> totalOutstanding() async {
+    final row = await db.customSelect('''
+      SELECT COALESCE(SUM(balance), 0) AS total FROM (
+        SELECT customer_id, MAX(0, SUM(amount_cents)) AS balance
+        FROM customer_credit_entries GROUP BY customer_id
+      )
+    ''').getSingle();
+    return row.read<int>('total');
+  }
+
   Future<List<CustomerRefundObligation>> refundObligations(String customerId) =>
       (db.select(db.customerRefundObligations)
             ..where((r) => r.customerId.equals(customerId))

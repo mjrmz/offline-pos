@@ -50,6 +50,10 @@ import '../reports/operational_summary_screen.dart';
 import '../../shared/utils/money.dart';
 import '../../data/daos/global_search_repository.dart';
 import 'global_command_palette.dart';
+import 'dashboard_screen.dart';
+import 'dashboard_repository.dart';
+import '../audit/audit_explorer_screen.dart';
+import '../../data/daos/audit_explorer_repository.dart';
 
 class HomeScreen extends StatefulWidget {
   final AuthService auth;
@@ -106,6 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _shiftError;
   int _shiftRefreshRevision = 0;
   final _checkoutKey = GlobalKey<CheckoutScreenState>();
+  final _dashboardKey = GlobalKey<DashboardScreenState>();
   final _accountFocusNode = FocusNode();
 
   @override
@@ -114,7 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadBusinessName();
     PosLayoutPreference.instance.addListener(_workspacePreferenceChanged);
     PosLayoutPreference.instance.load().then((_) {
-      if (mounted && page == 0) {
+      if (mounted && page == _labelsFor(widget.auth.current!).indexOf('POS')) {
         setState(() => _posFocused = PosLayoutPreference.instance.startFocused);
       }
     });
@@ -124,14 +129,20 @@ class _HomeScreenState extends State<HomeScreen> {
             _posSidebarExpanded = prefs.getBool('sidebarExpanded') ?? false);
       }
     });
-    _shiftStatus = _loadShift();
-    _shiftChanges = _cashSessions
-        .watchCurrentFor(widget.auth.current!.id)
-        .listen((_) => _refreshShift(), onError: (Object error) {
-      if (mounted) setState(() => _shiftError = error.toString());
+    _shiftStatus = _loadShift().then((shift) {
+      if (mounted) setState(() => _lastShift = shift);
+      return shift;
     });
-    _shiftTimer =
-        Timer.periodic(const Duration(seconds: 15), (_) => _refreshShift());
+    if (widget.auth.current!.can(PosPermission.sell) ||
+        widget.auth.current!.can(PosPermission.manageCashSession)) {
+      _shiftChanges = _cashSessions
+          .watchCurrentFor(widget.auth.current!.id)
+          .listen((_) => _refreshShift(), onError: (Object error) {
+        if (mounted) setState(() => _shiftError = error.toString());
+      });
+      _shiftTimer =
+          Timer.periodic(const Duration(seconds: 15), (_) => _refreshShift());
+    }
   }
 
   @override
@@ -148,7 +159,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _togglePosFocus() {
-    if (page == 0) setState(() => _posFocused = !_posFocused);
+    if (page == _labelsFor(widget.auth.current!).indexOf('POS')) {
+      setState(() => _posFocused = !_posFocused);
+    }
   }
 
   void _setSidebarExpanded(bool expanded) {
@@ -171,6 +184,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<CashSessionSummary?> _loadShift() async {
+    if (!widget.auth.current!.can(PosPermission.sell) &&
+        !widget.auth.current!.can(PosPermission.manageCashSession)) {
+      return null;
+    }
     final userId = widget.auth.current!.id;
     final own = await _cashSessions.currentFor(userId);
     if (own != null) return own;
@@ -218,7 +235,9 @@ class _HomeScreenState extends State<HomeScreen> {
           index != page) {
         createQuotationOnOpen = false;
       }
-      final enteringPos = page != 0 && index == 0;
+      final enteringPos =
+          page != _labelsFor(widget.auth.current!).indexOf('POS') &&
+              index == _labelsFor(widget.auth.current!).indexOf('POS');
       final inventoryIndex =
           _labelsFor(widget.auth.current!).indexOf('Inventory');
       if (page == inventoryIndex && index != inventoryIndex) {
@@ -235,12 +254,19 @@ class _HomeScreenState extends State<HomeScreen> {
         purchaseLines = null;
       }
       page = index;
-      if (index != 0) _posFocused = false;
+      if (index != _labelsFor(widget.auth.current!).indexOf('POS')) {
+        _posFocused = false;
+      }
       if (enteringPos) {
         _posFocused = PosLayoutPreference.instance.startFocused;
       }
     });
     _refreshShift();
+    if (index == 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _dashboardKey.currentState?.refresh();
+      });
+    }
   }
 
   void _goLabel(String label) {
@@ -248,12 +274,47 @@ class _HomeScreenState extends State<HomeScreen> {
     if (index >= 0) _go(index);
   }
 
+  void _dashboardGo(String target) {
+    if (target == 'Low stock' || target == 'Out of stock') {
+      final user = widget.auth.current!;
+      if (user.can(PosPermission.manageCatalog)) {
+        setState(() {
+          inventoryTarget = 'Products';
+          inventoryFilter = target;
+        });
+      }
+      _goLabel('Inventory');
+      return;
+    }
+    if (target == 'Expiry Monitor') {
+      final user = widget.auth.current!;
+      if (user.can(PosPermission.manageCatalog) ||
+          user.can(PosPermission.stockCount) ||
+          user.can(PosPermission.stockReceiving)) {
+        Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => ExpiryMonitorScreen(
+                repository: InventoryHealthRepository(widget.pos.db),
+                user: user)));
+      }
+      return;
+    }
+    if (target == 'Receiving' ||
+        target == 'Purchase Orders' ||
+        target == 'Stock Counts') {
+      setState(() => inventoryTarget = target);
+      _goLabel('Inventory');
+      return;
+    }
+    _goLabel(target);
+  }
+
   Future<void> _openGlobalSearch() async {
     if (_paletteOpen || !mounted || ModalRoute.of(context)?.isCurrent != true) {
       return;
     }
     final checkout = _checkoutKey.currentState;
-    if (checkout != null && checkout.barcodeFocus.hasFocus &&
+    if (checkout != null &&
+        checkout.barcodeFocus.hasFocus &&
         checkout.barcodeController.text.isNotEmpty) {
       return;
     }
@@ -265,7 +326,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     _paletteOpen = true;
     try {
-      final selected = await showDialog<GlobalSearchResult>(context: context,
+      final selected = await showDialog<GlobalSearchResult>(
+          context: context,
           builder: (_) => GlobalCommandPalette(
               repository: GlobalSearchRepository(widget.pos.db),
               user: widget.auth.current!));
@@ -280,60 +342,90 @@ class _HomeScreenState extends State<HomeScreen> {
     switch (result.kind) {
       case GlobalSearchKind.command:
         switch (result.id) {
-          case 'New Sale': _goLabel('POS');
+          case 'New Sale':
+            _goLabel('POS');
           case 'Receive Stock':
-            setState(() { inventoryTarget = 'Receiving'; openReceiptId = null; });
+            setState(() {
+              inventoryTarget = 'Receiving';
+              openReceiptId = null;
+            });
             _goLabel('Inventory');
           case 'Create Purchase Order':
-            setState(() { inventoryTarget = 'Purchase Orders';
-              createPurchaseOrderOnOpen = true; purchaseViewOrderId = null; });
+            setState(() {
+              inventoryTarget = 'Purchase Orders';
+              createPurchaseOrderOnOpen = true;
+              purchaseViewOrderId = null;
+            });
             _goLabel('Inventory');
           case 'Create Quotation':
-            setState(() { createQuotationOnOpen = true;
-              openQuotationReference = null; });
+            setState(() {
+              createQuotationOnOpen = true;
+              openQuotationReference = null;
+            });
             _goLabel('Quotations');
-          case 'Open Inventory': _goLabel('Inventory');
-          case 'Open Customers': _goLabel('Customers & Suppliers');
-          case 'Open Reports': _goLabel('Reports');
-          case 'Open Cash Session': _goLabel('Cash session');
-          case 'Open Settings': _goLabel('Settings');
+          case 'Open Inventory':
+            _goLabel('Inventory');
+          case 'Open Customers':
+            _goLabel('Customers & Suppliers');
+          case 'Open Reports':
+            _goLabel('Reports');
+          case 'Open Cash Session':
+            _goLabel('Cash session');
+          case 'Open Settings':
+            _goLabel('Settings');
         }
       case GlobalSearchKind.product:
         if (user.can(PosPermission.manageCatalog)) {
-          setState(() { catalogProductId = result.id;
-            inventoryTarget = 'Products'; });
+          setState(() {
+            catalogProductId = result.id;
+            inventoryTarget = 'Products';
+          });
           _goLabel('Inventory');
         } else if (user.can(PosPermission.sell)) {
           _goLabel('POS');
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) _checkoutKey.currentState?.openProductLookup(result.title);
+            if (mounted) {
+              _checkoutKey.currentState?.openProductLookup(result.title);
+            }
           });
         } else if (user.can(PosPermission.stockReceiving)) {
-          setState(() { receivingProductId = result.id;
-            inventoryTarget = 'Receiving'; });
+          setState(() {
+            receivingProductId = result.id;
+            inventoryTarget = 'Receiving';
+          });
           _goLabel('Inventory');
         }
       case GlobalSearchKind.customer:
-        setState(() { openCustomerId = result.id; openSupplierId = null; });
+        setState(() {
+          openCustomerId = result.id;
+          openSupplierId = null;
+        });
         _goLabel('Customers & Suppliers');
       case GlobalSearchKind.supplier:
-        setState(() { openSupplierId = result.id; openCustomerId = null; });
+        setState(() {
+          openSupplierId = result.id;
+          openCustomerId = null;
+        });
         _goLabel('Customers & Suppliers');
       case GlobalSearchKind.sale:
         setState(() => openSaleId = result.id);
         _goLabel('Sales History');
       case GlobalSearchKind.serial:
         if (user.can(PosPermission.stockReceiving)) {
-          Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) =>
-              SerialExplorer(repository: SerialLifecycleRepository(widget.pos.db),
-                  user: user, initialSerialId: result.id,
+          Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => SerialExplorer(
+                  repository: SerialLifecycleRepository(widget.pos.db),
+                  user: user,
+                  initialSerialId: result.id,
                   canOpenRecord: (event) => canOpenSerialRecord(event, user),
-                  onOpenRecord: (event) => openSerialRecord(context, event,
-                      user, widget.auth, widget.pos))));
+                  onOpenRecord: (event) => openSerialRecord(
+                      context, event, user, widget.auth, widget.pos))));
         }
       case GlobalSearchKind.quotation:
-        setState(() { openQuotationReference = result.reference;
-          createQuotationOnOpen = false; });
+        setState(() {
+          openQuotationReference = result.reference;
+          createQuotationOnOpen = false;
+        });
         _goLabel('Quotations');
       case GlobalSearchKind.salesOrder:
         setState(() => openSalesOrderReference = result.reference);
@@ -342,11 +434,17 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() => openLayawayId = result.id);
         _goLabel('Layaway');
       case GlobalSearchKind.purchaseOrder:
-        setState(() { purchaseViewOrderId = result.id;
-          inventoryTarget = 'Purchase Orders'; createPurchaseOrderOnOpen = false; });
+        setState(() {
+          purchaseViewOrderId = result.id;
+          inventoryTarget = 'Purchase Orders';
+          createPurchaseOrderOnOpen = false;
+        });
         _goLabel('Inventory');
       case GlobalSearchKind.receiving:
-        setState(() { openReceiptId = result.id; inventoryTarget = 'Receiving'; });
+        setState(() {
+          openReceiptId = result.id;
+          inventoryTarget = 'Receiving';
+        });
         _goLabel('Inventory');
       case GlobalSearchKind.rma:
         setState(() => openRmaId = result.id);
@@ -454,6 +552,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final receipts =
         ReceiptService(sales, settings, printer, EscPosCashDrawer(transport));
     final pages = <Widget>[
+      DashboardScreen(
+          key: _dashboardKey,
+          user: user,
+          repository: DashboardRepository(widget.pos.db),
+          shift: _lastShift,
+          navigate: _dashboardGo),
       if (user.can(PosPermission.sell))
         FutureBuilder<CashSessionSummary?>(
             future: _shiftStatus,
@@ -496,6 +600,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (user.can(PosPermission.reports))
         ReportsScreen(
             sales: sales, active: page == _labelsFor(user).indexOf('Reports')),
+      if (user.can(PosPermission.manageUsers))
+        AuditExplorerScreen(repository: AuditExplorerRepository(widget.pos.db),
+            user: user, auth: widget.auth, products: widget.pos),
       if (user.can(PosPermission.manageSettings) ||
           user.can(PosPermission.manageUsers) ||
           user.can(PosPermission.managePrinter) ||
@@ -519,13 +626,19 @@ class _HomeScreenState extends State<HomeScreen> {
             pos: widget.pos,
             receipts: receipts),
       if (user.can(PosPermission.manageRma))
-        RmaScreen(key: ValueKey(('rma', openRmaId)),
-            repository: RmaRepository(widget.pos.db), user: user,
+        RmaScreen(
+            key: ValueKey(('rma', openRmaId)),
+            repository: RmaRepository(widget.pos.db),
+            user: user,
             initialCaseId: openRmaId),
       if (user.can(PosPermission.manageQuotations))
         QuotationScreen(
-            key: ValueKey(('quotations', page, openQuotationReference,
-                createQuotationOnOpen)),
+            key: ValueKey((
+              'quotations',
+              page,
+              openQuotationReference,
+              createQuotationOnOpen
+            )),
             repository: QuotationRepository(widget.pos.db, widget.pos),
             directory: DirectoryRepository(widget.pos.db),
             products: widget.pos,
@@ -618,7 +731,8 @@ class _HomeScreenState extends State<HomeScreen> {
             user: user,
             initialLayawayId: openLayawayId),
       if (user.can(PosPermission.viewPromotions))
-        PromotionsScreen(repository: PromotionRepository(widget.pos.db), user: user),
+        PromotionsScreen(
+            repository: PromotionRepository(widget.pos.db), user: user),
       if (user.can(PosPermission.stockReceiving) ||
           user.can(PosPermission.stockCount) ||
           user.can(PosPermission.manageCatalog))
@@ -689,15 +803,23 @@ class _HomeScreenState extends State<HomeScreen> {
                     ? (user.can(PosPermission.manageCatalog) ? 2 : 1)
                     : inventoryTarget == 'Receiving'
                         ? (user.can(PosPermission.manageCatalog) ? 3 : 2)
-                        : purchaseQuotationReference != null
-                ? (user.can(PosPermission.manageCatalog) ? 2 : 1)
-                : inventoryFilter != null
-                    ? 1
-                    : receivingProductId == null
-                        ? 0
-                        : user.can(PosPermission.manageCatalog)
-                            ? 3
-                            : 2),
+                        : inventoryTarget == 'Stock Counts'
+                            ? 1 +
+                                (user.can(PosPermission.manageCatalog)
+                                    ? 1
+                                    : 0) +
+                                (user.can(PosPermission.stockReceiving) ? 3 : 0)
+                            : purchaseQuotationReference != null
+                                ? (user.can(PosPermission.manageCatalog)
+                                    ? 2
+                                    : 1)
+                                : inventoryFilter != null
+                                    ? 1
+                                    : receivingProductId == null
+                                        ? 0
+                                        : user.can(PosPermission.manageCatalog)
+                                            ? 3
+                                            : 2),
       if (user.can(PosPermission.reports))
         OperationalSummaryScreen(
             repository: OperationalSummaryRepository(widget.pos.db),
@@ -729,7 +851,7 @@ class _HomeScreenState extends State<HomeScreen> {
             useSharedCurrent: true,
             showTitle: true,
             repository: _cashSessions,
-            onGoPos: () => _go(0)),
+            onGoPos: () => _goLabel('POS')),
     ];
     if (pages.isEmpty) {
       pages.add(
@@ -738,19 +860,32 @@ class _HomeScreenState extends State<HomeScreen> {
     final labels = _labelsFor(user);
     final selected = page.clamp(0, pages.length - 1);
     final groups = <(String, List<String>)>[
-      ('SELL', ['POS', 'Sales History', 'Quotations', 'Sales Orders', 'Layaway', 'Promotions']),
+      ('HOME', ['Home']),
+      (
+        'SELL',
+        [
+          'POS',
+          'Sales History',
+          'Quotations',
+          'Sales Orders',
+          'Layaway',
+          'Promotions'
+        ]
+      ),
       ('INVENTORY', ['Inventory']),
       ('CUSTOMERS', ['Customers & Suppliers', 'RMA / Warranty']),
       ('OPERATIONS', ['Operations', 'Expenses', 'Reports', 'Cash session']),
-      ('ADMIN & SETTINGS', ['Settings']),
+      ('ADMIN & SETTINGS', ['Audit Explorer', 'Settings']),
     ];
     final mobile = [
+      'Home',
       if (labels.contains('POS')) 'POS',
       if (labels.contains('Sales History')) 'Sales History',
       if (labels.contains('Inventory')) 'Inventory',
       if (labels.contains('Customers & Suppliers')) 'Customers & Suppliers'
     ];
     IconData icon(String label) => switch (label) {
+          'Home' => Icons.home_outlined,
           'POS' => Icons.point_of_sale,
           'Sales History' => Icons.receipt_long,
           'Inventory' => Icons.inventory_2,
@@ -765,13 +900,14 @@ class _HomeScreenState extends State<HomeScreen> {
           'Expenses' => Icons.receipt_long_outlined,
           'Cash session' => Icons.payments,
           'Settings' => Icons.settings,
+          'Audit Explorer' => Icons.history,
           'Users & Roles' => Icons.people,
           'Printer & Receipt' => Icons.print,
           _ => Icons.health_and_safety,
         };
     final width = MediaQuery.sizeOf(context).width;
     final sidebarExpanded = _posSidebarExpanded;
-    final focused = selected == 0 && _posFocused;
+    final focused = labels[selected] == 'POS' && _posFocused;
     final appearance = AppThemeController.maybeOf(context);
     final sidebarPreset =
         appearance?.effectiveSidebarColor ?? SidebarColorPreset.navy;
@@ -781,7 +917,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final roleName =
         user.role.name[0].toUpperCase() + user.role.name.substring(1);
     final content = IndexedStack(index: selected, children: pages);
-    final workspace = selected == 0
+    final workspace = labels[selected] == 'POS'
         ? Column(children: [
             SizedBox(
                 height: 48,
@@ -818,7 +954,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           return TextButton.icon(
                               key: const Key('pos-shift-status'),
                               onPressed: () => shift == null
-                                  ? _go(0)
+                                  ? _goLabel('POS')
                                   : _showShift(shift, user),
                               icon: Icon(
                                   shift != null
@@ -918,323 +1054,337 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
     );
     return CallbackShortcuts(
-        bindings: {const SingleActivator(LogicalKeyboardKey.keyK,
-            control: true): _openGlobalSearch},
-        child: Focus(autofocus: true, child: Scaffold(
-        body: width < 700 || focused
-            ? workspace
-            : Row(children: [
-                AnimatedContainer(
-                    duration: const Duration(milliseconds: 220),
-                    curve: Curves.easeInOutCubic,
-                    width: sidebarExpanded
-                        ? AppLayout.sidebarWidth
-                        : AppLayout.collapsedSidebarWidth,
-                    child: ClipRect(
-                        child: OverflowBox(
-                            alignment: Alignment.topLeft,
-                            minWidth: AppLayout.sidebarWidth,
-                            maxWidth: AppLayout.sidebarWidth,
-                            child: Material(
-                                key: const Key('full-height-sidebar'),
-                                color: sidebarPreset.color,
-                                child: Column(children: [
-                                  SizedBox(
-                                      height: 64,
-                                      child: Row(children: [
-                                        Padding(
-                                            padding:
-                                                const EdgeInsets.only(left: 12),
-                                            child: Container(
-                                                key: const Key(
-                                                    'sidebar-brand-logo'),
-                                                width: 44,
-                                                height: 44,
-                                                alignment: Alignment.center,
-                                                clipBehavior: Clip.antiAlias,
-                                                decoration: BoxDecoration(
-                                                    color: sidebarForeground
-                                                        .withValues(alpha: .12),
-                                                    borderRadius: BorderRadius.circular(
-                                                        10)),
-                                                child: appearance?.logoPath == null
-                                                    ? Text(_businessName.split(RegExp(r'\s+')).take(2).map((word) => word[0].toUpperCase()).join(),
-                                                        style: TextStyle(
-                                                            color:
-                                                                sidebarForeground,
-                                                            fontWeight: FontWeight
-                                                                .w700))
-                                                    : Image.file(File(appearance!.logoPath!),
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.keyK, control: true):
+              _openGlobalSearch
+        },
+        child: Focus(
+            autofocus: true,
+            child: Scaffold(
+                body: width < 700 || focused
+                    ? workspace
+                    : Row(children: [
+                        AnimatedContainer(
+                            duration: const Duration(milliseconds: 220),
+                            curve: Curves.easeInOutCubic,
+                            width: sidebarExpanded
+                                ? AppLayout.sidebarWidth
+                                : AppLayout.collapsedSidebarWidth,
+                            child: ClipRect(
+                                child: OverflowBox(
+                                    alignment: Alignment.topLeft,
+                                    minWidth: AppLayout.sidebarWidth,
+                                    maxWidth: AppLayout.sidebarWidth,
+                                    child: Material(
+                                        key: const Key('full-height-sidebar'),
+                                        color: sidebarPreset.color,
+                                        child: Column(children: [
+                                          SizedBox(
+                                              height: 64,
+                                              child: Row(children: [
+                                                Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            left: 12),
+                                                    child: Container(
+                                                        key: const Key(
+                                                            'sidebar-brand-logo'),
                                                         width: 44,
                                                         height: 44,
-                                                        fit: BoxFit.contain,
-                                                        errorBuilder: (_, __, ___) =>
-                                                            Text(_businessName[0], style: TextStyle(color: sidebarForeground))))),
-                                        if (sidebarExpanded)
-                                          Expanded(
-                                              child: Padding(
-                                                  padding:
-                                                      const EdgeInsets.only(
-                                                          left: 10),
-                                                  child: Tooltip(
-                                                      message: _businessName,
-                                                      child: Column(
-                                                          mainAxisAlignment:
-                                                              MainAxisAlignment
-                                                                  .center,
-                                                          crossAxisAlignment:
-                                                              CrossAxisAlignment
-                                                                  .start,
-                                                          children: [
-                                                            Text(_businessName,
-                                                                key: const Key(
-                                                                    'sidebar-business-name'),
-                                                                maxLines: 1,
-                                                                overflow:
-                                                                    TextOverflow
-                                                                        .ellipsis,
-                                                                style: TextStyle(
-                                                                    color:
-                                                                        sidebarForeground,
-                                                                    fontSize:
-                                                                        15,
-                                                                    fontWeight:
-                                                                        FontWeight
-                                                                            .w600)),
-                                                            Text(
-                                                                'Point of Sale',
-                                                                style: TextStyle(
-                                                                    color:
-                                                                        sidebarMuted,
-                                                                    fontSize:
-                                                                        11)),
-                                                          ])))),
-                                        if (sidebarExpanded)
-                                          IconButton(
-                                              key: const Key(
-                                                  'pos-sidebar-toggle'),
-                                              tooltip: 'Collapse sidebar',
-                                              color: sidebarForeground,
-                                              onPressed: () =>
-                                                  _setSidebarExpanded(false),
-                                              icon: const Icon(
-                                                  Icons.chevron_left)),
-                                      ])),
-                                  if (!sidebarExpanded)
-                                    Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: SizedBox(
-                                            width:
-                                                AppLayout.collapsedSidebarWidth,
-                                            child: IconButton(
+                                                        alignment:
+                                                            Alignment.center,
+                                                        clipBehavior:
+                                                            Clip.antiAlias,
+                                                        decoration: BoxDecoration(
+                                                            color: sidebarForeground
+                                                                .withValues(
+                                                                    alpha: .12),
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                    10)),
+                                                        child: appearance?.logoPath == null
+                                                            ? Text(
+                                                                _businessName
+                                                                    .split(RegExp(r'\s+'))
+                                                                    .take(2)
+                                                                    .map((word) => word[0].toUpperCase())
+                                                                    .join(),
+                                                                style: TextStyle(color: sidebarForeground, fontWeight: FontWeight.w700))
+                                                            : Image.file(File(appearance!.logoPath!), width: 44, height: 44, fit: BoxFit.contain, errorBuilder: (_, __, ___) => Text(_businessName[0], style: TextStyle(color: sidebarForeground))))),
+                                                if (sidebarExpanded)
+                                                  Expanded(
+                                                      child: Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .only(
+                                                                  left: 10),
+                                                          child: Tooltip(
+                                                              message:
+                                                                  _businessName,
+                                                              child: Column(
+                                                                  mainAxisAlignment:
+                                                                      MainAxisAlignment
+                                                                          .center,
+                                                                  crossAxisAlignment:
+                                                                      CrossAxisAlignment
+                                                                          .start,
+                                                                  children: [
+                                                                    Text(
+                                                                        _businessName,
+                                                                        key: const Key(
+                                                                            'sidebar-business-name'),
+                                                                        maxLines:
+                                                                            1,
+                                                                        overflow:
+                                                                            TextOverflow
+                                                                                .ellipsis,
+                                                                        style: TextStyle(
+                                                                            color:
+                                                                                sidebarForeground,
+                                                                            fontSize:
+                                                                                15,
+                                                                            fontWeight:
+                                                                                FontWeight.w600)),
+                                                                    Text(
+                                                                        'Point of Sale',
+                                                                        style: TextStyle(
+                                                                            color:
+                                                                                sidebarMuted,
+                                                                            fontSize:
+                                                                                11)),
+                                                                  ])))),
+                                                if (sidebarExpanded)
+                                                  IconButton(
+                                                      key: const Key(
+                                                          'pos-sidebar-toggle'),
+                                                      tooltip:
+                                                          'Collapse sidebar',
+                                                      color: sidebarForeground,
+                                                      onPressed: () =>
+                                                          _setSidebarExpanded(
+                                                              false),
+                                                      icon: const Icon(
+                                                          Icons.chevron_left)),
+                                              ])),
+                                          if (!sidebarExpanded)
+                                            Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: SizedBox(
+                                                    width: AppLayout
+                                                        .collapsedSidebarWidth,
+                                                    child: IconButton(
+                                                        key: const Key(
+                                                            'pos-sidebar-toggle'),
+                                                        tooltip:
+                                                            'Expand sidebar',
+                                                        color:
+                                                            sidebarForeground,
+                                                        onPressed: () =>
+                                                            _setSidebarExpanded(
+                                                                true),
+                                                        icon: const Icon(Icons
+                                                            .chevron_right)))),
+                                          Divider(
+                                              height: 1, color: sidebarLine),
+                                          Tooltip(
+                                              message: 'Search · Ctrl K',
+                                              child: ListTile(
                                                 key: const Key(
-                                                    'pos-sidebar-toggle'),
-                                                tooltip: 'Expand sidebar',
-                                                color: sidebarForeground,
-                                                onPressed: () =>
-                                                    _setSidebarExpanded(true),
-                                                icon: const Icon(
-                                                    Icons.chevron_right)))),
-                                  Divider(height: 1, color: sidebarLine),
-                                  Tooltip(message: 'Search · Ctrl K',
-                                      child: ListTile(
-                                        key: const Key('global-search-button'),
-                                        dense: true,
-                                        leading: Icon(Icons.search,
-                                            color: sidebarForeground),
-                                        title: sidebarExpanded
-                                            ? Text('Search', style: TextStyle(
-                                                color: sidebarForeground))
-                                            : null,
-                                        onTap: _openGlobalSearch,
-                                      )),
-                                  Expanded(
-                                      child: Align(
-                                          alignment: Alignment.topLeft,
-                                          child: SizedBox(
-                                              width: sidebarExpanded
-                                                  ? AppLayout.sidebarWidth
-                                                  : AppLayout
-                                                      .collapsedSidebarWidth,
-                                              child: ListView(
-                                                  key: const Key(
-                                                      'sidebar-navigation'),
-                                                  padding:
-                                                      const EdgeInsets.fromLTRB(
-                                                          8, 4, 8, 12),
-                                                  children: [
-                                                    for (final group in groups)
-                                                      if (group.$2.any(
-                                                          labels.contains)) ...[
-                                                        if (sidebarExpanded)
-                                                          Padding(
-                                                              padding:
-                                                                  const EdgeInsets
-                                                                      .fromLTRB(
-                                                                      8,
-                                                                      16,
-                                                                      8,
-                                                                      5),
-                                                              child: Text(
-                                                                  group.$1,
-                                                                  style: TextStyle(
-                                                                      color:
-                                                                          sidebarMuted,
-                                                                      fontSize:
-                                                                          10,
-                                                                      fontWeight:
-                                                                          FontWeight
-                                                                              .w600,
-                                                                      letterSpacing:
-                                                                          1.1))),
-                                                        if (!sidebarExpanded)
-                                                          Padding(
-                                                              padding:
-                                                                  const EdgeInsets
-                                                                      .symmetric(
-                                                                      vertical:
-                                                                          7,
-                                                                      horizontal:
-                                                                          12),
-                                                              child: Divider(
-                                                                  height: 1,
-                                                                  color:
-                                                                      sidebarLine)),
-                                                        for (final label
-                                                            in group.$2)
-                                                          if (labels.contains(label))
-                                                            Tooltip(
-                                                                message: label,
-                                                                child: ListTile(
-                                                                    dense: true,
-                                                                    selected:
-                                                                        labels[selected] ==
+                                                    'global-search-button'),
+                                                dense: true,
+                                                leading: Icon(Icons.search,
+                                                    color: sidebarForeground),
+                                                title: sidebarExpanded
+                                                    ? Text('Search',
+                                                        style: TextStyle(
+                                                            color:
+                                                                sidebarForeground))
+                                                    : null,
+                                                onTap: _openGlobalSearch,
+                                              )),
+                                          Expanded(
+                                              child: Align(
+                                                  alignment: Alignment.topLeft,
+                                                  child: SizedBox(
+                                                      width: sidebarExpanded
+                                                          ? AppLayout
+                                                              .sidebarWidth
+                                                          : AppLayout
+                                                              .collapsedSidebarWidth,
+                                                      child: ListView(
+                                                          key: const Key(
+                                                              'sidebar-navigation'),
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .fromLTRB(
+                                                                  8, 4, 8, 12),
+                                                          children: [
+                                                            for (final group
+                                                                in groups)
+                                                              if (group.$2.any(
+                                                                  labels
+                                                                      .contains)) ...[
+                                                                if (sidebarExpanded)
+                                                                  Padding(
+                                                                      padding: const EdgeInsets
+                                                                          .fromLTRB(
+                                                                          8,
+                                                                          16,
+                                                                          8,
+                                                                          5),
+                                                                      child: Text(
+                                                                          group
+                                                                              .$1,
+                                                                          style: TextStyle(
+                                                                              color: sidebarMuted,
+                                                                              fontSize: 10,
+                                                                              fontWeight: FontWeight.w600,
+                                                                              letterSpacing: 1.1))),
+                                                                if (!sidebarExpanded)
+                                                                  Padding(
+                                                                      padding: const EdgeInsets
+                                                                          .symmetric(
+                                                                          vertical:
+                                                                              7,
+                                                                          horizontal:
+                                                                              12),
+                                                                      child: Divider(
+                                                                          height:
+                                                                              1,
+                                                                          color:
+                                                                              sidebarLine)),
+                                                                for (final label
+                                                                    in group.$2)
+                                                                  if (labels.contains(
+                                                                      label))
+                                                                    Tooltip(
+                                                                        message:
                                                                             label,
-                                                                    textColor:
-                                                                        sidebarForeground,
-                                                                    iconColor:
-                                                                        sidebarForeground,
-                                                                    selectedColor:
-                                                                        sidebarForeground,
-                                                                    selectedTileColor: sidebarForeground.withValues(
-                                                                        alpha:
-                                                                            .10),
-                                                                    shape: RoundedRectangleBorder(
-                                                                        borderRadius: BorderRadius.circular(
-                                                                            8)),
-                                                                    contentPadding: EdgeInsets.symmetric(
-                                                                        horizontal: sidebarExpanded
-                                                                            ? 12
-                                                                            : 16),
-                                                                    minLeadingWidth:
-                                                                        22,
-                                                                    leading: Icon(icon(label),
-                                                                        size:
-                                                                            21),
-                                                                    title: sidebarExpanded
-                                                                        ? Text(
-                                                                            label,
-                                                                            maxLines: 1,
-                                                                            overflow: TextOverflow.ellipsis,
-                                                                            style: TextStyle(fontWeight: labels[selected] == label ? FontWeight.w600 : FontWeight.w400))
-                                                                        : null,
-                                                                    onTap: () => _go(labels.indexOf(label))))
-                                                      ],
-                                                  ])))),
-                                  Divider(
-                                      height: 1,
-                                      color: sidebarForeground.withValues(
-                                          alpha: .25)),
-                                  Align(
-                                      alignment: Alignment.centerLeft,
-                                      child: SizedBox(
-                                          width: sidebarExpanded
-                                              ? AppLayout.sidebarWidth
-                                              : AppLayout.collapsedSidebarWidth,
-                                          child: account)),
-                                ]))))),
-                const VerticalDivider(width: 1),
-                Expanded(child: workspace),
-              ]),
-        bottomNavigationBar: width >= 700 || focused
-            ? null
-            : NavigationBar(
-                selectedIndex: mobile.contains(labels[selected])
-                    ? mobile.indexOf(labels[selected])
-                    : mobile.length,
-                onDestinationSelected: (index) {
-                  if (index < mobile.length) {
-                    _go(labels.indexOf(mobile[index]));
-                  } else {
-                    showModalBottomSheet<void>(
-                        context: context,
-                        isScrollControlled: true,
-                        builder: (context) => SafeArea(
-                                child: ListView(shrinkWrap: true, children: [
-                              for (final group in groups)
-                                if (group.$2.any(labels.contains)) ...[
-                                  ListTile(title: Text(group.$1)),
-                                  for (final label in group.$2)
-                                    if (labels.contains(label))
-                                      ListTile(
-                                          leading: Icon(icon(label)),
-                                          title: Text(label),
-                                          onTap: () {
-                                            Navigator.pop(context);
-                                            _go(labels.indexOf(label));
-                                          }),
-                                ],
-                              const Divider(),
-                              ListTile(
-                                  leading:
-                                      const Icon(Icons.account_circle_outlined),
-                                  title: Text(user.name),
-                                  subtitle: Text(roleName)),
-                              ListTile(
-                                  leading: const Icon(Icons.lock_outline),
-                                  title: const Text('Lock / Switch user'),
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                    _sessionAction(true);
-                                  }),
-                              if (user.can(PosPermission.refreshLicense) &&
-                                  widget.refreshLicense != null)
-                                ListTile(
-                                    leading: const Icon(Icons.refresh),
-                                    title: const Text('Refresh license'),
-                                    onTap: () {
-                                      Navigator.pop(context);
-                                      _refreshLicenseDialog();
-                                    }),
-                              ListTile(
-                                  leading: const Icon(Icons.logout),
-                                  title: const Text('Logout'),
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                    _sessionAction(false);
-                                  }),
-                            ])));
-                  }
-                },
-                destinations: [
-                    for (final label in mobile)
-                      NavigationDestination(
-                          icon: Icon(icon(label)),
-                          label: label == 'Customers & Suppliers'
-                              ? 'Customers'
-                              : label),
-                    const NavigationDestination(
-                        icon: Icon(Icons.more_horiz), label: 'More'),
-                  ]))));
+                                                                        child: ListTile(
+                                                                            dense:
+                                                                                true,
+                                                                            selected: labels[selected] ==
+                                                                                label,
+                                                                            textColor:
+                                                                                sidebarForeground,
+                                                                            iconColor:
+                                                                                sidebarForeground,
+                                                                            selectedColor:
+                                                                                sidebarForeground,
+                                                                            selectedTileColor:
+                                                                                sidebarForeground.withValues(alpha: .10),
+                                                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                                                            contentPadding: EdgeInsets.symmetric(horizontal: sidebarExpanded ? 12 : 16),
+                                                                            minLeadingWidth: 22,
+                                                                            leading: Icon(icon(label), size: 21),
+                                                                            title: sidebarExpanded ? Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontWeight: labels[selected] == label ? FontWeight.w600 : FontWeight.w400)) : null,
+                                                                            onTap: () => _go(labels.indexOf(label))))
+                                                              ],
+                                                          ])))),
+                                          Divider(
+                                              height: 1,
+                                              color: sidebarForeground
+                                                  .withValues(alpha: .25)),
+                                          Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: SizedBox(
+                                                  width: sidebarExpanded
+                                                      ? AppLayout.sidebarWidth
+                                                      : AppLayout
+                                                          .collapsedSidebarWidth,
+                                                  child: account)),
+                                        ]))))),
+                        const VerticalDivider(width: 1),
+                        Expanded(child: workspace),
+                      ]),
+                bottomNavigationBar: width >= 700 || focused
+                    ? null
+                    : NavigationBar(
+                        selectedIndex: mobile.contains(labels[selected])
+                            ? mobile.indexOf(labels[selected])
+                            : mobile.length,
+                        onDestinationSelected: (index) {
+                          if (index < mobile.length) {
+                            _go(labels.indexOf(mobile[index]));
+                          } else {
+                            showModalBottomSheet<void>(
+                                context: context,
+                                isScrollControlled: true,
+                                builder: (context) => SafeArea(
+                                        child: ListView(
+                                            shrinkWrap: true,
+                                            children: [
+                                          for (final group in groups)
+                                            if (group.$2
+                                                .any(labels.contains)) ...[
+                                              ListTile(title: Text(group.$1)),
+                                              for (final label in group.$2)
+                                                if (labels.contains(label))
+                                                  ListTile(
+                                                      leading:
+                                                          Icon(icon(label)),
+                                                      title: Text(label),
+                                                      onTap: () {
+                                                        Navigator.pop(context);
+                                                        _go(labels
+                                                            .indexOf(label));
+                                                      }),
+                                            ],
+                                          const Divider(),
+                                          ListTile(
+                                              leading: const Icon(Icons
+                                                  .account_circle_outlined),
+                                              title: Text(user.name),
+                                              subtitle: Text(roleName)),
+                                          ListTile(
+                                              leading: const Icon(
+                                                  Icons.lock_outline),
+                                              title: const Text(
+                                                  'Lock / Switch user'),
+                                              onTap: () {
+                                                Navigator.pop(context);
+                                                _sessionAction(true);
+                                              }),
+                                          if (user.can(PosPermission
+                                                  .refreshLicense) &&
+                                              widget.refreshLicense != null)
+                                            ListTile(
+                                                leading:
+                                                    const Icon(Icons.refresh),
+                                                title: const Text(
+                                                    'Refresh license'),
+                                                onTap: () {
+                                                  Navigator.pop(context);
+                                                  _refreshLicenseDialog();
+                                                }),
+                                          ListTile(
+                                              leading: const Icon(Icons.logout),
+                                              title: const Text('Logout'),
+                                              onTap: () {
+                                                Navigator.pop(context);
+                                                _sessionAction(false);
+                                              }),
+                                        ])));
+                          }
+                        },
+                        destinations: [
+                            for (final label in mobile)
+                              NavigationDestination(
+                                  icon: Icon(icon(label)),
+                                  label: label == 'Customers & Suppliers'
+                                      ? 'Customers'
+                                      : label),
+                            const NavigationDestination(
+                                icon: Icon(Icons.more_horiz), label: 'More'),
+                          ]))));
   }
 
   List<String> _labelsFor(ActiveUser user) => [
-        if (user.role == UserRole.custom &&
-            user.grantedPermissions?.isEmpty == true)
-          'No access',
+        'Home',
         if (user.can(PosPermission.sell)) 'POS',
         if (user.can(PosPermission.viewOwnSales)) 'Sales History',
         if (user.can(PosPermission.reports)) 'Reports',
+        if (user.can(PosPermission.manageUsers)) 'Audit Explorer',
         if (user.can(PosPermission.manageSettings) ||
             user.can(PosPermission.manageUsers) ||
             user.can(PosPermission.managePrinter) ||

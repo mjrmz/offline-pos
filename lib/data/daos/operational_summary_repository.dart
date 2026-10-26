@@ -1,4 +1,5 @@
 import '../../core/models/quantity.dart';
+import '../../core/models/product.dart';
 import '../database.dart';
 import 'inventory_health_repository.dart';
 import 'pos_repository.dart';
@@ -12,6 +13,11 @@ class StockAlert {
   final int threshold;
   const StockAlert(this.productId, this.name, this.availableMilli,
       this.physicalMilli, this.unit, this.threshold);
+}
+
+class StockAlertSummary {
+  final List<StockAlert> low, out;
+  const StockAlertSummary(this.low, this.out);
 }
 
 class OperationalSummary {
@@ -46,61 +52,20 @@ class OperationalSummaryRepository {
           .where((r) => r.status != 'resolved' && r.status != 'rejected')
           .toList();
 
+  Future<StockAlertSummary> stockAlerts() async =>
+      _stockAlerts(await PosRepository(db).products());
+
   Future<OperationalSummary> load() async {
     final products = await PosRepository(db).products();
-    final stockRows = await db.select(db.inventory).get();
-    final byProduct = {
-      for (final row in stockRows) row.productId: row.quantityMilli
-    };
-    final reservations = <String, int>{};
-    for (final serial in await db.select(db.serialUnits).get()) {
-      if (serial.status == 'rma_reserved') {
-        reservations.update(serial.productId, (n) => n + Quantity.scale,
-            ifAbsent: () => Quantity.scale);
-      }
-    }
-    final layaways = await db.select(db.layaways).get();
+    final alerts = await _stockAlerts(products);
+    final lowAlerts = alerts.low;
+    final outAlerts = alerts.out;
+    final low = [for (final a in lowAlerts) _stockLabel(a)];
+    final out = [for (final a in outAlerts) _stockLabel(a)];
     final activeLayawayIds = {
-      for (final row in layaways)
+      for (final row in await db.select(db.layaways).get())
         if (row.status == 'active') row.id,
     };
-    for (final item in await db.select(db.layawayItems).get()) {
-      if (activeLayawayIds.contains(item.layawayId)) {
-        reservations.update(item.productId, (n) => n + item.quantityMilli,
-            ifAbsent: () => item.quantityMilli);
-      }
-    }
-    final orderReservations = await db.customSelect('''
-      SELECT product_id, SUM(quantity_milli) AS quantity
-      FROM stock_reservations WHERE status = 'active'
-      GROUP BY product_id
-    ''').get();
-    for (final row in orderReservations) {
-      final productId = row.read<String>('product_id');
-      final quantity = row.read<int>('quantity');
-      reservations.update(productId, (n) => n + quantity,
-          ifAbsent: () => quantity);
-    }
-    final lowAlerts = <StockAlert>[];
-    final outAlerts = <StockAlert>[];
-    final low = <String>[];
-    final out = <String>[];
-    for (final product
-        in products.where((p) => p.isActive && !p.business.madeToOrder)) {
-      final amount = byProduct[product.id] ?? 0;
-      final available = amount - (reservations[product.id] ?? 0);
-      final label =
-          '${product.name}: ${Quantity.format(available)} available / ${Quantity.format(amount)} physical ${product.business.unit.label}';
-      final alert = StockAlert(product.id, product.name, available, amount,
-          product.business.unit.label, product.lowStockThreshold);
-      if (available <= 0) {
-        out.add(label);
-        outAlerts.add(alert);
-      } else if (available <= product.lowStockThreshold * Quantity.scale) {
-        low.add(label);
-        lowAlerts.add(alert);
-      }
-    }
     final today = DateTime.now();
     final day = DateTime(today.year, today.month, today.day);
     final nearExpiryDays =
@@ -157,5 +122,59 @@ class OperationalSummaryRepository {
         openRma: openRma,
         activeLayaway: activeLayaway,
         openQuotations: openQuotations);
+  }
+
+  String _stockLabel(StockAlert a) =>
+      '${a.name}: ${Quantity.format(a.availableMilli)} available / ${Quantity.format(a.physicalMilli)} physical ${a.unit}';
+
+  Future<StockAlertSummary> _stockAlerts(List<PosProduct> products) async {
+    final stockRows = await db.select(db.inventory).get();
+    final byProduct = {
+      for (final row in stockRows) row.productId: row.quantityMilli
+    };
+    final reservations = <String, int>{};
+    for (final serial in await db.select(db.serialUnits).get()) {
+      if (serial.status == 'rma_reserved') {
+        reservations.update(serial.productId, (n) => n + Quantity.scale,
+            ifAbsent: () => Quantity.scale);
+      }
+    }
+    final layaways = await db.select(db.layaways).get();
+    final activeLayawayIds = {
+      for (final row in layaways)
+        if (row.status == 'active') row.id,
+    };
+    for (final item in await db.select(db.layawayItems).get()) {
+      if (activeLayawayIds.contains(item.layawayId)) {
+        reservations.update(item.productId, (n) => n + item.quantityMilli,
+            ifAbsent: () => item.quantityMilli);
+      }
+    }
+    final orderReservations = await db.customSelect('''
+      SELECT product_id, SUM(quantity_milli) AS quantity
+      FROM stock_reservations WHERE status = 'active'
+      GROUP BY product_id
+    ''').get();
+    for (final row in orderReservations) {
+      final productId = row.read<String>('product_id');
+      final quantity = row.read<int>('quantity');
+      reservations.update(productId, (n) => n + quantity,
+          ifAbsent: () => quantity);
+    }
+    final lowAlerts = <StockAlert>[];
+    final outAlerts = <StockAlert>[];
+    for (final product
+        in products.where((p) => p.isActive && !p.business.madeToOrder)) {
+      final amount = byProduct[product.id] ?? 0;
+      final available = amount - (reservations[product.id] ?? 0);
+      final alert = StockAlert(product.id, product.name, available, amount,
+          product.business.unit.label, product.lowStockThreshold);
+      if (available <= 0) {
+        outAlerts.add(alert);
+      } else if (available <= product.lowStockThreshold * Quantity.scale) {
+        lowAlerts.add(alert);
+      }
+    }
+    return StockAlertSummary(lowAlerts, outAlerts);
   }
 }

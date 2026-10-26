@@ -10,6 +10,8 @@ import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/daos/sales_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/features/dashboard/home_screen.dart';
+import 'package:modern_offline_pos/features/inventory/stock_receiving_screen.dart';
+import 'package:modern_offline_pos/features/inventory/expiry_monitor_screen.dart';
 
 void main() {
   void useDesktopSize(WidgetTester tester) {
@@ -18,6 +20,91 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
   }
+
+  for (final (width, height) in <(double, double)>[
+    (1366, 768),
+    (1600, 900),
+    (1920, 1080),
+  ]) {
+    testWidgets('Home with sidebar fits $width x $height', (tester) async {
+      tester.view.physicalSize = Size(width, height);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      SharedPreferences.setMockInitialValues({});
+      final db = AppDatabase.forTesting(NativeDatabase.memory());
+      addTearDown(db.close);
+      final auth = AuthService(AuthRepository(db));
+      final ownerId = await auth.bootstrap(
+          'Owner', 'ownerPassword123', 'Question?', 'answer');
+      await auth.login(ownerId, 'ownerPassword123');
+      await tester.pumpWidget(MaterialApp(
+          home: HomeScreen(
+              auth: auth,
+              pos: PosRepository(db),
+              salesRepository: SalesRepository(db),
+              onChanged: () {})));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const Key('full-height-sidebar')), findsOneWidget);
+      expect(find.text('Quick actions'), findsOneWidget);
+    });
+  }
+
+  testWidgets('Home receive stock action opens Receiving', (tester) async {
+    useDesktopSize(tester);
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final auth = AuthService(AuthRepository(db));
+    final ownerId = await auth.bootstrap(
+        'Owner', 'ownerPassword123', 'Question?', 'answer');
+    await auth.login(ownerId, 'ownerPassword123');
+    await tester.pumpWidget(MaterialApp(
+        home: HomeScreen(
+            auth: auth,
+            pos: PosRepository(db),
+            salesRepository: SalesRepository(db),
+            onChanged: () {})));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Receive stock'));
+    await tester.pumpAndSettle();
+    expect(find.byType(StockReceivingScreen), findsOneWidget);
+  });
+
+  testWidgets('Home near expiry alert opens Expiry Monitor', (tester) async {
+    useDesktopSize(tester);
+    SharedPreferences.setMockInitialValues({});
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final auth = AuthService(AuthRepository(db));
+    final ownerId = await auth.bootstrap(
+        'Owner', 'ownerPassword123', 'Question?', 'answer');
+    await auth.login(ownerId, 'ownerPassword123');
+    final now = DateTime.now();
+    final expiry =
+        DateTime(now.year, now.month, now.day + 3).millisecondsSinceEpoch ~/
+            1000;
+    final received = now.millisecondsSinceEpoch ~/ 1000;
+    await db.customStatement(
+        "INSERT INTO products(id,name,price_cents,created_at) VALUES ('milk','Milk',100,?)",
+        [received]);
+    await db.customStatement('''INSERT INTO inventory_layers
+      (id,product_id,quantity_received_milli,quantity_remaining_milli,
+       unit_cost_cents,batch_number,expiry_date,received_at)
+       VALUES ('batch','milk',1000,1000,50,'B1',?,?)''', [expiry, received]);
+    await tester.pumpWidget(MaterialApp(
+        home: HomeScreen(
+            auth: auth,
+            pos: PosRepository(db),
+            salesRepository: SalesRepository(db),
+            onChanged: () {})));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('1 batch near expiry'));
+    await tester.tap(find.text('1 batch near expiry'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ExpiryMonitorScreen), findsOneWidget);
+  });
 
   testWidgets('popup dialog cancel survives an application root rebuild',
       (tester) async {
@@ -59,6 +146,7 @@ void main() {
   });
 
   testWidgets('refresh license cancel keeps owner signed in', (tester) async {
+    useDesktopSize(tester);
     SharedPreferences.setMockInitialValues({});
     final db = AppDatabase.forTesting(NativeDatabase.memory());
     addTearDown(db.close);
@@ -195,6 +283,10 @@ void main() {
             salesRepository: SalesRepository(db),
             onChanged: () {})));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byTooltip('Settings'), 150,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
     await tester.tap(find.byTooltip('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('Settings'), findsOneWidget);
@@ -266,6 +358,8 @@ void main() {
             salesRepository: SalesRepository(db),
             onChanged: () {})));
     await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('POS'));
+    await tester.pumpAndSettle();
     expect(find.text('Open your cashier shift'), findsOneWidget);
     await tester.enterText(find.byKey(const Key('pos-opening-cash')), '0');
     await tester.pump();
@@ -288,6 +382,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('SALE COMPLETE'), findsOneWidget);
     expect(find.textContaining(RegExp(r'Shift open.*40\.00')), findsOneWidget);
+    await tester.scrollUntilVisible(find.byTooltip('Cash session'), 150,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
     await tester.tap(find.byTooltip('Cash session'));
     await tester.pumpAndSettle();
     expect(find.text('CURRENT SHIFT'), findsOneWidget);

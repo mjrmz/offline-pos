@@ -112,6 +112,29 @@ class InventoryHealthRepository {
         row.read<int>('dead_stock_days'), row.read<int>('near_expiry_days'));
   }
 
+  /// Counts the same remaining, dated batch groups shown by Expiry Monitor.
+  /// This keeps Home's read narrow while using Inventory Health thresholds.
+  Future<int> nearExpiryCount({DateTime? now}) async {
+    final at = now ?? DateTime.now();
+    final today = DateTime(at.year, at.month, at.day);
+    final threshold = (await settings()).nearExpiryDays;
+    final end = today.add(Duration(days: threshold + 1));
+    final row = await db.customSelect('''
+      SELECT COUNT(*) AS total FROM (
+        SELECT l.product_id, l.batch_number, l.expiry_date
+        FROM inventory_layers l
+        WHERE l.quantity_remaining_milli > 0
+          AND l.batch_number IS NOT NULL
+          AND l.expiry_date >= ? AND l.expiry_date < ?
+        GROUP BY l.product_id, l.batch_number, l.expiry_date
+      )
+    ''', variables: [
+      Variable.withInt(today.millisecondsSinceEpoch ~/ 1000),
+      Variable.withInt(end.millisecondsSinceEpoch ~/ 1000),
+    ]).getSingle();
+    return row.read<int>('total');
+  }
+
   Future<void> saveSettings(InventoryHealthSettings value) async {
     if (value.slowMovingDays < 1 ||
         value.slowMovingDays > 3650 ||

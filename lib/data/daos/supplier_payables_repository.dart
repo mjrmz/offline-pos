@@ -163,6 +163,13 @@ class SupplierPayablesRepository {
     return row.read<int>('total');
   }
 
+  Future<int> totalOutstanding() async {
+    final allBalances = _balances.replaceFirst('r.supplier_id = ? AND ', '');
+    final row = await db.customSelect('''SELECT COALESCE(SUM(MAX(0,
+      original - paid - credit)), 0) AS total FROM ($allBalances)''').getSingle();
+    return row.read<int>('total');
+  }
+
   Future<SupplierAgingSummary> aging(String supplierId,
       {DateTime? asOf}) async {
     final day = asOf ?? DateTime.now();

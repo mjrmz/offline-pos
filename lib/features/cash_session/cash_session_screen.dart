@@ -7,6 +7,7 @@ import '../../data/database.dart';
 import '../../shared/utils/money.dart';
 import '../../shared/widgets/app_workspace.dart';
 import '../pos_checkout/pos_shift.dart';
+import 'shift_handover_panel.dart';
 
 class CashSessionScreen extends StatefulWidget {
   final ActiveUser user;
@@ -235,6 +236,10 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
                 child: const Text('Close other user shift')),
           ])),
         ],
+        ShiftHandoverPanel(
+            db: widget.repository.db,
+            user: widget.user,
+            sessionId: (active ?? widget.otherShift)?.session.id),
         const SizedBox(height: 24),
         Text('HISTORY', style: Theme.of(context).textTheme.labelLarge),
         const SizedBox(height: 10),

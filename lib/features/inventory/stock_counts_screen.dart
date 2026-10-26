@@ -6,6 +6,7 @@ import '../../core/models/active_user.dart';
 import '../../core/models/quantity.dart';
 import '../../data/database.dart';
 import '../../data/daos/stock_count_repository.dart';
+import '../../data/daos/product_barcode_alias_repository.dart';
 import '../../data/daos/business_feature_repository.dart';
 import '../../shared/utils/money.dart';
 
@@ -50,6 +51,8 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
   bool adjustments = false;
   StockCount? selected;
   String search = '';
+  String? aliasSearchProductId;
+  int aliasSearchRevision = 0;
   String filter = 'All';
   bool busy = false;
   late Future<void> loaded = _load();
@@ -674,8 +677,18 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
                           isDense: true,
                           prefixIcon: Icon(Icons.search),
                           hintText: 'Product, SKU, barcode'),
-                      onChanged: (s) =>
-                          setState(() => search = s.toLowerCase()))),
+                      onChanged: (s) async {
+                        final revision = ++aliasSearchRevision;
+                        setState(() {
+                          search = s.toLowerCase();
+                          aliasSearchProductId = null;
+                        });
+                        final id = await ProductBarcodeAliasRepository(
+                            widget.repository.db).productIdFor(s);
+                        if (mounted && revision == aliasSearchRevision) {
+                          setState(() => aliasSearchProductId = id);
+                        }
+                      })),
             ]),
             const SizedBox(height: 8),
             const Padding(
@@ -860,7 +873,7 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
   Widget _lineList() {
     final visible = lines.where((l) {
       final p = product(l.productId);
-      final matches =
+      final matches = p?.id == aliasSearchProductId ||
           '${p?.name} ${p?.sku} ${p?.barcode}'.toLowerCase().contains(search);
       final state = status(l);
       return matches &&

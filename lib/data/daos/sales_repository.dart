@@ -27,13 +27,24 @@ class SaleDetail {
   final List<Payment> payments;
   final List<SaleItemRefund> itemRefunds;
   final List<SalePromotionApplication> promotionApplications;
+  final Map<String, List<KitSaleComponentSummary>> kitComponentsByItem;
   const SaleDetail(this.summary, this.items, this.productNames, this.reversal,
       [this.paymentAmountCents = 0,
       this.cashAmountCents = 0,
       this.serialNumbersByItem = const {},
       this.payments = const [],
       this.itemRefunds = const [],
-      this.promotionApplications = const []]);
+      this.promotionApplications = const [],
+      this.kitComponentsByItem = const {}]);
+}
+
+class KitSaleComponentSummary {
+  final String name;
+  final int quantityMilli;
+  final int allocatedCostCents;
+  final List<String> serials = [];
+  final List<String> batches = [];
+  KitSaleComponentSummary(this.name, this.quantityMilli, this.allocatedCostCents);
 }
 
 class DailyReport {
@@ -127,6 +138,11 @@ class SalesRepository {
     final item = await (db.select(db.saleItems)
           ..where((i) => i.id.equals(claim.saleItemId!)))
         .getSingle();
+    if ((await db.customSelect(
+      'SELECT 1 FROM sale_item_kit_components WHERE sale_item_id = ? LIMIT 1',
+      variables: [Variable.withString(item.id)]).get()).isNotEmpty) {
+      throw StateError('Kit item refunds require component restoration and are unavailable in this release');
+    }
     if (item.saleMode != 'ordinary') {
       throw StateError('This sale mode has no item-level refund policy');
     }
@@ -373,6 +389,39 @@ class SalesRepository {
           ..orderBy([(p) => OrderingTerm.desc(p.priority),
             (p) => OrderingTerm.asc(p.promotionReference)]))
         .get();
+    final kitRows = await db.customSelect('''SELECT c.id, c.sale_item_id,
+      c.component_name_snapshot, c.total_quantity_milli, c.allocated_cost_cents,
+      su.serial_number, l.batch_number
+      FROM sale_item_kit_components c
+      JOIN sale_items i ON i.id = c.sale_item_id
+      LEFT JOIN sale_item_kit_allocations ka ON ka.kit_component_id = c.id
+      LEFT JOIN sale_item_inventory_allocations a ON a.id = ka.allocation_id
+      LEFT JOIN serial_units su ON su.id = a.serial_unit_id
+      LEFT JOIN inventory_layers l ON l.id = a.inventory_layer_id
+      WHERE i.sale_id = ? ORDER BY i.id, c.id, ka.allocation_id''',
+      variables: [Variable.withString(saleId)]).get();
+    final kitComponents = <String, List<KitSaleComponentSummary>>{};
+    final bySnapshot = <String, KitSaleComponentSummary>{};
+    for (final row in kitRows) {
+      final id = row.read<String>('id');
+      final component = bySnapshot.putIfAbsent(id, () {
+        final summary = KitSaleComponentSummary(
+          row.read<String>('component_name_snapshot'),
+          row.read<int>('total_quantity_milli'),
+          row.read<int>('allocated_cost_cents'));
+        kitComponents.putIfAbsent(row.read<String>('sale_item_id'), () => [])
+            .add(summary);
+        return summary;
+      });
+      final serial = row.readNullable<String>('serial_number');
+      final batch = row.readNullable<String>('batch_number');
+      if (serial != null && !component.serials.contains(serial)) {
+        component.serials.add(serial);
+      }
+      if (batch != null && !component.batches.contains(batch)) {
+        component.batches.add(batch);
+      }
+    }
     return SaleDetail(
         summary,
         items,
@@ -385,7 +434,8 @@ class SalesRepository {
         serialNumbersByItem,
         payment,
         itemRefunds,
-        promotionApplications);
+        promotionApplications,
+        kitComponents);
   }
 
   Future<void> reverse(ActiveUser actor, String saleId, String kind,
@@ -404,6 +454,12 @@ class SalesRepository {
         if (sale == null) throw StateError('Sale not found');
         if (sale.status != 'completed') {
           throw StateError('Sale already voided or refunded');
+        }
+        final kitItems = await db.customSelect('''SELECT 1 FROM sale_item_kit_components c
+          JOIN sale_items i ON i.id = c.sale_item_id WHERE i.sale_id = ? LIMIT 1''',
+          variables: [Variable.withString(saleId)]).get();
+        if (kitItems.isNotEmpty) {
+          throw StateError('Kit sale void and full refund require component restoration and are unavailable in this release');
         }
         if (kind == 'void' && (await (db.select(db.salesOrderFulfillments)
               ..where((f) => f.saleId.equals(saleId))).get()).isNotEmpty) {

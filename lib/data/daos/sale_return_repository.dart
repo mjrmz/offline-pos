@@ -141,7 +141,12 @@ class SaleReturnRepository {
           .get();
       final serialized = allocations.any((a) => a.serialUnitId != null);
       String? limitation;
-      if (hasCreditPayment) {
+      final kitSnapshot = await db.customSelect(
+        'SELECT 1 FROM sale_item_kit_components WHERE sale_item_id = ? LIMIT 1',
+        variables: [Variable.withString(item.id)]).get();
+      if (kitSnapshot.isNotEmpty) {
+        limitation = 'Kit returns require component restoration and are unavailable in this release.';
+      } else if (hasCreditPayment) {
         limitation =
             'Credit sales need a receivable adjustment before a commercial cash return.';
       } else if (item.saleMode == 'made_order' ||

@@ -704,6 +704,14 @@ class $ProductsTable extends Products with TableInfo<$ProductsTable, Product> {
   late final GeneratedColumn<int> priceCents = GeneratedColumn<int>(
       'price_cents', aliasedName, false,
       type: DriftSqlType.int, requiredDuringInsert: true);
+  static const VerificationMeta _productTypeMeta =
+      const VerificationMeta('productType');
+  @override
+  late final GeneratedColumn<String> productType = GeneratedColumn<String>(
+      'product_type', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('standard'));
   static const VerificationMeta _costCentsMeta =
       const VerificationMeta('costCents');
   @override
@@ -783,6 +791,7 @@ class $ProductsTable extends Products with TableInfo<$ProductsTable, Product> {
         categoryId,
         name,
         priceCents,
+        productType,
         costCents,
         pricingPolicy,
         isActive,
@@ -833,6 +842,12 @@ class $ProductsTable extends Products with TableInfo<$ProductsTable, Product> {
               data['price_cents']!, _priceCentsMeta));
     } else if (isInserting) {
       context.missing(_priceCentsMeta);
+    }
+    if (data.containsKey('product_type')) {
+      context.handle(
+          _productTypeMeta,
+          productType.isAcceptableOrUnknown(
+              data['product_type']!, _productTypeMeta));
     }
     if (data.containsKey('cost_cents')) {
       context.handle(_costCentsMeta,
@@ -903,6 +918,8 @@ class $ProductsTable extends Products with TableInfo<$ProductsTable, Product> {
           .read(DriftSqlType.string, data['${effectivePrefix}name'])!,
       priceCents: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}price_cents'])!,
+      productType: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}product_type'])!,
       costCents: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}cost_cents']),
       pricingPolicy: attachedDatabase.typeMapping
@@ -937,6 +954,7 @@ class Product extends DataClass implements Insertable<Product> {
   final String? categoryId;
   final String name;
   final int priceCents;
+  final String productType;
   final int? costCents;
   final String pricingPolicy;
   final bool isActive;
@@ -953,6 +971,7 @@ class Product extends DataClass implements Insertable<Product> {
       this.categoryId,
       required this.name,
       required this.priceCents,
+      required this.productType,
       this.costCents,
       required this.pricingPolicy,
       required this.isActive,
@@ -977,6 +996,7 @@ class Product extends DataClass implements Insertable<Product> {
     }
     map['name'] = Variable<String>(name);
     map['price_cents'] = Variable<int>(priceCents);
+    map['product_type'] = Variable<String>(productType);
     if (!nullToAbsent || costCents != null) {
       map['cost_cents'] = Variable<int>(costCents);
     }
@@ -1009,6 +1029,7 @@ class Product extends DataClass implements Insertable<Product> {
           : Value(categoryId),
       name: Value(name),
       priceCents: Value(priceCents),
+      productType: Value(productType),
       costCents: costCents == null && nullToAbsent
           ? const Value.absent()
           : Value(costCents),
@@ -1039,6 +1060,7 @@ class Product extends DataClass implements Insertable<Product> {
       categoryId: serializer.fromJson<String?>(json['categoryId']),
       name: serializer.fromJson<String>(json['name']),
       priceCents: serializer.fromJson<int>(json['priceCents']),
+      productType: serializer.fromJson<String>(json['productType']),
       costCents: serializer.fromJson<int?>(json['costCents']),
       pricingPolicy: serializer.fromJson<String>(json['pricingPolicy']),
       isActive: serializer.fromJson<bool>(json['isActive']),
@@ -1063,6 +1085,7 @@ class Product extends DataClass implements Insertable<Product> {
       'categoryId': serializer.toJson<String?>(categoryId),
       'name': serializer.toJson<String>(name),
       'priceCents': serializer.toJson<int>(priceCents),
+      'productType': serializer.toJson<String>(productType),
       'costCents': serializer.toJson<int?>(costCents),
       'pricingPolicy': serializer.toJson<String>(pricingPolicy),
       'isActive': serializer.toJson<bool>(isActive),
@@ -1082,6 +1105,7 @@ class Product extends DataClass implements Insertable<Product> {
           Value<String?> categoryId = const Value.absent(),
           String? name,
           int? priceCents,
+          String? productType,
           Value<int?> costCents = const Value.absent(),
           String? pricingPolicy,
           bool? isActive,
@@ -1098,6 +1122,7 @@ class Product extends DataClass implements Insertable<Product> {
         categoryId: categoryId.present ? categoryId.value : this.categoryId,
         name: name ?? this.name,
         priceCents: priceCents ?? this.priceCents,
+        productType: productType ?? this.productType,
         costCents: costCents.present ? costCents.value : this.costCents,
         pricingPolicy: pricingPolicy ?? this.pricingPolicy,
         isActive: isActive ?? this.isActive,
@@ -1124,6 +1149,8 @@ class Product extends DataClass implements Insertable<Product> {
       name: data.name.present ? data.name.value : this.name,
       priceCents:
           data.priceCents.present ? data.priceCents.value : this.priceCents,
+      productType:
+          data.productType.present ? data.productType.value : this.productType,
       costCents: data.costCents.present ? data.costCents.value : this.costCents,
       pricingPolicy: data.pricingPolicy.present
           ? data.pricingPolicy.value
@@ -1157,6 +1184,7 @@ class Product extends DataClass implements Insertable<Product> {
           ..write('categoryId: $categoryId, ')
           ..write('name: $name, ')
           ..write('priceCents: $priceCents, ')
+          ..write('productType: $productType, ')
           ..write('costCents: $costCents, ')
           ..write('pricingPolicy: $pricingPolicy, ')
           ..write('isActive: $isActive, ')
@@ -1178,6 +1206,7 @@ class Product extends DataClass implements Insertable<Product> {
       categoryId,
       name,
       priceCents,
+      productType,
       costCents,
       pricingPolicy,
       isActive,
@@ -1197,6 +1226,7 @@ class Product extends DataClass implements Insertable<Product> {
           other.categoryId == this.categoryId &&
           other.name == this.name &&
           other.priceCents == this.priceCents &&
+          other.productType == this.productType &&
           other.costCents == this.costCents &&
           other.pricingPolicy == this.pricingPolicy &&
           other.isActive == this.isActive &&
@@ -1215,6 +1245,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
   final Value<String?> categoryId;
   final Value<String> name;
   final Value<int> priceCents;
+  final Value<String> productType;
   final Value<int?> costCents;
   final Value<String> pricingPolicy;
   final Value<bool> isActive;
@@ -1232,6 +1263,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     this.categoryId = const Value.absent(),
     this.name = const Value.absent(),
     this.priceCents = const Value.absent(),
+    this.productType = const Value.absent(),
     this.costCents = const Value.absent(),
     this.pricingPolicy = const Value.absent(),
     this.isActive = const Value.absent(),
@@ -1250,6 +1282,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     this.categoryId = const Value.absent(),
     required String name,
     required int priceCents,
+    this.productType = const Value.absent(),
     this.costCents = const Value.absent(),
     this.pricingPolicy = const Value.absent(),
     this.isActive = const Value.absent(),
@@ -1269,6 +1302,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     Expression<String>? categoryId,
     Expression<String>? name,
     Expression<int>? priceCents,
+    Expression<String>? productType,
     Expression<int>? costCents,
     Expression<String>? pricingPolicy,
     Expression<bool>? isActive,
@@ -1287,6 +1321,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       if (categoryId != null) 'category_id': categoryId,
       if (name != null) 'name': name,
       if (priceCents != null) 'price_cents': priceCents,
+      if (productType != null) 'product_type': productType,
       if (costCents != null) 'cost_cents': costCents,
       if (pricingPolicy != null) 'pricing_policy': pricingPolicy,
       if (isActive != null) 'is_active': isActive,
@@ -1310,6 +1345,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       Value<String?>? categoryId,
       Value<String>? name,
       Value<int>? priceCents,
+      Value<String>? productType,
       Value<int?>? costCents,
       Value<String>? pricingPolicy,
       Value<bool>? isActive,
@@ -1327,6 +1363,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
       categoryId: categoryId ?? this.categoryId,
       name: name ?? this.name,
       priceCents: priceCents ?? this.priceCents,
+      productType: productType ?? this.productType,
       costCents: costCents ?? this.costCents,
       pricingPolicy: pricingPolicy ?? this.pricingPolicy,
       isActive: isActive ?? this.isActive,
@@ -1360,6 +1397,9 @@ class ProductsCompanion extends UpdateCompanion<Product> {
     }
     if (priceCents.present) {
       map['price_cents'] = Variable<int>(priceCents.value);
+    }
+    if (productType.present) {
+      map['product_type'] = Variable<String>(productType.value);
     }
     if (costCents.present) {
       map['cost_cents'] = Variable<int>(costCents.value);
@@ -1405,6 +1445,7 @@ class ProductsCompanion extends UpdateCompanion<Product> {
           ..write('categoryId: $categoryId, ')
           ..write('name: $name, ')
           ..write('priceCents: $priceCents, ')
+          ..write('productType: $productType, ')
           ..write('costCents: $costCents, ')
           ..write('pricingPolicy: $pricingPolicy, ')
           ..write('isActive: $isActive, ')
@@ -7572,6 +7613,12 @@ class $SaleItemsTable extends SaleItems
       type: DriftSqlType.string,
       requiredDuringInsert: false,
       defaultValue: const Constant(''));
+  static const VerificationMeta _skuSnapshotMeta =
+      const VerificationMeta('skuSnapshot');
+  @override
+  late final GeneratedColumn<String> skuSnapshot = GeneratedColumn<String>(
+      'sku_snapshot', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
   static const VerificationMeta _quantityMeta =
       const VerificationMeta('quantity');
   @override
@@ -7658,6 +7705,7 @@ class $SaleItemsTable extends SaleItems
         saleId,
         productId,
         productName,
+        skuSnapshot,
         quantity,
         quantityMilli,
         saleUnit,
@@ -7700,6 +7748,12 @@ class $SaleItemsTable extends SaleItems
           _productNameMeta,
           productName.isAcceptableOrUnknown(
               data['product_name']!, _productNameMeta));
+    }
+    if (data.containsKey('sku_snapshot')) {
+      context.handle(
+          _skuSnapshotMeta,
+          skuSnapshot.isAcceptableOrUnknown(
+              data['sku_snapshot']!, _skuSnapshotMeta));
     }
     if (data.containsKey('quantity')) {
       context.handle(_quantityMeta,
@@ -7780,6 +7834,8 @@ class $SaleItemsTable extends SaleItems
           .read(DriftSqlType.string, data['${effectivePrefix}product_id'])!,
       productName: attachedDatabase.typeMapping
           .read(DriftSqlType.string, data['${effectivePrefix}product_name'])!,
+      skuSnapshot: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}sku_snapshot']),
       quantity: attachedDatabase.typeMapping
           .read(DriftSqlType.int, data['${effectivePrefix}quantity'])!,
       quantityMilli: attachedDatabase.typeMapping
@@ -7817,6 +7873,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
   final String saleId;
   final String productId;
   final String productName;
+  final String? skuSnapshot;
   final int quantity;
   final int quantityMilli;
   final String saleUnit;
@@ -7833,6 +7890,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       required this.saleId,
       required this.productId,
       required this.productName,
+      this.skuSnapshot,
       required this.quantity,
       required this.quantityMilli,
       required this.saleUnit,
@@ -7851,6 +7909,9 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
     map['sale_id'] = Variable<String>(saleId);
     map['product_id'] = Variable<String>(productId);
     map['product_name'] = Variable<String>(productName);
+    if (!nullToAbsent || skuSnapshot != null) {
+      map['sku_snapshot'] = Variable<String>(skuSnapshot);
+    }
     map['quantity'] = Variable<int>(quantity);
     map['quantity_milli'] = Variable<int>(quantityMilli);
     map['sale_unit'] = Variable<String>(saleUnit);
@@ -7875,6 +7936,9 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       saleId: Value(saleId),
       productId: Value(productId),
       productName: Value(productName),
+      skuSnapshot: skuSnapshot == null && nullToAbsent
+          ? const Value.absent()
+          : Value(skuSnapshot),
       quantity: Value(quantity),
       quantityMilli: Value(quantityMilli),
       saleUnit: Value(saleUnit),
@@ -7901,6 +7965,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       saleId: serializer.fromJson<String>(json['saleId']),
       productId: serializer.fromJson<String>(json['productId']),
       productName: serializer.fromJson<String>(json['productName']),
+      skuSnapshot: serializer.fromJson<String?>(json['skuSnapshot']),
       quantity: serializer.fromJson<int>(json['quantity']),
       quantityMilli: serializer.fromJson<int>(json['quantityMilli']),
       saleUnit: serializer.fromJson<String>(json['saleUnit']),
@@ -7924,6 +7989,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       'saleId': serializer.toJson<String>(saleId),
       'productId': serializer.toJson<String>(productId),
       'productName': serializer.toJson<String>(productName),
+      'skuSnapshot': serializer.toJson<String?>(skuSnapshot),
       'quantity': serializer.toJson<int>(quantity),
       'quantityMilli': serializer.toJson<int>(quantityMilli),
       'saleUnit': serializer.toJson<String>(saleUnit),
@@ -7943,6 +8009,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
           String? saleId,
           String? productId,
           String? productName,
+          Value<String?> skuSnapshot = const Value.absent(),
           int? quantity,
           int? quantityMilli,
           String? saleUnit,
@@ -7959,6 +8026,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
         saleId: saleId ?? this.saleId,
         productId: productId ?? this.productId,
         productName: productName ?? this.productName,
+        skuSnapshot: skuSnapshot.present ? skuSnapshot.value : this.skuSnapshot,
         quantity: quantity ?? this.quantity,
         quantityMilli: quantityMilli ?? this.quantityMilli,
         saleUnit: saleUnit ?? this.saleUnit,
@@ -7979,6 +8047,8 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       productId: data.productId.present ? data.productId.value : this.productId,
       productName:
           data.productName.present ? data.productName.value : this.productName,
+      skuSnapshot:
+          data.skuSnapshot.present ? data.skuSnapshot.value : this.skuSnapshot,
       quantity: data.quantity.present ? data.quantity.value : this.quantity,
       quantityMilli: data.quantityMilli.present
           ? data.quantityMilli.value
@@ -8012,6 +8082,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
           ..write('saleId: $saleId, ')
           ..write('productId: $productId, ')
           ..write('productName: $productName, ')
+          ..write('skuSnapshot: $skuSnapshot, ')
           ..write('quantity: $quantity, ')
           ..write('quantityMilli: $quantityMilli, ')
           ..write('saleUnit: $saleUnit, ')
@@ -8033,6 +8104,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
       saleId,
       productId,
       productName,
+      skuSnapshot,
       quantity,
       quantityMilli,
       saleUnit,
@@ -8052,6 +8124,7 @@ class SaleItem extends DataClass implements Insertable<SaleItem> {
           other.saleId == this.saleId &&
           other.productId == this.productId &&
           other.productName == this.productName &&
+          other.skuSnapshot == this.skuSnapshot &&
           other.quantity == this.quantity &&
           other.quantityMilli == this.quantityMilli &&
           other.saleUnit == this.saleUnit &&
@@ -8070,6 +8143,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
   final Value<String> saleId;
   final Value<String> productId;
   final Value<String> productName;
+  final Value<String?> skuSnapshot;
   final Value<int> quantity;
   final Value<int> quantityMilli;
   final Value<String> saleUnit;
@@ -8087,6 +8161,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
     this.saleId = const Value.absent(),
     this.productId = const Value.absent(),
     this.productName = const Value.absent(),
+    this.skuSnapshot = const Value.absent(),
     this.quantity = const Value.absent(),
     this.quantityMilli = const Value.absent(),
     this.saleUnit = const Value.absent(),
@@ -8105,6 +8180,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
     required String saleId,
     required String productId,
     this.productName = const Value.absent(),
+    this.skuSnapshot = const Value.absent(),
     required int quantity,
     this.quantityMilli = const Value.absent(),
     this.saleUnit = const Value.absent(),
@@ -8126,6 +8202,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
     Expression<String>? saleId,
     Expression<String>? productId,
     Expression<String>? productName,
+    Expression<String>? skuSnapshot,
     Expression<int>? quantity,
     Expression<int>? quantityMilli,
     Expression<String>? saleUnit,
@@ -8144,6 +8221,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
       if (saleId != null) 'sale_id': saleId,
       if (productId != null) 'product_id': productId,
       if (productName != null) 'product_name': productName,
+      if (skuSnapshot != null) 'sku_snapshot': skuSnapshot,
       if (quantity != null) 'quantity': quantity,
       if (quantityMilli != null) 'quantity_milli': quantityMilli,
       if (saleUnit != null) 'sale_unit': saleUnit,
@@ -8166,6 +8244,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
       Value<String>? saleId,
       Value<String>? productId,
       Value<String>? productName,
+      Value<String?>? skuSnapshot,
       Value<int>? quantity,
       Value<int>? quantityMilli,
       Value<String>? saleUnit,
@@ -8183,6 +8262,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
       saleId: saleId ?? this.saleId,
       productId: productId ?? this.productId,
       productName: productName ?? this.productName,
+      skuSnapshot: skuSnapshot ?? this.skuSnapshot,
       quantity: quantity ?? this.quantity,
       quantityMilli: quantityMilli ?? this.quantityMilli,
       saleUnit: saleUnit ?? this.saleUnit,
@@ -8213,6 +8293,9 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
     }
     if (productName.present) {
       map['product_name'] = Variable<String>(productName.value);
+    }
+    if (skuSnapshot.present) {
+      map['sku_snapshot'] = Variable<String>(skuSnapshot.value);
     }
     if (quantity.present) {
       map['quantity'] = Variable<int>(quantity.value);
@@ -8261,6 +8344,7 @@ class SaleItemsCompanion extends UpdateCompanion<SaleItem> {
           ..write('saleId: $saleId, ')
           ..write('productId: $productId, ')
           ..write('productName: $productName, ')
+          ..write('skuSnapshot: $skuSnapshot, ')
           ..write('quantity: $quantity, ')
           ..write('quantityMilli: $quantityMilli, ')
           ..write('saleUnit: $saleUnit, ')
@@ -38517,6 +38601,7 @@ typedef $$ProductsTableCreateCompanionBuilder = ProductsCompanion Function({
   Value<String?> categoryId,
   required String name,
   required int priceCents,
+  Value<String> productType,
   Value<int?> costCents,
   Value<String> pricingPolicy,
   Value<bool> isActive,
@@ -38535,6 +38620,7 @@ typedef $$ProductsTableUpdateCompanionBuilder = ProductsCompanion Function({
   Value<String?> categoryId,
   Value<String> name,
   Value<int> priceCents,
+  Value<String> productType,
   Value<int?> costCents,
   Value<String> pricingPolicy,
   Value<bool> isActive,
@@ -38956,6 +39042,9 @@ class $$ProductsTableFilterComposer
 
   ColumnFilters<int> get priceCents => $composableBuilder(
       column: $table.priceCents, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get productType => $composableBuilder(
+      column: $table.productType, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<int> get costCents => $composableBuilder(
       column: $table.costCents, builder: (column) => ColumnFilters(column));
@@ -39500,6 +39589,9 @@ class $$ProductsTableOrderingComposer
   ColumnOrderings<int> get priceCents => $composableBuilder(
       column: $table.priceCents, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get productType => $composableBuilder(
+      column: $table.productType, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<int> get costCents => $composableBuilder(
       column: $table.costCents, builder: (column) => ColumnOrderings(column));
 
@@ -39593,6 +39685,9 @@ class $$ProductsTableAnnotationComposer
 
   GeneratedColumn<int> get priceCents => $composableBuilder(
       column: $table.priceCents, builder: (column) => column);
+
+  GeneratedColumn<String> get productType => $composableBuilder(
+      column: $table.productType, builder: (column) => column);
 
   GeneratedColumn<int> get costCents =>
       $composableBuilder(column: $table.costCents, builder: (column) => column);
@@ -40170,6 +40265,7 @@ class $$ProductsTableTableManager extends RootTableManager<
             Value<String?> categoryId = const Value.absent(),
             Value<String> name = const Value.absent(),
             Value<int> priceCents = const Value.absent(),
+            Value<String> productType = const Value.absent(),
             Value<int?> costCents = const Value.absent(),
             Value<String> pricingPolicy = const Value.absent(),
             Value<bool> isActive = const Value.absent(),
@@ -40188,6 +40284,7 @@ class $$ProductsTableTableManager extends RootTableManager<
             categoryId: categoryId,
             name: name,
             priceCents: priceCents,
+            productType: productType,
             costCents: costCents,
             pricingPolicy: pricingPolicy,
             isActive: isActive,
@@ -40206,6 +40303,7 @@ class $$ProductsTableTableManager extends RootTableManager<
             Value<String?> categoryId = const Value.absent(),
             required String name,
             required int priceCents,
+            Value<String> productType = const Value.absent(),
             Value<int?> costCents = const Value.absent(),
             Value<String> pricingPolicy = const Value.absent(),
             Value<bool> isActive = const Value.absent(),
@@ -40224,6 +40322,7 @@ class $$ProductsTableTableManager extends RootTableManager<
             categoryId: categoryId,
             name: name,
             priceCents: priceCents,
+            productType: productType,
             costCents: costCents,
             pricingPolicy: pricingPolicy,
             isActive: isActive,
@@ -51184,6 +51283,7 @@ typedef $$SaleItemsTableCreateCompanionBuilder = SaleItemsCompanion Function({
   required String saleId,
   required String productId,
   Value<String> productName,
+  Value<String?> skuSnapshot,
   required int quantity,
   Value<int> quantityMilli,
   Value<String> saleUnit,
@@ -51202,6 +51302,7 @@ typedef $$SaleItemsTableUpdateCompanionBuilder = SaleItemsCompanion Function({
   Value<String> saleId,
   Value<String> productId,
   Value<String> productName,
+  Value<String?> skuSnapshot,
   Value<int> quantity,
   Value<int> quantityMilli,
   Value<String> saleUnit,
@@ -51381,6 +51482,9 @@ class $$SaleItemsTableFilterComposer
 
   ColumnFilters<String> get productName => $composableBuilder(
       column: $table.productName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get skuSnapshot => $composableBuilder(
+      column: $table.skuSnapshot, builder: (column) => ColumnFilters(column));
 
   ColumnFilters<int> get quantity => $composableBuilder(
       column: $table.quantity, builder: (column) => ColumnFilters(column));
@@ -51628,6 +51732,9 @@ class $$SaleItemsTableOrderingComposer
   ColumnOrderings<String> get productName => $composableBuilder(
       column: $table.productName, builder: (column) => ColumnOrderings(column));
 
+  ColumnOrderings<String> get skuSnapshot => $composableBuilder(
+      column: $table.skuSnapshot, builder: (column) => ColumnOrderings(column));
+
   ColumnOrderings<int> get quantity => $composableBuilder(
       column: $table.quantity, builder: (column) => ColumnOrderings(column));
 
@@ -51721,6 +51828,9 @@ class $$SaleItemsTableAnnotationComposer
 
   GeneratedColumn<String> get productName => $composableBuilder(
       column: $table.productName, builder: (column) => column);
+
+  GeneratedColumn<String> get skuSnapshot => $composableBuilder(
+      column: $table.skuSnapshot, builder: (column) => column);
 
   GeneratedColumn<int> get quantity =>
       $composableBuilder(column: $table.quantity, builder: (column) => column);
@@ -51985,6 +52095,7 @@ class $$SaleItemsTableTableManager extends RootTableManager<
             Value<String> saleId = const Value.absent(),
             Value<String> productId = const Value.absent(),
             Value<String> productName = const Value.absent(),
+            Value<String?> skuSnapshot = const Value.absent(),
             Value<int> quantity = const Value.absent(),
             Value<int> quantityMilli = const Value.absent(),
             Value<String> saleUnit = const Value.absent(),
@@ -52003,6 +52114,7 @@ class $$SaleItemsTableTableManager extends RootTableManager<
             saleId: saleId,
             productId: productId,
             productName: productName,
+            skuSnapshot: skuSnapshot,
             quantity: quantity,
             quantityMilli: quantityMilli,
             saleUnit: saleUnit,
@@ -52021,6 +52133,7 @@ class $$SaleItemsTableTableManager extends RootTableManager<
             required String saleId,
             required String productId,
             Value<String> productName = const Value.absent(),
+            Value<String?> skuSnapshot = const Value.absent(),
             required int quantity,
             Value<int> quantityMilli = const Value.absent(),
             Value<String> saleUnit = const Value.absent(),
@@ -52039,6 +52152,7 @@ class $$SaleItemsTableTableManager extends RootTableManager<
             saleId: saleId,
             productId: productId,
             productName: productName,
+            skuSnapshot: skuSnapshot,
             quantity: quantity,
             quantityMilli: quantityMilli,
             saleUnit: saleUnit,

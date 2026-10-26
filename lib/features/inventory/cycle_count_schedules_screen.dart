@@ -106,172 +106,198 @@ class _CycleCountSchedulesScreenState extends State<CycleCountSchedulesScreen> {
     var due = existing?.dueDate ?? DateTime.now();
     String? error;
     var saving = false;
+    Animation<double>? dialogAnimation;
+    var listening = false;
+    var disposed = false;
+    void disposeControllers() {
+      if (disposed) return;
+      disposed = true;
+      title.dispose();
+      notes.dispose();
+    }
+
+    void onStatus(AnimationStatus status) {
+      if (status == AnimationStatus.dismissed) {
+        dialogAnimation?.removeStatusListener(onStatus);
+        disposeControllers();
+      }
+    }
+
     if (!mounted) return;
     await showDialog<void>(
         context: context,
-        builder: (dialogContext) => StatefulBuilder(
-            builder: (context, update) => AlertDialog(
-                  title: Text(
-                      existing == null ? 'Create Schedule' : 'Edit Schedule'),
-                  content: SizedBox(
-                      width: 620,
-                      height: 510,
-                      child: SingleChildScrollView(
-                          child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                            TextField(
-                                controller: title,
-                                decoration: const InputDecoration(
-                                    labelText: 'Title or reference')),
-                            const SizedBox(height: 12),
-                            DropdownButtonFormField<String>(
-                                initialValue: scope,
-                                decoration:
-                                    const InputDecoration(labelText: 'Scope'),
-                                items: const [
-                                  DropdownMenuItem(
-                                      value: 'products',
-                                      child: Text('Selected products')),
-                                  DropdownMenuItem(
-                                      value: 'categories',
-                                      child: Text('Selected categories'))
-                                ],
-                                onChanged: (value) => update(() {
-                                      scope = value!;
-                                      refs.clear();
-                                    })),
-                            const SizedBox(height: 12),
-                            Text(
-                                'Select ${scope == 'products' ? 'products' : 'categories'}'),
-                            SizedBox(
-                                height: 175,
-                                child: ListView(children: [
-                                  for (final entry in scope == 'products'
-                                      ? products
-                                          .where((p) => p.isActive)
-                                          .map((p) => (p.id, p.name))
-                                      : categories.map((c) => (c.id, c.name)))
-                                    CheckboxListTile(
-                                        dense: true,
-                                        title: Text(entry.$2),
-                                        value: refs.contains(entry.$1),
-                                        onChanged: (value) => update(() =>
-                                            value == true
-                                                ? refs.add(entry.$1)
-                                                : refs.remove(entry.$1)))
-                                ])),
-                            DropdownButtonFormField<String>(
-                                initialValue: assignee,
-                                decoration: const InputDecoration(
-                                    labelText: 'Assigned employee'),
-                                items: employees
-                                    .where(
-                                        (u) => u.isActive || u.id == assignee)
-                                    .map((u) => DropdownMenuItem(
-                                        value: u.id,
-                                        child: Text(_employee(u.id))))
-                                    .toList(),
-                                onChanged: (value) =>
-                                    update(() => assignee = value)),
-                            const SizedBox(height: 12),
-                            Wrap(spacing: 12, children: [
-                              OutlinedButton(
-                                  onPressed: () async {
-                                    final picked = await showDatePicker(
-                                        context: context,
-                                        firstDate: DateTime(2000),
-                                        lastDate: DateTime(2100),
-                                        initialDate: scheduled);
-                                    if (picked != null) {
-                                      update(() => scheduled = picked);
-                                    }
-                                  },
-                                  child:
-                                      Text('Scheduled: ${_date(scheduled)}')),
-                              OutlinedButton(
-                                  onPressed: () async {
-                                    final picked = await showDatePicker(
-                                        context: context,
-                                        firstDate: DateTime(2000),
-                                        lastDate: DateTime(2100),
-                                        initialDate: due);
-                                    if (picked != null) {
-                                      update(() => due = picked);
-                                    }
-                                  },
-                                  child: Text('Due: ${_date(due)}')),
-                            ]),
-                            TextField(
-                                controller: notes,
-                                decoration:
-                                    const InputDecoration(labelText: 'Notes')),
-                            if (error != null)
-                              Padding(
-                                  padding: const EdgeInsets.only(top: 8),
-                                  child: Text(error!,
-                                      style: TextStyle(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .error))),
-                          ]))),
-                  actions: [
-                    TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Cancel')),
-                    FilledButton(
-                        onPressed: busy || saving
-                            ? null
-                            : () async {
-                                if (assignee == null ||
-                                    title.text.trim().isEmpty ||
-                                    refs.isEmpty ||
-                                    CycleCountScheduleRepository.businessDate(
-                                            due)
-                                        .isBefore(CycleCountScheduleRepository
-                                            .businessDate(scheduled))) {
-                                  update(() => error =
-                                      'Enter a title, scope, employee, and valid dates');
-                                  return;
-                                }
-                                update(() => saving = true);
-                                try {
-                                  if (existing == null) {
-                                    await repo.create(widget.user,
-                                        title: title.text,
-                                        scopeType: scope,
-                                        scopeRefs: refs.toList(),
-                                        assigneeId: assignee!,
-                                        scheduledDate: scheduled,
-                                        dueDate: due,
-                                        notes: notes.text);
-                                  } else {
-                                    await repo.edit(widget.user, existing.id,
-                                        title: title.text,
-                                        scopeType: scope,
-                                        scopeRefs: refs.toList(),
-                                        assigneeId: assignee!,
-                                        scheduledDate: scheduled,
-                                        dueDate: due,
-                                        notes: notes.text);
+        builder: (dialogContext) {
+          dialogAnimation ??= ModalRoute.of(dialogContext)?.animation;
+          if (!listening && dialogAnimation != null) {
+            dialogAnimation!.addStatusListener(onStatus);
+            listening = true;
+          }
+          return StatefulBuilder(
+              builder: (context, update) => AlertDialog(
+                    title: Text(
+                        existing == null ? 'Create Schedule' : 'Edit Schedule'),
+                    content: SizedBox(
+                        width: 620,
+                        height: 510,
+                        child: SingleChildScrollView(
+                            child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                              TextField(
+                                  controller: title,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Title or reference')),
+                              const SizedBox(height: 12),
+                              DropdownButtonFormField<String>(
+                                  initialValue: scope,
+                                  decoration:
+                                      const InputDecoration(labelText: 'Scope'),
+                                  items: const [
+                                    DropdownMenuItem(
+                                        value: 'products',
+                                        child: Text('Selected products')),
+                                    DropdownMenuItem(
+                                        value: 'categories',
+                                        child: Text('Selected categories'))
+                                  ],
+                                  onChanged: (value) => update(() {
+                                        scope = value!;
+                                        refs.clear();
+                                      })),
+                              const SizedBox(height: 12),
+                              Text(
+                                  'Select ${scope == 'products' ? 'products' : 'categories'}'),
+                              SizedBox(
+                                  height: 175,
+                                  child: ListView(children: [
+                                    for (final entry in scope == 'products'
+                                        ? products
+                                            .where((p) => p.isActive)
+                                            .map((p) => (p.id, p.name))
+                                        : categories.map((c) => (c.id, c.name)))
+                                      CheckboxListTile(
+                                          dense: true,
+                                          title: Text(entry.$2),
+                                          value: refs.contains(entry.$1),
+                                          onChanged: (value) => update(() =>
+                                              value == true
+                                                  ? refs.add(entry.$1)
+                                                  : refs.remove(entry.$1)))
+                                  ])),
+                              DropdownButtonFormField<String>(
+                                  initialValue: assignee,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Assigned employee'),
+                                  items: employees
+                                      .where(
+                                          (u) => u.isActive || u.id == assignee)
+                                      .map((u) => DropdownMenuItem(
+                                          value: u.id,
+                                          child: Text(_employee(u.id))))
+                                      .toList(),
+                                  onChanged: (value) =>
+                                      update(() => assignee = value)),
+                              const SizedBox(height: 12),
+                              Wrap(spacing: 12, children: [
+                                OutlinedButton(
+                                    onPressed: () async {
+                                      final picked = await showDatePicker(
+                                          context: context,
+                                          firstDate: DateTime(2000),
+                                          lastDate: DateTime(2100),
+                                          initialDate: scheduled);
+                                      if (picked != null) {
+                                        update(() => scheduled = picked);
+                                      }
+                                    },
+                                    child:
+                                        Text('Scheduled: ${_date(scheduled)}')),
+                                OutlinedButton(
+                                    onPressed: () async {
+                                      final picked = await showDatePicker(
+                                          context: context,
+                                          firstDate: DateTime(2000),
+                                          lastDate: DateTime(2100),
+                                          initialDate: due);
+                                      if (picked != null) {
+                                        update(() => due = picked);
+                                      }
+                                    },
+                                    child: Text('Due: ${_date(due)}')),
+                              ]),
+                              TextField(
+                                  controller: notes,
+                                  decoration: const InputDecoration(
+                                      labelText: 'Notes')),
+                              if (error != null)
+                                Padding(
+                                    padding: const EdgeInsets.only(top: 8),
+                                    child: Text(error!,
+                                        style: TextStyle(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .error))),
+                            ]))),
+                    actions: [
+                      TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel')),
+                      FilledButton(
+                          onPressed: busy || saving
+                              ? null
+                              : () async {
+                                  if (assignee == null ||
+                                      title.text.trim().isEmpty ||
+                                      refs.isEmpty ||
+                                      CycleCountScheduleRepository.businessDate(
+                                              due)
+                                          .isBefore(CycleCountScheduleRepository
+                                              .businessDate(scheduled))) {
+                                    update(() => error =
+                                        'Enter a title, scope, employee, and valid dates');
+                                    return;
                                   }
-                                  if (context.mounted) Navigator.pop(context);
-                                  _reload();
-                                } catch (e) {
-                                  update(() => error = e is StateError
-                                      ? e.message.toString()
-                                      : '$e');
-                                } finally {
-                                  if (context.mounted) {
-                                    update(() => saving = false);
+                                  update(() => saving = true);
+                                  try {
+                                    if (existing == null) {
+                                      await repo.create(widget.user,
+                                          title: title.text,
+                                          scopeType: scope,
+                                          scopeRefs: refs.toList(),
+                                          assigneeId: assignee!,
+                                          scheduledDate: scheduled,
+                                          dueDate: due,
+                                          notes: notes.text);
+                                    } else {
+                                      await repo.edit(widget.user, existing.id,
+                                          title: title.text,
+                                          scopeType: scope,
+                                          scopeRefs: refs.toList(),
+                                          assigneeId: assignee!,
+                                          scheduledDate: scheduled,
+                                          dueDate: due,
+                                          notes: notes.text);
+                                    }
+                                    if (context.mounted) Navigator.pop(context);
+                                    _reload();
+                                  } catch (e) {
+                                    update(() => error = e is StateError
+                                        ? e.message.toString()
+                                        : '$e');
+                                  } finally {
+                                    if (context.mounted) {
+                                      update(() => saving = false);
+                                    }
                                   }
-                                }
-                              },
-                        child: const Text('Save'))
-                  ],
-                )));
-    title.dispose();
-    notes.dispose();
+                                },
+                          child: const Text('Save'))
+                    ],
+                  ));
+        });
+    if (dialogAnimation == null ||
+        dialogAnimation!.status == AnimationStatus.dismissed) {
+      disposeControllers();
+    }
   }
 
   void _openCount(String id) {
@@ -410,16 +436,20 @@ class _CycleCountSchedulesScreenState extends State<CycleCountSchedulesScreen> {
             body: Builder(
                 builder: (drawerContext) => AppWorkspacePadding(
                         child: Column(children: [
-                      Row(children: [
-                        Text('Cycle Count Scheduling',
-                            style: Theme.of(context).textTheme.titleLarge),
-                        const Spacer(),
-                        if (canManage)
-                          FilledButton.icon(
-                              onPressed: busy ? null : () => _form(),
-                              icon: const Icon(Icons.add),
-                              label: const Text('Create Schedule'))
-                      ]),
+                      Wrap(
+                          alignment: WrapAlignment.spaceBetween,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 12,
+                          runSpacing: 8,
+                          children: [
+                            Text('Cycle Count Scheduling',
+                                style: Theme.of(context).textTheme.titleLarge),
+                            if (canManage)
+                              FilledButton.icon(
+                                  onPressed: busy ? null : () => _form(),
+                                  icon: const Icon(Icons.add),
+                                  label: const Text('Create Schedule'))
+                          ]),
                       const SizedBox(height: 16),
                       Wrap(spacing: 12, runSpacing: 8, children: [
                         for (final label in [

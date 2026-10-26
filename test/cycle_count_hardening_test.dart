@@ -211,4 +211,100 @@ void main() {
     expect(entries.where((e) => e.action == 'cycle_count.updated').length, 1);
     expect(entries.where((e) => e.action == 'cycle_count.assigned').length, 2);
   });
+
+  test('audit activity matches exact schedule ID and its event suffix',
+      () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final auth = AuthService(AuthRepository(db));
+    final ownerId =
+        await auth.bootstrap('Owner', 'password123', 'Q?', 'answer');
+    await auth.login(ownerId, 'password123');
+    final productId = await PosRepository(db).saveProduct(
+        name: 'A', priceCents: 100, costCents: 50, startingStock: 1);
+    final repo = CycleCountScheduleRepository(db);
+    final row = await repo.create(auth.current!,
+        title: 'Audit',
+        scopeType: 'products',
+        scopeRefs: [productId],
+        assigneeId: ownerId,
+        scheduledDate: DateTime(2026, 10, 25),
+        dueDate: DateTime(2026, 10, 26));
+    await db.into(db.auditLogs).insert(AuditLogsCompanion.insert(
+        action: 'cycle_count.created', details: Value('${row.id}-other')));
+    await db.into(db.auditLogs).insert(AuditLogsCompanion.insert(
+        action: 'cycle_count.started', details: Value('${row.id}:linked')));
+    final entries = await repo.activity(row.id);
+    expect(entries.length, 3);
+    expect(entries.any((e) => e.details == '${row.id}-other'), false);
+    expect(entries.any((e) => e.details == '${row.id}:linked'), true);
+  });
+
+  test('stale edit and cancel cannot change a linked schedule or its audit',
+      () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final auth = AuthService(AuthRepository(db));
+    final ownerId =
+        await auth.bootstrap('Owner', 'password123', 'Q?', 'answer');
+    await auth.login(ownerId, 'password123');
+    final productId = await PosRepository(db).saveProduct(
+        name: 'A', priceCents: 100, costCents: 50, startingStock: 1);
+    final repo = CycleCountScheduleRepository(db);
+    final stale = await repo.create(auth.current!,
+        title: 'Original',
+        scopeType: 'products',
+        scopeRefs: [productId],
+        assigneeId: ownerId,
+        scheduledDate: DateTime(2026, 10, 25),
+        dueDate: DateTime(2026, 10, 26));
+    final count = await repo.start(auth.current!, stale.id);
+    final priorAuditCount = (await repo.activity(stale.id)).length;
+    await expectLater(
+        repo.edit(auth.current!, stale.id,
+            title: 'Stale edit',
+            scopeType: stale.scopeType,
+            scopeRefs: [productId],
+            assigneeId: ownerId,
+            scheduledDate: stale.scheduledDate,
+            dueDate: stale.dueDate),
+        throwsStateError);
+    await expectLater(repo.cancel(auth.current!, stale.id), throwsStateError);
+    final current = await repo.get(stale.id);
+    expect(current.title, 'Original');
+    expect(current.status, 'in_progress');
+    expect(current.stockCountId, count.id);
+    expect((await repo.activity(stale.id)).length, priorAuditCount);
+  });
+
+  test('failed finalization leaves count and schedule unfinished', () async {
+    final db = AppDatabase.forTesting(NativeDatabase.memory());
+    addTearDown(db.close);
+    final auth = AuthService(AuthRepository(db));
+    final ownerId =
+        await auth.bootstrap('Owner', 'password123', 'Q?', 'answer');
+    await auth.login(ownerId, 'password123');
+    final productId = await PosRepository(db).saveProduct(
+        name: 'A', priceCents: 100, costCents: 50, startingStock: 1);
+    final repo = CycleCountScheduleRepository(db);
+    final row = await repo.create(auth.current!,
+        title: 'Count',
+        scopeType: 'products',
+        scopeRefs: [productId],
+        assigneeId: ownerId,
+        scheduledDate: DateTime(2026, 10, 25),
+        dueDate: DateTime(2026, 10, 26));
+    final counts = StockCountRepository(db);
+    final count = await repo.start(auth.current!, row.id);
+    final line = (await counts.lines(count.id)).single;
+    await counts.setCount(auth.current!, line.id, line.expectedMilli + 1000);
+    await expectLater(
+        counts.finalize(auth.current!, count.id), throwsStateError);
+    expect((await repo.get(row.id)).status, 'in_progress');
+    expect((await counts.counts()).single.status, 'draft');
+    expect(
+        (await repo.activity(row.id))
+            .where((e) => e.action == 'cycle_count.completed'),
+        isEmpty);
+  });
 }

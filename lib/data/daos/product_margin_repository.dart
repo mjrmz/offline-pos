@@ -6,6 +6,7 @@ import '../../core/models/cart.dart';
 import '../../core/models/quantity.dart';
 import '../database.dart';
 import 'inventory_layer_repository.dart';
+import 'product_kit_repository.dart';
 
 class ProductMarginContext {
   final int currentPriceCents;
@@ -151,6 +152,42 @@ class ProductMarginRepository {
     final lines = <MarginSaleLine>[];
     final reserved = <String, int>{};
     for (final line in cart.lines) {
+      if (line.product.productType == 'kit') {
+        final rows = await db.customSelect('''SELECT component_product_id,
+          quantity_milli FROM product_kit_components WHERE kit_product_id = ?
+          ORDER BY sort_order, id''',
+          variables: [Variable.withString(line.product.id)]).get();
+        var cost = 0;
+        var known = rows.isNotEmpty && line.kitDefinition ==
+            await ProductKitRepository(db).definitionSignature(line.product.id);
+        for (final row in rows) {
+          final id = row.read<String>('component_product_id');
+          final needed = row.read<int>('quantity_milli') *
+              (line.quantityMilli ~/ Quantity.scale);
+          final choice = line.kitChoices[id];
+          String? batchNumber;
+          if (choice?.batchId != null) {
+            final batch = await (db.select(db.productLots)
+              ..where((b) => b.id.equals(choice!.batchId!))).getSingleOrNull();
+            batchNumber = batch?.batchNumber;
+          }
+          final parts = await _expectedParts(id, needed,
+            batchNumber: batchNumber, serialIds: choice?.serialIds ?? const [],
+            reservedMilliByLayer: reserved);
+          if (parts == null) {
+            known = false;
+            continue;
+          }
+          for (final part in parts) {
+            cost += Quantity.lineCents(part.layer.unitCostCents, part.quantityMilli);
+            reserved.update(part.layer.id, (value) => value + part.quantityMilli,
+                ifAbsent: () => part.quantityMilli);
+          }
+        }
+        lines.add(MarginSaleLine(line.id, line.product.id, line.quantityMilli,
+          line.totalCents, known ? cost : null, line.mode, null, const []));
+        continue;
+      }
       final parts = await _expectedParts(line.product.id, line.quantityMilli,
           batchNumber: line.batchId == null ? null : batchNumbers[line.batchId],
           serialIds: line.serialIds, reservedMilliByLayer: reserved);

@@ -358,6 +358,9 @@ class SalesOrderRepository {
           if (product == null || !product.isActive) {
             throw StateError('Select an active product');
           }
+          if (product.productType == 'kit') {
+            throw StateError('Kit sales orders are available after kit checkout integration');
+          }
           final config = await BusinessFeatureRepository(db)
               .businessProduct(product.id);
           if (line.quantityMilli <= 0 ||
@@ -443,6 +446,13 @@ class SalesOrderRepository {
               item.lineTotalCents < 0) {
             throw StateError('Quotation contains invalid pricing');
           }
+          if (item.productId != null) {
+            final product = await (db.select(db.products)
+              ..where((p) => p.id.equals(item.productId!))).getSingleOrNull();
+            if (product?.productType == 'kit') {
+              throw StateError('Kit quotations cannot convert to sales orders yet');
+            }
+          }
           total += item.lineTotalCents;
         }
         final next = (await db.customSelect(
@@ -511,6 +521,9 @@ class SalesOrderRepository {
             ..where((p) => p.id.equals(line.productId))).getSingleOrNull();
           if (product == null || !product.isActive) {
             throw StateError('Select an active product');
+          }
+          if (product.productType == 'kit') {
+            throw StateError('Kit sales orders are available after kit checkout integration');
           }
           final config = await BusinessFeatureRepository(db)
               .businessProduct(product.id);

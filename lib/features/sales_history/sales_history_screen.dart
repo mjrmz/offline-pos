@@ -747,7 +747,7 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                             const Divider(),
                             Text('ITEMS',
                                 style: Theme.of(context).textTheme.labelMedium),
-                            for (var i = 0; i < detail.items.length; i++)
+                            for (var i = 0; i < detail.items.length; i++) ...[
                               ListTile(
                                 contentPadding: EdgeInsets.zero,
                                 title: Text(detail.productNames[i]),
@@ -756,6 +756,21 @@ class _SalesHistoryScreenState extends State<SalesHistoryScreen> {
                                 trailing: Text(
                                     formatPeso(detail.items[i].lineTotalCents)),
                               ),
+                              if ((detail.kitComponentsByItem[detail.items[i].id] ??
+                                  const <KitSaleComponentSummary>[]).isNotEmpty)
+                                ExpansionTile(
+                                  title: const Text('Components consumed'),
+                                  children: [
+                                    for (final component in detail.kitComponentsByItem[detail.items[i].id]!)
+                                      ListTile(dense: true,
+                                        title: Text(component.name),
+                                        subtitle: Text('${Quantity.format(component.quantityMilli)} consumed'
+                                          '${component.serials.isEmpty ? '' : '\nSerials: ${component.serials.join(', ')}'}'
+                                          '${component.batches.isEmpty ? '' : '\nBatches: ${component.batches.join(', ')}'}'),
+                                      ),
+                                  ],
+                                ),
+                            ],
                             const Divider(),
                             Text('TOTALS',
                                 style: Theme.of(context).textTheme.labelMedium),

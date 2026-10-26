@@ -61,7 +61,9 @@ class SaleService {
               lineKey: line.id,
               mode: line.mode,
               batchId: line.batchId,
-              serialIds: line.serialIds))
+              serialIds: line.serialIds,
+              kitDefinition: line.kitDefinition,
+              kitChoices: line.kitChoices))
           .toList();
       final committed = await repository.completeCreditSale(
           items, cashPaidCents, customerId, user.id,
@@ -118,7 +120,9 @@ class SaleService {
               lineKey: line.id,
               mode: line.mode,
               batchId: line.batchId,
-              serialIds: line.serialIds))
+              serialIds: line.serialIds,
+              kitDefinition: line.kitDefinition,
+              kitChoices: line.kitChoices))
           .toList();
       final committed = await repository.completeCashSale(
           items, cashReceivedCents, user.id,

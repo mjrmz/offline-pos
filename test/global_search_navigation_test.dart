@@ -15,6 +15,7 @@ import 'package:modern_offline_pos/features/dashboard/global_command_palette.dar
 import 'package:modern_offline_pos/features/contacts/customer_profile_screen.dart';
 import 'package:modern_offline_pos/features/contacts/supplier_profile_drawer.dart';
 import 'package:modern_offline_pos/features/inventory/stock_receiving_screen.dart';
+import 'package:modern_offline_pos/features/inventory/serial_explorer.dart';
 import 'package:modern_offline_pos/features/inventory/purchase_orders_screen.dart';
 import 'package:modern_offline_pos/features/contacts/quotation_screen.dart';
 import 'package:modern_offline_pos/features/contacts/layaway_screen.dart';
@@ -178,7 +179,7 @@ void main() {
     expect(find.textContaining('RMA-000015'), findsWidgets);
   });
 
-  testWidgets('serial result opens source Receiving context', (tester) async {
+  testWidgets('serial result opens lifecycle then Receiving reference', (tester) async {
     final (db, auth) = await mount(tester);
     final product = await db.into(db.products).insertReturning(
         ProductsCompanion.insert(name: 'Serialized Mouse', priceCents: 5000));
@@ -194,8 +195,23 @@ void main() {
         productId: product.id, serialNumber: 'SERIAL-001',
         receivingItemId: Value(item.id)));
     await select(tester, 'SERIAL-001', 'SERIAL-001');
-    expect(find.byType(StockReceivingScreen), findsOneWidget);
+    expect(find.byType(SerialExplorer), findsOneWidget);
+    expect(find.text('SERIAL-001'), findsWidgets);
     expect(find.textContaining('RCV-000010'), findsWidgets);
+    await tester.tap(find.textContaining('RCV-000010').last);
+    await tester.pumpAndSettle();
+    expect(find.byType(StockReceivingScreen), findsOneWidget);
+  });
+
+  testWidgets('partial serial result opens lifecycle detail', (tester) async {
+    final (db, _) = await mount(tester);
+    final product = await db.into(db.products).insertReturning(
+        ProductsCompanion.insert(name: 'Drive', priceCents: 100));
+    await db.into(db.serialUnits).insert(SerialUnitsCompanion.insert(
+        productId: product.id, serialNumber: 'SERIAL-PARTIAL-001'));
+    await select(tester, 'PARTIAL', 'SERIAL-PARTIAL-001');
+    expect(find.byType(SerialExplorer), findsOneWidget);
+    expect(find.text('SERIAL-PARTIAL-001'), findsWidgets);
   });
 
   testWidgets('create commands start existing editors without posting data',

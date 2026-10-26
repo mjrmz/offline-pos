@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:drift/drift.dart' show Variable;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
@@ -30,6 +29,9 @@ import '../../data/daos/directory_repository.dart';
 import '../contacts/contacts_screen.dart';
 import '../contacts/rma_screen.dart';
 import '../../data/daos/rma_repository.dart';
+import '../../data/daos/serial_lifecycle_repository.dart';
+import '../inventory/serial_explorer.dart';
+import '../inventory/serial_lifecycle_navigation.dart';
 import '../contacts/quotation_screen.dart';
 import '../contacts/sales_orders_screen.dart';
 import '../../data/daos/sales_order_repository.dart';
@@ -321,23 +323,13 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() => openSaleId = result.id);
         _goLabel('Sales History');
       case GlobalSearchKind.serial:
-        final db = widget.pos.db;
-        final rma = await db.customSelect('''SELECT id FROM rma_cases
-            WHERE serial_unit_id = ? ORDER BY reference DESC LIMIT 1''',
-            variables: [Variable.withString(result.id)]).get();
-        if (rma.isNotEmpty && user.can(PosPermission.manageRma)) {
-          setState(() => openRmaId = rma.first.read<String>('id'));
-          _goLabel('RMA / Warranty');
-          break;
-        }
-        final source = await db.customSelect('''SELECT i.receiving_id
-            FROM serial_units su JOIN stock_receiving_items i
-              ON i.id = su.receiving_item_id WHERE su.id = ?''',
-            variables: [Variable.withString(result.id)]).get();
-        if (source.isNotEmpty && user.can(PosPermission.stockReceiving)) {
-          setState(() { openReceiptId = source.first.read<String>('receiving_id');
-            inventoryTarget = 'Receiving'; });
-          _goLabel('Inventory');
+        if (user.can(PosPermission.stockReceiving)) {
+          Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) =>
+              SerialExplorer(repository: SerialLifecycleRepository(widget.pos.db),
+                  user: user, initialSerialId: result.id,
+                  canOpenRecord: (event) => canOpenSerialRecord(event, user),
+                  onOpenRecord: (event) => openSerialRecord(context, event,
+                      user, widget.auth, widget.pos))));
         }
       case GlobalSearchKind.quotation:
         setState(() { openQuotationReference = result.reference;

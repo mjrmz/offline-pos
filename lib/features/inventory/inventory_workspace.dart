@@ -29,6 +29,9 @@ import '../../data/daos/paged_result.dart';
 import 'label_print_dialog.dart';
 import 'import_wizard.dart';
 import '../../data/daos/import_repository.dart';
+import '../../data/daos/serial_lifecycle_repository.dart';
+import 'serial_explorer.dart';
+import 'serial_lifecycle_navigation.dart';
 
 class InventoryWorkspace extends StatefulWidget {
   final PosRepository repository;
@@ -93,6 +96,7 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
   int? adjustmentQuantityMilli;
   late String productFilter = widget.initialFilter;
   bool expiryOpen = false;
+  bool serialExplorerOpen = false;
   String? returnReceivingId;
 
   void _startPurchaseReturn(String receiptId) {
@@ -300,7 +304,16 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
             'Cycle Count Scheduling' => CycleCountSchedulesScreen(
                 db: widget.repository.db, user: widget.user),
             'Movements' => _Movements(repository: widget.repository),
-            'Tools' => expiryOpen
+            'Tools' => serialExplorerOpen
+                ? SerialExplorer(
+                    repository: SerialLifecycleRepository(widget.repository.db),
+                    user: widget.user, embedded: true,
+                    canOpenRecord: (event) =>
+                        canOpenSerialRecord(event, widget.user),
+                    onOpenRecord: (event) => openSerialRecord(context, event,
+                        widget.user, widget.auth, widget.repository),
+                    onBack: () => setState(() => serialExplorerOpen = false))
+                : expiryOpen
                 ? ExpiryMonitorScreen(
                     repository: InventoryHealthRepository(widget.repository.db),
                     user: widget.user,
@@ -317,6 +330,8 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
                   )
                 : _InventoryTools(
                     onOpenExpiry: _openExpiry,
+                    onOpenSerials: widget.user.can(PosPermission.stockReceiving)
+                        ? () => setState(() => serialExplorerOpen = true) : null,
                     onOpenImport: widget.user
                                 .can(PosPermission.manageCatalog) ||
                             widget.user.can(PosPermission.manageContacts) ||
@@ -378,14 +393,17 @@ class _InventoryWorkspaceState extends State<InventoryWorkspace> {
 
 class _InventoryTools extends StatelessWidget {
   const _InventoryTools(
-      {required this.onOpenExpiry, this.onOpenLabels, this.onOpenImport});
+      {required this.onOpenExpiry, this.onOpenLabels, this.onOpenImport,
+        this.onOpenSerials});
   final VoidCallback onOpenExpiry;
+  final VoidCallback? onOpenSerials;
   final VoidCallback? onOpenLabels;
   final VoidCallback? onOpenImport;
 
   @override
   Widget build(BuildContext context) => AppWorkspacePadding(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        child: SingleChildScrollView(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
           const AppPageHeader(
               title: 'Tools',
               subtitle: 'Inventory utilities and maintenance tools.'),
@@ -410,6 +428,20 @@ class _InventoryTools extends StatelessWidget {
               ),
             ),
           ),
+          if (onOpenSerials != null)
+            ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440),
+              child: Card(child: Padding(padding: const EdgeInsets.all(16),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Serial Explorer',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 8),
+                    const Text('Trace a serial number through its recorded lifecycle.'),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(onPressed: onOpenSerials,
+                        icon: const Icon(Icons.qr_code_2),
+                        label: const Text('Open')),
+                  ])))),
           if (onOpenLabels != null)
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 440),
@@ -452,7 +484,7 @@ class _InventoryTools extends StatelessWidget {
                                   icon: const Icon(Icons.upload_file),
                                   label: const Text('Open')),
                             ])))),
-        ]),
+        ])),
       );
 }
 

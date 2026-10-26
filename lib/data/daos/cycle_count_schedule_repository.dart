@@ -69,7 +69,7 @@ class CycleCountScheduleRepository {
     }
     if (scopeType == 'products') {
       final products = await (db.select(db.products)
-            ..where((p) => p.id.isIn(refs) & p.isActive.equals(true)))
+            ..where((p) => p.id.isIn(refs) & p.isActive.equals(true) & p.productType.equals('standard')))
           .get();
       if (products.length != refs.length) {
         throw StateError('A product is unavailable');
@@ -211,7 +211,7 @@ class CycleCountScheduleRepository {
         }
         final refs = (jsonDecode(schedule.scopeRefs) as List).cast<String>();
         final products = await (db.select(db.products)
-              ..where((p) => p.isActive.equals(true)))
+              ..where((p) => p.isActive.equals(true) & p.productType.equals('standard')))
             .get();
         final configurations =
             await BusinessFeatureRepository(db).allProductConfigurations();

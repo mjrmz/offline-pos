@@ -7,6 +7,7 @@ import '../../core/models/quantity.dart';
 import '../../shared/utils/money.dart';
 import '../database.dart';
 import 'auth_repository.dart';
+import 'product_barcode_alias_repository.dart';
 
 enum ImportKind { products, customers, suppliers, openingInventory }
 
@@ -105,6 +106,7 @@ class ImportCsv {
             'name',
             'sku',
             'barcode',
+            'barcode_aliases',
             'category',
             'selling_price',
             'cost',
@@ -180,6 +182,9 @@ class ImportRepository {
   final AppDatabase db;
 
   static String norm(String? value) => (value ?? '').trim().toLowerCase();
+  static List<String> aliases(String? value) =>
+      value == null || value.trim().isEmpty ? [] :
+      value.split('|').map((part) => part.trim()).toList();
   static int? cents(String value) {
     return tryParsePeso(value);
   }
@@ -209,8 +214,18 @@ class ImportRepository {
     };
     final byBarcode = {
       for (final p in products)
-        if (norm(p.barcode).isNotEmpty) norm(p.barcode): p
+        if (p.barcode?.trim().isNotEmpty == true) p.barcode!.trim(): p
     };
+    final aliasOwners = <String, Product>{};
+    if (kind == ImportKind.products) {
+      final aliasRows = await db.customSelect(
+        'SELECT barcode, product_id FROM product_barcode_aliases').get();
+      final productIds = {for (final product in products) product.id: product};
+      for (final alias in aliasRows) {
+        final owner = productIds[alias.read<String>('product_id')];
+        if (owner != null) aliasOwners[alias.read<String>('barcode')] = owner;
+      }
+    }
     final byProductName = {for (final p in products) norm(p.name): p};
     final byCustomerName = {for (final c in customers) norm(c.name): c};
     final byPhone = {
@@ -225,6 +240,7 @@ class ImportRepository {
     final categoryNames = {for (final c in categories) norm(c.name)};
     final supplierNames = {for (final s in suppliers) norm(s.name)};
     final seenSku = <String>{}, seenBarcode = <String>{}, seenName = <String>{};
+    final seenAliases = <String>{};
     final seenContact = <String>{};
     final missing = <String>{};
     final rows = <ImportRow>[];
@@ -273,7 +289,7 @@ class ImportRepository {
         if (supplier.isNotEmpty && !supplierNames.contains(supplier)) {
           row.errors.add('Supplier not found: ${values['preferred_supplier']}');
         }
-        final sku = norm(values['sku']), barcode = norm(values['barcode']);
+        final sku = norm(values['sku']), barcode = (values['barcode'] ?? '').trim();
         final skuMatch = bySku[sku], barcodeMatch = byBarcode[barcode];
         if (sku.isNotEmpty && !seenSku.add(sku)) {
           row.errors.add('Duplicate SKU in file');
@@ -281,12 +297,38 @@ class ImportRepository {
         if (barcode.isNotEmpty && !seenBarcode.add(barcode)) {
           row.errors.add('Duplicate barcode in file');
         }
+        if (barcode.isNotEmpty && seenAliases.contains(barcode)) {
+          row.errors.add('Primary barcode duplicates an alias in file');
+        }
         if (skuMatch != null &&
             barcodeMatch != null &&
             skuMatch.id != barcodeMatch.id) {
           row.errors.add('SKU and barcode belong to different products');
         }
         final match = skuMatch ?? barcodeMatch;
+        final targetId = match?.id ?? byProductName[name]?.id;
+        if (barcode.isNotEmpty && aliasOwners.containsKey(barcode)) {
+          row.errors.add('Primary barcode is assigned as an alias to ${aliasOwners[barcode]!.name}');
+        }
+        final rowAliases = aliases(values['barcode_aliases']);
+        final rowSeen = <String>{};
+        for (final alias in rowAliases) {
+          if (alias.isEmpty || alias.length > 128) {
+            row.errors.add('Barcode alias must be 1 to 128 characters');
+          } else if (alias == barcode) {
+            row.errors.add('Barcode alias duplicates the primary barcode');
+          } else if (!rowSeen.add(alias)) {
+            row.errors.add('Duplicate barcode alias in row: $alias');
+          } else if (!seenAliases.add(alias) || seenBarcode.contains(alias) && alias != barcode) {
+            row.errors.add('Duplicate barcode alias in file: $alias');
+          } else if (byBarcode.containsKey(alias)) {
+            row.errors.add('Barcode alias is assigned as primary to ${byBarcode[alias]!.name}');
+          } else if (aliasOwners.containsKey(alias) && aliasOwners[alias]!.id != targetId) {
+            row.errors.add('Barcode alias is assigned to ${aliasOwners[alias]!.name}');
+          } else if (aliasOwners.containsKey(alias)) {
+            row.warnings.add('Barcode alias already exists on ${aliasOwners[alias]!.name}');
+          }
+        }
         if (match != null) {
           row.existingId = match.id;
           row.existingName = match.name;
@@ -404,7 +446,7 @@ class ImportRepository {
             if (existingProducts.any((p) =>
                 p.id != id &&
                 ((sku != null && norm(p.sku) == norm(sku)) ||
-                    (barcode != null && norm(p.barcode) == norm(barcode))))) {
+                    (barcode != null && p.barcode?.trim() == barcode.trim())))) {
               throw StateError(
                   'Duplicate SKU or barcode at CSV row ${row.number}');
             }
@@ -450,10 +492,12 @@ class ImportRepository {
               final inserted =
                   await db.into(db.products).insertReturning(values);
               existingProducts.add(inserted);
+              await _mergeAliases(inserted.id, v['barcode_aliases'], live.id);
               created++;
             } else {
               await (db.update(db.products)..where((p) => p.id.equals(id)))
                   .write(values);
+              await _mergeAliases(id, v['barcode_aliases'], live.id);
               final newPrice = values.priceCents.value;
               if (old != null && old.priceCents != newPrice) {
                 await db.into(db.priceHistory).insert(PriceHistoryCompanion.insert(
@@ -507,6 +551,26 @@ class ImportRepository {
             }))));
         return ImportResult(created, updated, skipped);
       });
+
+  Future<void> _mergeAliases(String productId, String? input, String actorId) async {
+    for (final code in aliases(input)) {
+      final existing = await db.customSelect(
+        'SELECT product_id FROM product_barcode_aliases WHERE barcode = ?',
+        variables: [Variable.withString(code)]).get();
+      if (existing.isNotEmpty &&
+          existing.single.read<String>('product_id') == productId) {
+        continue;
+      }
+      final owner = await ProductBarcodeAliasRepository(db).ownerName(code);
+      if (owner != null) {
+        throw StateError('This barcode is already assigned to $owner.');
+      }
+      await db.customStatement('''INSERT INTO product_barcode_aliases
+        (id, product_id, barcode, created_by, created_at, is_active)
+        VALUES (lower(hex(randomblob(16))), ?, ?, ?, ?, 1)''',
+        [productId, code, actorId, DateTime.now().millisecondsSinceEpoch ~/ 1000]);
+    }
+  }
 
   static Value<String?> _value(
       Map<String, String> values, String key, bool updating) {

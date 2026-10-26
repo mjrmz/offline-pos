@@ -1,5 +1,6 @@
 import 'product.dart';
 import 'quantity.dart';
+import 'kit_component_choice.dart';
 
 class CartLine {
   final String id;
@@ -10,12 +11,16 @@ class CartLine {
   List<String> serialIds;
   int extraCents;
   int? pricedTotalCents;
+  String? kitDefinition;
+  Map<String, KitComponentChoice> kitChoices;
   CartLine(this.product, this.quantityMilli,
       {String? id,
       this.mode = 'ordinary',
       this.batchId,
       this.extraCents = 0,
-      this.serialIds = const []})
+      this.serialIds = const [],
+      this.kitDefinition,
+      this.kitChoices = const {}})
       : id = id ?? product.id;
   int get quantity => quantityMilli ~/ Quantity.scale;
   int get totalCents =>

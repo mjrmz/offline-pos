@@ -79,7 +79,7 @@ class StockCountRepository {
         final live = await AuthRepository(db).requireActive(actor.id);
         live.require(PosPermission.stockCount);
         final products = await (db.select(db.products)
-              ..where((p) => p.isActive.equals(true)))
+              ..where((p) => p.isActive.equals(true) & p.productType.equals('standard')))
             .get();
         final configurations =
             await BusinessFeatureRepository(db).allProductConfigurations();

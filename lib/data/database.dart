@@ -25,6 +25,7 @@ class Products extends Table {
   TextColumn get categoryId => text().nullable().references(Categories, #id)();
   TextColumn get name => text()();
   IntColumn get priceCents => integer()(); // store money as integer cents
+  TextColumn get productType => text().withDefault(const Constant('standard'))();
   IntColumn get costCents => integer().nullable()();
   TextColumn get pricingPolicy =>
       text().withDefault(const Constant('current'))();
@@ -41,6 +42,118 @@ class Products extends Table {
 
   @override
   Set<Column> get primaryKey => {id};
+}
+
+Future<void> _createProductBarcodeAliases(AppDatabase db) async {
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS product_barcode_aliases (
+    id TEXT PRIMARY KEY,
+    product_id TEXT NOT NULL REFERENCES products(id),
+    barcode TEXT NOT NULL UNIQUE,
+    type TEXT,
+    label TEXT,
+    created_by TEXT REFERENCES users(id),
+    created_at INTEGER NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    CHECK (length(barcode) BETWEEN 1 AND 128 AND barcode = trim(barcode))
+  )''');
+  await db.customStatement('CREATE INDEX IF NOT EXISTS product_barcode_aliases_product ON product_barcode_aliases(product_id)');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS barcode_alias_primary_insert
+    BEFORE INSERT ON product_barcode_aliases
+    WHEN EXISTS (SELECT 1 FROM products WHERE barcode = NEW.barcode)
+    BEGIN SELECT RAISE(ABORT, 'Barcode already assigned to a product'); END''');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS barcode_alias_primary_update
+    BEFORE UPDATE OF barcode ON product_barcode_aliases
+    WHEN EXISTS (SELECT 1 FROM products WHERE barcode = NEW.barcode)
+    BEGIN SELECT RAISE(ABORT, 'Barcode already assigned to a product'); END''');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS product_primary_alias_insert
+    BEFORE INSERT ON products
+    WHEN NEW.barcode IS NOT NULL AND EXISTS
+      (SELECT 1 FROM product_barcode_aliases WHERE barcode = NEW.barcode)
+    BEGIN SELECT RAISE(ABORT, 'Barcode already assigned to an alias'); END''');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS product_primary_alias_update
+    BEFORE UPDATE OF barcode ON products
+    WHEN NEW.barcode IS NOT NULL AND EXISTS
+      (SELECT 1 FROM product_barcode_aliases WHERE barcode = NEW.barcode)
+    BEGIN SELECT RAISE(ABORT, 'Barcode already assigned to an alias'); END''');
+}
+
+Future<void> _createProductKitComponents(AppDatabase db) async {
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS product_kit_components (
+    id TEXT PRIMARY KEY,
+    kit_product_id TEXT NOT NULL REFERENCES products(id),
+    component_product_id TEXT NOT NULL REFERENCES products(id),
+    quantity_milli INTEGER NOT NULL CHECK (quantity_milli > 0),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    UNIQUE (kit_product_id, component_product_id),
+    CHECK (kit_product_id <> component_product_id)
+  )''');
+  await db.customStatement('CREATE INDEX IF NOT EXISTS kit_components_component ON product_kit_components(component_product_id)');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS kit_product_type_immutable
+    BEFORE UPDATE OF product_type ON products WHEN OLD.product_type <> NEW.product_type
+    BEGIN SELECT RAISE(ABORT, 'Product type cannot be changed'); END''');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS kit_activation_requires_component
+    BEFORE UPDATE OF is_active ON products
+    WHEN NEW.product_type = 'kit' AND NEW.is_active = 1 AND NOT EXISTS
+      (SELECT 1 FROM product_kit_components WHERE kit_product_id = NEW.id)
+    BEGIN SELECT RAISE(ABORT, 'Add a component before activating a kit'); END''');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS kit_create_inactive
+    BEFORE INSERT ON products WHEN NEW.product_type = 'kit' AND NEW.is_active = 1
+    BEGIN SELECT RAISE(ABORT, 'Create kit inactive, then add components'); END''');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS kit_component_archive_guard
+    BEFORE UPDATE OF is_active ON products
+    WHEN OLD.is_active = 1 AND NEW.is_active = 0 AND EXISTS
+      (SELECT 1 FROM product_kit_components c JOIN products k ON k.id = c.kit_product_id
+       WHERE c.component_product_id = NEW.id AND k.is_active = 1)
+    BEGIN SELECT RAISE(ABORT, 'Archive dependent kits first'); END''');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS kit_component_validate_insert
+    BEFORE INSERT ON product_kit_components
+    WHEN (SELECT product_type FROM products WHERE id = NEW.kit_product_id) <> 'kit'
+      OR (SELECT product_type FROM products WHERE id = NEW.component_product_id) <> 'standard'
+    BEGIN SELECT RAISE(ABORT, 'Kit components must be standard products'); END''');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS kit_component_validate_update
+    BEFORE UPDATE ON product_kit_components
+    WHEN (SELECT product_type FROM products WHERE id = NEW.kit_product_id) <> 'kit'
+      OR (SELECT product_type FROM products WHERE id = NEW.component_product_id) <> 'standard'
+    BEGIN SELECT RAISE(ABORT, 'Kit components must be standard products'); END''');
+  await db.customStatement('''CREATE TRIGGER IF NOT EXISTS kit_last_component_guard
+    BEFORE DELETE ON product_kit_components
+    WHEN (SELECT is_active FROM products WHERE id = OLD.kit_product_id) = 1
+      AND (SELECT COUNT(*) FROM product_kit_components WHERE kit_product_id = OLD.kit_product_id) = 1
+    BEGIN SELECT RAISE(ABORT, 'Archive kit before removing its last component'); END''');
+  for (final table in ['inventory', 'inventory_movements', 'inventory_layers',
+    'stock_reservations', 'purchase_order_lines',
+    'stock_receiving_items', 'stock_count_lines', 'product_lots',
+    'serial_units', 'layaway_items']) {
+    await db.customStatement('''CREATE TRIGGER IF NOT EXISTS kit_no_${table}_insert
+      BEFORE INSERT ON $table
+      WHEN (SELECT product_type FROM products WHERE id = NEW.product_id) = 'kit'
+      BEGIN SELECT RAISE(ABORT, 'Kit products have no physical stock or O1 transactions'); END''');
+  }
+}
+
+Future<void> _createKitSaleTables(AppDatabase db) async {
+  await db.customStatement('DROP TRIGGER IF EXISTS kit_no_sale_items_insert');
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS sale_item_kit_components (
+    id TEXT PRIMARY KEY,
+    sale_item_id TEXT NOT NULL REFERENCES sale_items(id),
+    kit_product_id TEXT NOT NULL REFERENCES products(id),
+    component_product_id TEXT NOT NULL REFERENCES products(id),
+    component_name_snapshot TEXT NOT NULL,
+    component_sku_snapshot TEXT,
+    required_quantity_milli INTEGER NOT NULL CHECK (required_quantity_milli > 0),
+    kit_quantity_milli INTEGER NOT NULL CHECK (kit_quantity_milli > 0),
+    total_quantity_milli INTEGER NOT NULL CHECK (total_quantity_milli > 0),
+    allocated_cost_cents INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(sale_item_id, component_product_id)
+  )''');
+  await db.customStatement('''CREATE TABLE IF NOT EXISTS sale_item_kit_allocations (
+    kit_component_id TEXT NOT NULL REFERENCES sale_item_kit_components(id),
+    allocation_id TEXT NOT NULL UNIQUE REFERENCES sale_item_inventory_allocations(id),
+    PRIMARY KEY(kit_component_id, allocation_id)
+  )''');
+  await db.customStatement('CREATE INDEX IF NOT EXISTS sale_kit_components_sale_item ON sale_item_kit_components(sale_item_id)');
 }
 
 class Categories extends Table {
@@ -106,6 +219,7 @@ class SaleItems extends Table {
   TextColumn get saleId => text().references(Sales, #id)();
   TextColumn get productId => text().references(Products, #id)();
   TextColumn get productName => text().withDefault(const Constant(''))();
+  TextColumn get skuSnapshot => text().nullable()();
   IntColumn get quantity => integer()();
   IntColumn get quantityMilli => integer().withDefault(const Constant(0))();
   TextColumn get saleUnit => text().withDefault(const Constant('pcs'))();
@@ -1287,7 +1401,7 @@ class AppDatabase extends _$AppDatabase {
 
   // Bump this on every schema change and add a migration step below.
   @override
-  int get schemaVersion => 51;
+  int get schemaVersion => 55;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -1326,6 +1440,10 @@ class AppDatabase extends _$AppDatabase {
           await customStatement(
               'CREATE INDEX IF NOT EXISTS sales_order_fulfillment_lines_order_line ON sales_order_fulfillment_lines (sales_order_line_id)');
           await _createRoleTables(this);
+          await _createCashShiftHandoverTables(this);
+          await _createProductBarcodeAliases(this);
+          await _createProductKitComponents(this);
+          await _createKitSaleTables(this);
           await _createCommercialReturnTables(this);
           await _createLoyaltyTables(this);
           await customStatement('CREATE UNIQUE INDEX cash_sessions_one_open '
@@ -2248,6 +2366,22 @@ class AppDatabase extends _$AppDatabase {
             await customStatement(
                 'CREATE INDEX IF NOT EXISTS cycle_count_schedules_assignee ON cycle_count_schedules (assignee_id, scheduled_date)');
           }
+          if (from < 52) await _createCashShiftHandoverTables(this);
+          if (from < 53) await _createProductBarcodeAliases(this);
+          if (from < 54) {
+            final columns = await customSelect('PRAGMA table_info(products)').get();
+            if (!columns.any((row) => row.read<String>('name') == 'product_type')) {
+              await m.addColumn(products, products.productType);
+            }
+            await _createProductKitComponents(this);
+          }
+          if (from < 55) {
+            final saleItemColumns = await customSelect('PRAGMA table_info(sale_items)').get();
+            if (!saleItemColumns.any((row) => row.read<String>('name') == 'sku_snapshot')) {
+              await m.addColumn(saleItems, saleItems.skuSnapshot);
+            }
+            await _createKitSaleTables(this);
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -2258,7 +2392,9 @@ class AppDatabase extends _$AppDatabase {
           await customStatement('INSERT OR IGNORE INTO role_permissions '
               '(role_code, permission_key) VALUES '
               "('owner', 'authorizeBelowCost'), "
-              "('manager', 'authorizeBelowCost')");
+              "('manager', 'authorizeBelowCost'), "
+              "('owner', 'acknowledgeShiftHandover'), "
+              "('manager', 'acknowledgeShiftHandover')");
           final cashActivityTables = await customSelect(
                   "SELECT name FROM sqlite_master WHERE type='table' "
                   "AND name='business_cash_movements'")
@@ -2284,6 +2420,60 @@ class AppDatabase extends _$AppDatabase {
           }
         },
       );
+}
+
+Future<void> _createCashShiftHandoverTables(AppDatabase db) async {
+  await db.customStatement('''CREATE TABLE cash_shift_handovers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cash_session_id TEXT NOT NULL REFERENCES cash_sessions(id),
+    outgoing_user_id TEXT NOT NULL REFERENCES users(id),
+    incoming_user_id TEXT REFERENCES users(id),
+    expected_cash_cents INTEGER NOT NULL,
+    actual_cash_cents INTEGER,
+    variance_cents INTEGER,
+    notes TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'draft'
+      CHECK(status IN ('draft','awaiting_acknowledgment','completed','cancelled')),
+    manager_user_id TEXT REFERENCES users(id),
+    manager_acknowledged_at INTEGER,
+    created_at INTEGER NOT NULL,
+    submitted_at INTEGER,
+    completed_at INTEGER,
+    cancelled_at INTEGER,
+    CHECK(actual_cash_cents IS NULL OR actual_cash_cents >= 0),
+    CHECK(actual_cash_cents IS NULL OR variance_cents = actual_cash_cents - expected_cash_cents)
+  )''');
+  await db.customStatement('''CREATE TABLE cash_shift_handover_denominations (
+    handover_id INTEGER NOT NULL REFERENCES cash_shift_handovers(id),
+    denomination_cents INTEGER NOT NULL CHECK(denomination_cents > 0),
+    quantity INTEGER NOT NULL CHECK(quantity >= 0),
+    subtotal_cents INTEGER NOT NULL CHECK(subtotal_cents = denomination_cents * quantity),
+    PRIMARY KEY(handover_id, denomination_cents)
+  )''');
+  await db.customStatement('''CREATE UNIQUE INDEX cash_shift_one_active
+    ON cash_shift_handovers(cash_session_id)
+    WHERE status IN ('draft','awaiting_acknowledgment')''');
+  await db.customStatement('''CREATE TRIGGER cash_shift_completed_immutable
+    BEFORE UPDATE ON cash_shift_handovers WHEN OLD.status = 'completed'
+    BEGIN SELECT RAISE(ABORT, 'Completed handover is immutable'); END''');
+  await db.customStatement('''CREATE TRIGGER cash_shift_no_delete
+    BEFORE DELETE ON cash_shift_handovers
+    BEGIN SELECT RAISE(ABORT, 'Handover cannot be deleted'); END''');
+  await db
+      .customStatement('''CREATE TRIGGER cash_shift_denominations_locked_insert
+    BEFORE INSERT ON cash_shift_handover_denominations
+    WHEN (SELECT status FROM cash_shift_handovers WHERE id = NEW.handover_id) != 'draft'
+    BEGIN SELECT RAISE(ABORT, 'Handover count is locked'); END''');
+  await db
+      .customStatement('''CREATE TRIGGER cash_shift_denominations_locked_update
+    BEFORE UPDATE ON cash_shift_handover_denominations
+    WHEN (SELECT status FROM cash_shift_handovers WHERE id = OLD.handover_id) != 'draft'
+    BEGIN SELECT RAISE(ABORT, 'Handover count is locked'); END''');
+  await db
+      .customStatement('''CREATE TRIGGER cash_shift_denominations_locked_delete
+    BEFORE DELETE ON cash_shift_handover_denominations
+    WHEN (SELECT status FROM cash_shift_handovers WHERE id = OLD.handover_id) != 'draft'
+    BEGIN SELECT RAISE(ABORT, 'Handover count is locked'); END''');
 }
 
 Future<void> _createInventoryHealthSettings(AppDatabase db) async {

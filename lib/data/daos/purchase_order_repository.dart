@@ -493,6 +493,9 @@ class PurchaseOrderRepository {
           if (product == null || !product.isActive) {
             throw StateError('Select an active product');
           }
+          if (product.productType == 'kit') {
+            throw StateError('Kit masters cannot be ordered from suppliers');
+          }
           final config =
               await BusinessFeatureRepository(db).businessProduct(product.id);
           if (!config.fractional && line.quantityMilli % Quantity.scale != 0) {

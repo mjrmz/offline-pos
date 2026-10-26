@@ -15,6 +15,7 @@ import '../../core/models/quantity.dart';
 import '../../data/database.dart';
 import '../../data/daos/directory_repository.dart';
 import '../../data/daos/pos_repository.dart';
+import '../../data/daos/product_barcode_alias_repository.dart';
 import '../../data/daos/business_feature_repository.dart';
 import '../../data/daos/stock_receiving_repository.dart';
 import '../../data/daos/purchase_return_repository.dart';
@@ -374,6 +375,8 @@ class _StockReceivingScreenState extends State<StockReceivingScreen> {
 
   Future<void> chooseProduct() async {
     final search = TextEditingController();
+    String? aliasProductId;
+    var searchRevision = 0;
     final chosen = await showDialog<String>(
         context: context,
         builder: (context) => StatefulBuilder(
@@ -389,12 +392,21 @@ class _StockReceivingScreenState extends State<StockReceivingScreen> {
                             decoration: const InputDecoration(
                                 prefixIcon: Icon(Icons.search),
                                 labelText: 'Search name, SKU, or barcode'),
-                            onChanged: (_) => update(() {})),
+                            onChanged: (value) async {
+                              final revision = ++searchRevision;
+                              update(() => aliasProductId = null);
+                              final id = await ProductBarcodeAliasRepository(
+                                  widget.products.db).productIdFor(value);
+                              if (context.mounted && revision == searchRevision) {
+                                update(() => aliasProductId = id);
+                              }
+                            }),
                         Expanded(
                             child: ListView(children: [
                           for (final product in products.where((p) {
                             final term = search.text.toLowerCase();
-                            return p.name.toLowerCase().contains(term) ||
+                            return p.id == aliasProductId ||
+                                p.name.toLowerCase().contains(term) ||
                                 (p.sku ?? '').toLowerCase().contains(term) ||
                                 (p.barcode ?? '').toLowerCase().contains(term);
                           }))

@@ -13,6 +13,11 @@ void main() {
       skip: sourcePath == null ? 'No historical backup supplied' : false,
       () async {
     final source = File(sourcePath!);
+    final sourceModified = source.lastModifiedSync();
+    final sourceBytes = source.lengthSync();
+    final metadata = File('${source.path}.json');
+    final metadataModified = metadata.lastModifiedSync();
+    final metadataBytes = metadata.lengthSync();
     final original = BackupService.inspect(source);
     expect(original.schemaVersion, lessThanOrEqualTo(50));
     final readOnly =
@@ -45,11 +50,15 @@ void main() {
           openDatabase: () async =>
               AppDatabase.forTesting(NativeDatabase(liveFile)));
       live = await restorer.restore(record);
-      expect(live.schemaVersion, 51);
+      expect(live.schemaVersion, 55);
       expect((await live.select(live.products).get()).length, productCount);
       expect((await live.select(live.stockCounts).get()).length, countCount);
       expect(await live.select(live.cycleCountSchedules).get(), isEmpty);
       expect(BackupService.verify(copied), original.schemaVersion);
+      expect(source.lastModifiedSync(), sourceModified);
+      expect(source.lengthSync(), sourceBytes);
+      expect(metadata.lastModifiedSync(), metadataModified);
+      expect(metadata.lengthSync(), metadataBytes);
     } finally {
       await live.close();
       await dir.delete(recursive: true);

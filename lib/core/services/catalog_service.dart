@@ -31,6 +31,7 @@ class CatalogService {
       int? openingCostCents,
       int? openingSellingPriceCents,
       String? pricingPolicy,
+      String productType = 'standard',
       BusinessProduct? business,
       String? batchNumber,
       DateTime? batchExpiry}) async {
@@ -54,6 +55,7 @@ class CatalogService {
         openingCostCents: openingCostCents,
         openingSellingPriceCents: openingSellingPriceCents,
         pricingPolicy: pricingPolicy,
+        productType: productType,
         business: business,
         batchNumber: batchNumber,
         batchExpiry: batchExpiry,

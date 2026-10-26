@@ -328,6 +328,9 @@ class StockReceivingRepository {
           if (product == null || !product.isActive) {
             throw StateError('Receiving product is inactive or missing');
           }
+          if (product.productType == 'kit') {
+            throw StateError('Receive kit components individually');
+          }
           if (product.pricingPolicy == 'layer' &&
               line.unitSellingPriceCents == null) {
             throw StateError('Selling price is required for this stock layer');

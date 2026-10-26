@@ -25,6 +25,49 @@ void main() {
     return imports.validate(kind, csv, ImportCsv.autoMap(csv.first, kind));
   }
 
+  test('product alias import creates, merges, and leaves blank unchanged', () async {
+    final create = await preview(ImportKind.products,
+      'name,sku,barcode,barcode_aliases\nA,A1,P1,ALT1|ALT2\n');
+    expect(create.errors, 0);
+    await imports.commit(owner, ImportKind.products, create,
+      {'name': 'name', 'sku': 'sku', 'barcode': 'barcode',
+       'barcode_aliases': 'barcode_aliases'}, 'products.csv');
+    final product = await db.select(db.products).getSingle();
+    Future<List<String>> codes() async => (await db.customSelect(
+      'SELECT barcode FROM product_barcode_aliases ORDER BY barcode').get())
+      .map((row) => row.read<String>('barcode')).toList();
+    expect(await codes(), ['ALT1', 'ALT2']);
+    final update = await preview(ImportKind.products,
+      'name,sku,barcode_aliases\nA,A1,ALT3\n');
+    update.rows.single.action = ImportAction.update;
+    await imports.commit(owner, ImportKind.products, update,
+      {'name': 'name', 'sku': 'sku', 'barcode_aliases': 'barcode_aliases'},
+      'products.csv');
+    expect(await codes(), ['ALT1', 'ALT2', 'ALT3']);
+    final blank = await preview(ImportKind.products,
+      'name,sku,barcode_aliases\nA,A1,\n');
+    blank.rows.single.action = ImportAction.update;
+    await imports.commit(owner, ImportKind.products, blank,
+      {'name': 'name', 'sku': 'sku', 'barcode_aliases': 'barcode_aliases'},
+      'products.csv');
+    expect(await codes(), ['ALT1', 'ALT2', 'ALT3']);
+    expect((await db.select(db.products).getSingle()).id, product.id);
+  });
+
+  test('product alias preview catches duplicates and collisions', () async {
+    final create = await preview(ImportKind.products,
+      'name,sku,barcode,barcode_aliases\nA,A1,P1,ALT1\n');
+    await imports.commit(owner, ImportKind.products, create,
+      {'name': 'name', 'sku': 'sku', 'barcode': 'barcode',
+       'barcode_aliases': 'barcode_aliases'}, 'products.csv');
+    expect((await preview(ImportKind.products,
+      'name,sku,barcode_aliases\nB,B1,ALT1\n')).errors, 1);
+    expect((await preview(ImportKind.products,
+      'name,sku,barcode_aliases\nB,B1,P1\n')).errors, 1);
+    expect((await preview(ImportKind.products,
+      'name,sku,barcode_aliases\nB,B1,X|X\n')).errors, 1);
+  });
+
   test('product dry run creates no stock; commit creates one audit row',
       () async {
     final p = await preview(

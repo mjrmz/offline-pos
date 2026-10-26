@@ -86,6 +86,9 @@ class HeldSaleRepository {
                 'serialIds': line.serialIds,
                 'extraCents': line.extraCents,
                 'pricedTotalCents': line.pricedTotalCents,
+                'kitDefinition': line.kitDefinition,
+                'kitChoices': {for (final entry in line.kitChoices.entries)
+                  entry.key: entry.value.toJson()},
               }
           ],
           'customerId': customerId,

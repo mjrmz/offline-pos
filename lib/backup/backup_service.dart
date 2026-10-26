@@ -68,7 +68,7 @@ class BackupService {
         'ok');
   }
 
-  static int verify(File file, {int maxSchemaVersion = 51}) {
+  static int verify(File file, {int maxSchemaVersion = 55}) {
     if (!file.existsSync() || file.lengthSync() == 0) {
       throw StateError('Backup is missing or empty');
     }
@@ -105,6 +105,13 @@ class BackupService {
         ],
         if (version >= 42) 'sale_promotion_applications',
         if (version >= 51) 'cycle_count_schedules',
+        if (version >= 53) 'product_barcode_aliases',
+        if (version >= 54) 'product_kit_components',
+        if (version >= 55) ...['sale_item_kit_components', 'sale_item_kit_allocations'],
+        if (version >= 52) ...[
+          'cash_shift_handovers',
+          'cash_shift_handover_denominations'
+        ],
         if (version >= 37) 'inventory_health_settings',
         if (version >= 22) 'rma_lifecycle_events',
         if (version >= 23) 'serial_warranty_snapshots',
@@ -716,6 +723,31 @@ class BackupService {
             'created_by',
             'updated_at',
             'stock_count_id'
+          ],
+        if (version >= 52)
+          'cash_shift_handovers': [
+            'id',
+            'cash_session_id',
+            'outgoing_user_id',
+            'incoming_user_id',
+            'expected_cash_cents',
+            'actual_cash_cents',
+            'variance_cents',
+            'notes',
+            'status',
+            'manager_user_id',
+            'manager_acknowledged_at',
+            'created_at',
+            'submitted_at',
+            'completed_at',
+            'cancelled_at'
+          ],
+        if (version >= 52)
+          'cash_shift_handover_denominations': [
+            'handover_id',
+            'denomination_cents',
+            'quantity',
+            'subtotal_cents'
           ],
         if (version >= 32)
           'stock_count_lines': [

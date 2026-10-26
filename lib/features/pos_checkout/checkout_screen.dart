@@ -11,6 +11,7 @@ import '../../core/models/product.dart';
 import '../../core/models/business_product.dart';
 import '../../core/models/business_feature.dart';
 import '../../core/models/quantity.dart';
+import '../../core/models/kit_component_choice.dart';
 import '../../core/models/sale_line_format.dart';
 import '../../data/daos/business_feature_repository.dart';
 import '../../core/services/sale_service.dart';
@@ -21,6 +22,8 @@ import '../../shared/utils/money.dart';
 import '../../shared/widgets/expiry_date_field.dart';
 import '../../shared/widgets/record_details_drawer.dart';
 import '../../data/daos/pos_repository.dart';
+import '../../data/daos/product_barcode_alias_repository.dart';
+import '../../data/daos/product_kit_repository.dart';
 import '../../data/daos/sales_order_repository.dart';
 import '../../data/daos/loyalty_repository.dart';
 import '../../data/daos/held_sale_repository.dart';
@@ -29,6 +32,9 @@ import '../../data/daos/stock_receiving_repository.dart';
 import '../../data/daos/purchase_order_repository.dart';
 import '../../data/daos/inventory_planning_repository.dart';
 import '../../data/daos/product_margin_repository.dart';
+import '../../data/daos/serial_lifecycle_repository.dart';
+import '../inventory/serial_explorer.dart';
+import '../inventory/serial_lifecycle_navigation.dart';
 import '../../data/daos/inventory_health_repository.dart';
 import '../../data/database.dart';
 import '../inventory/inventory_overview.dart' show inventoryMovementLabel;
@@ -43,6 +49,207 @@ import 'pos_layout_preference.dart';
 import 'pos_shortcut_profile.dart';
 
 String money(int cents) => formatPeso(cents);
+
+class _KitComponentsEditor extends StatefulWidget {
+  const _KitComponentsEditor({required this.repository, required this.product,
+    required this.components, required this.actor, required this.onChanged});
+  final PosRepository repository;
+  final PosProduct product;
+  final List<KitComponentView> components;
+  final ActiveUser? actor;
+  final Future<void> Function() onChanged;
+  @override
+  State<_KitComponentsEditor> createState() => _KitComponentsEditorState();
+}
+
+class _KitComponentsEditorState extends State<_KitComponentsEditor> {
+  Future<void> edit([KitComponentView? existing]) async {
+    final actor = widget.actor;
+    if (actor == null || !actor.can(PosPermission.manageCatalog)) return;
+    final candidates = (await widget.repository.products())
+        .where((p) => p.productType == 'standard' && p.isActive).toList();
+    String? selected = existing?.productId;
+    final quantity = TextEditingController(
+        text: existing == null ? '1' : Quantity.format(existing.quantityMilli));
+    String? error;
+    if (!mounted) return;
+    try {
+      await showDialog<void>(context: context, builder: (dialog) =>
+        StatefulBuilder(builder: (context, update) => AlertDialog(
+          title: Text(existing == null ? 'Add kit component' : 'Edit component quantity'),
+          content: SizedBox(width: 380, child: Column(mainAxisSize: MainAxisSize.min,
+            children: [
+              DropdownButtonFormField<String>(initialValue: selected,
+                decoration: const InputDecoration(labelText: 'Component'),
+                items: [for (final p in candidates)
+                  DropdownMenuItem(value: p.id, child: Text(p.name))],
+                onChanged: existing == null ? (id) => update(() => selected = id) : null),
+              TextField(controller: quantity,
+                decoration: const InputDecoration(labelText: 'Required quantity'),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true)),
+              if (error != null) Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ])),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialog), child: const Text('Cancel')),
+            FilledButton(onPressed: () async {
+              try {
+                if (selected == null) throw StateError('Select a component');
+                final milli = Quantity.tryParse(quantity.text);
+                if (milli == null) throw StateError('Enter a positive quantity');
+                final repo = ProductKitRepository(widget.repository.db);
+                if (existing == null) {
+                  await repo.addComponent(actor, widget.product.id, selected!, milli);
+                } else {
+                  await repo.updateQuantity(actor, widget.product.id, selected!, milli);
+                }
+                if (dialog.mounted) Navigator.pop(dialog);
+                await widget.onChanged();
+              } catch (e) {
+                update(() => error = safeMessage(e));
+              }
+            }, child: const Text('Save')),
+          ],
+        )));
+    } finally {
+      quantity.dispose();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(children: [
+    for (final part in widget.components)
+      ListTile(dense: true, title: Text(part.name),
+        subtitle: Text('Required ${Quantity.format(part.quantityMilli)} · Available ${Quantity.format(part.availableMilli)} · Potential kits ${part.possibleKits}'),
+        trailing: widget.actor?.can(PosPermission.manageCatalog) == true
+            ? Wrap(spacing: 2, children: [
+                IconButton(tooltip: 'Edit quantity', icon: const Icon(Icons.edit_outlined),
+                  onPressed: () => edit(part)),
+                IconButton(tooltip: 'Remove component', icon: const Icon(Icons.delete_outline),
+                  onPressed: () async {
+                    try {
+                      await ProductKitRepository(widget.repository.db).removeComponent(
+                        widget.actor!, widget.product.id, part.productId);
+                      await widget.onChanged();
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(safeMessage(e))));
+                      }
+                    }
+                  }),
+              ]) : null),
+    if (widget.actor?.can(PosPermission.manageCatalog) == true)
+      OutlinedButton.icon(onPressed: () => edit(),
+        icon: const Icon(Icons.add), label: const Text('Add component')),
+  ]);
+}
+
+class _BarcodeAliasesSection extends StatefulWidget {
+  const _BarcodeAliasesSection({required this.repository,
+    required this.productId, required this.actor});
+  final ProductBarcodeAliasRepository repository;
+  final String productId;
+  final ActiveUser? actor;
+
+  @override
+  State<_BarcodeAliasesSection> createState() => _BarcodeAliasesSectionState();
+}
+
+class _BarcodeAliasesSectionState extends State<_BarcodeAliasesSection> {
+  late Future<List<ProductBarcodeAlias>> aliases =
+      widget.repository.forProduct(widget.productId);
+
+  void reload() => setState(() {
+    aliases = widget.repository.forProduct(widget.productId);
+  });
+
+  Future<void> edit([ProductBarcodeAlias? alias]) async {
+    final code = TextEditingController(text: alias?.barcode);
+    final label = TextEditingController(text: alias?.label);
+    String? type = alias?.type;
+    String? error;
+    await showDialog<void>(context: context, builder: (dialogContext) =>
+      StatefulBuilder(builder: (context, update) => AlertDialog(
+        title: Text(alias == null ? 'Add barcode alias' : 'Edit barcode alias'),
+        content: SizedBox(width: 380, child: Column(
+          mainAxisSize: MainAxisSize.min, children: [
+          if (alias == null) TextField(controller: code,
+            maxLength: 128, decoration: const InputDecoration(labelText: 'Barcode'))
+          else Text(alias.barcode),
+          DropdownButtonFormField<String>(initialValue: type,
+            decoration: const InputDecoration(labelText: 'Type (optional)'),
+            items: [null, 'Internal', 'Manufacturer', 'Supplier', 'Legacy', 'Other']
+              .map((item) => DropdownMenuItem<String>(value: item,
+                child: Text(item ?? 'None'))).toList(),
+            onChanged: (value) => update(() => type = value)),
+          TextField(controller: label,
+            decoration: const InputDecoration(labelText: 'Label / notes')),
+          if (error != null) Text(error!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error)),
+        ])),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel')),
+          FilledButton(onPressed: () async {
+            try {
+              if (alias == null) {
+                await widget.repository.add(widget.actor!, widget.productId,
+                  code.text, type: type, label: label.text);
+              } else {
+                await widget.repository.update(widget.actor!, alias,
+                  type: type, label: label.text);
+              }
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
+              if (mounted) reload();
+            } catch (exception) {
+              update(() => error = exception.toString()
+                .replaceFirst('Bad state: ', ''));
+            }
+          }, child: const Text('Save')),
+        ])));
+    await WidgetsBinding.instance.endOfFrame;
+    code.dispose();
+    label.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => DrawerSection(
+    title: 'Barcode aliases',
+    child: FutureBuilder<List<ProductBarcodeAlias>>(
+      future: aliases, builder: (context, snapshot) {
+        final rows = snapshot.data ?? const <ProductBarcodeAlias>[];
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (snapshot.hasError) Text('Could not load barcode aliases: ${snapshot.error}')
+          else if (rows.isEmpty) const Text('No barcode aliases.'),
+          for (final alias in rows) ListTile(
+            dense: true, contentPadding: EdgeInsets.zero,
+            title: Text(alias.barcode),
+            subtitle: Text([
+              if (alias.type?.isNotEmpty == true) alias.type!,
+              if (alias.label?.isNotEmpty == true) alias.label!,
+              alias.isActive ? 'Active' : 'Inactive',
+            ].join(' · ')),
+            trailing: widget.actor?.can(PosPermission.manageCatalog) == true
+              ? Wrap(spacing: 4, children: [
+                  IconButton(icon: const Icon(Icons.edit_outlined),
+                    tooltip: 'Edit alias', onPressed: () => edit(alias)),
+                  IconButton(icon: Icon(alias.isActive
+                      ? Icons.visibility_off_outlined : Icons.visibility_outlined),
+                    tooltip: alias.isActive ? 'Disable alias' : 'Enable alias',
+                    onPressed: () async {
+                      await widget.repository.update(widget.actor!, alias,
+                        type: alias.type, label: alias.label,
+                        isActive: !alias.isActive);
+                      if (mounted) reload();
+                    }),
+                ]) : null,
+          ),
+          if (widget.actor?.can(PosPermission.manageCatalog) == true)
+            TextButton.icon(onPressed: () => edit(),
+              icon: const Icon(Icons.add), label: const Text('Add barcode')),
+        ]);
+      }));
+}
 int? tryParseMoney(String value) => tryParsePeso(value);
 Future<void> waitForDialogExit() =>
     Future<void>.delayed(const Duration(milliseconds: 300));
@@ -195,6 +402,8 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   List<PosProduct> products = [];
   List<Category> categories = [];
   Map<String, int> stockMilli = {};
+  Map<String, KitAvailability> checkoutKitAvailability = {};
+  Map<String, String> checkoutKitDefinitions = {};
   final Map<String, String> serialLabels = {};
   final Map<String, String> batchLabels = {};
   String? categoryId;
@@ -305,7 +514,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   String get _economicsFingerprint => [
     for (final line in cart.lines)
       '${line.id}:${line.product.id}:${line.quantityMilli}:${line.totalCents}:'
-      '${line.mode}:${line.batchId}:${line.serialIds.join(',')}',
+      '${line.mode}:${line.batchId}:${line.serialIds.join(',')}:${line.kitDefinition}:${line.kitChoices}',
     'manual:$manualDiscountCents',
     'promotion:$promotionDiscountCents',
     'rewards:$rewardDiscountCents',
@@ -588,6 +797,11 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       final rows = await widget.repository.products();
       final categoryRows = await widget.repository.categories();
       final levels = await widget.repository.stockLevels();
+      final kitIds = rows.where((p) => p.productType == 'kit')
+          .map((p) => p.id).toList();
+      final kitRepository = ProductKitRepository(widget.repository.db);
+      final kitLevels = await kitRepository.availabilities(kitIds);
+      final kitDefinitions = await kitRepository.definitionSignatures(kitIds);
       final ownClaims = <String, int>{};
       if (widget.salesOrderId != null) {
         final claims = await (widget.repository.db.select(
@@ -610,7 +824,11 @@ class CheckoutScreenState extends State<CheckoutScreen> {
             for (final entry in levels.entries)
               entry.key: entry.value.$1 - entry.value.$2 +
                   (ownClaims[entry.key] ?? 0),
+            for (final id in kitIds)
+              id: (kitLevels[id]?.availableKits ?? 0) * Quantity.scale,
           };
+          checkoutKitAvailability = kitLevels;
+          checkoutKitDefinitions = kitDefinitions;
           customers = customerRows.where((c) => c.isActive).toList();
         });
       }
@@ -765,8 +983,154 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     }
   }
 
+  int _componentDemandInCart(String componentId, {String? exceptLineId}) {
+    var demand = 0;
+    for (final line in cart.lines) {
+      if (line.id == exceptLineId) continue;
+      if (line.product.productType == 'kit') {
+        for (final part in checkoutKitAvailability[line.product.id]?.components ??
+            const <KitComponentView>[]) {
+          if (part.productId == componentId) {
+            demand += part.quantityMilli * (line.quantityMilli ~/ Quantity.scale);
+          }
+        }
+      } else if (line.product.id == componentId) {
+        demand += line.quantityMilli;
+      }
+    }
+    return demand;
+  }
+
+  Future<void> _addKitToCart(PosProduct product) async {
+    if (widget.quotationId != null || widget.salesOrderId != null) {
+      setState(() => message = 'Kit checkout is unavailable for linked orders');
+      return;
+    }
+    await refresh();
+    if (!mounted) return;
+    final kit = checkoutKitAvailability[product.id];
+    final definition = checkoutKitDefinitions[product.id];
+    if (kit == null || kit.components.isEmpty || definition == null) {
+      setState(() => message = 'Kit has no components');
+      return;
+    }
+    final existing = cart.lines.where((l) => l.product.id == product.id).firstOrNull;
+    if (existing != null && existing.kitDefinition != definition) {
+      setState(() => message = 'Kit definition changed. Remove and add it again.');
+      return;
+    }
+    final nextMilli = (existing?.quantityMilli ?? 0) + Quantity.scale;
+    for (final part in kit.components) {
+      final needed = part.quantityMilli * (nextMilli ~/ Quantity.scale) +
+          _componentDemandInCart(part.productId, exceptLineId: existing?.id);
+      if (needed > (stockMilli[part.productId] ?? 0)) {
+        setState(() => message = 'Not enough ${part.name} for ${product.name}.');
+        return;
+      }
+    }
+    final choices = <String, KitComponentChoice>{...existing?.kitChoices ?? {}};
+    final special = kit.components.where((part) {
+      final p = products.where((p) => p.id == part.productId).firstOrNull;
+      return p?.serialTracking == true || p?.business.batch == true;
+    }).toList();
+    if (special.isNotEmpty) {
+      final serialOptions = <String, List<SerialUnit>>{};
+      final batchOptions = <String, List<ProductLot>>{};
+      for (final part in special) {
+        final p = products.firstWhere((p) => p.id == part.productId);
+        if (p.serialTracking) {
+          serialOptions[part.productId] =
+              await widget.repository.availableSerials(part.productId);
+        }
+        if (p.business.batch) {
+          final now = DateTime.now();
+          final today = DateTime(now.year, now.month, now.day);
+          batchOptions[part.productId] = (await widget.repository.batches(part.productId))
+              .where((b) => b.quantityMilli >=
+                  part.quantityMilli * (nextMilli ~/ Quantity.scale) &&
+                  (b.expiryDate == null || !b.expiryDate!.isBefore(today)))
+              .toList();
+        }
+      }
+      if (!mounted) return;
+      final accepted = await showDialog<bool>(context: context,
+          builder: (dialog) => StatefulBuilder(builder: (context, update) => AlertDialog(
+            title: Text('Kit components · ${product.name}'),
+            content: SizedBox(width: 460, height: 420, child: ListView(children: [
+              Text('Kit quantity: ${nextMilli ~/ Quantity.scale}'),
+              for (final part in special) ...[
+                const SizedBox(height: 12),
+                Text('${part.name} · ${Quantity.format(part.quantityMilli * (nextMilli ~/ Quantity.scale))} required',
+                  style: Theme.of(context).textTheme.titleSmall),
+                if (batchOptions.containsKey(part.productId))
+                  DropdownButtonFormField<String>(
+                    initialValue: choices[part.productId]?.batchId,
+                    decoration: const InputDecoration(labelText: 'Batch'),
+                    items: [for (final batch in batchOptions[part.productId]!)
+                      DropdownMenuItem(value: batch.id, child: Text(batch.batchNumber))],
+                    onChanged: (id) => update(() {
+                      final old = choices[part.productId];
+                      choices[part.productId] = KitComponentChoice(
+                        batchId: id, serialIds: old?.serialIds ?? const []);
+                    })),
+                if (serialOptions.containsKey(part.productId)) ...[
+                  Text('Selected serials: ${choices[part.productId]?.serialIds.length ?? 0} / ${part.quantityMilli * (nextMilli ~/ Quantity.scale) ~/ Quantity.scale}'),
+                  SizedBox(height: 170, child: ListView(children: [
+                    for (final serial in serialOptions[part.productId]!)
+                      CheckboxListTile(dense: true,
+                        title: Text(serial.serialNumber),
+                        value: choices[part.productId]?.serialIds.contains(serial.id) ?? false,
+                        onChanged: (selected) => update(() {
+                          final old = choices[part.productId];
+                          final ids = [...?old?.serialIds];
+                          if (selected == true) {
+                            if (!ids.contains(serial.id)) ids.add(serial.id);
+                          } else {
+                            ids.remove(serial.id);
+                          }
+                          choices[part.productId] = KitComponentChoice(
+                            batchId: old?.batchId, serialIds: ids);
+                        })),
+                  ])),
+                ],
+              ],
+            ])),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialog, false),
+                child: const Text('Cancel')),
+              FilledButton(onPressed: () {
+                for (final part in special) {
+                  final p = products.firstWhere((p) => p.id == part.productId);
+                  final selected = choices[part.productId];
+                  if (p.business.batch && selected?.batchId == null) return;
+                  if (p.serialTracking &&
+                      (selected?.serialIds.length ?? 0) * Quantity.scale !=
+                          part.quantityMilli * (nextMilli ~/ Quantity.scale)) {
+                    return;
+                  }
+                }
+                Navigator.pop(dialog, true);
+              }, child: const Text('Add kit')),
+            ],
+          )));
+      if (accepted != true || !mounted) return;
+    }
+    setState(() {
+      cart.add(product);
+      final line = cart.lines.firstWhere((l) => l.product.id == product.id);
+      line.kitDefinition = definition;
+      line.kitChoices = choices;
+      message = null;
+    });
+    await _refreshLayerPrices();
+  }
+
   Future<void> addToCart(PosProduct product,
       {String? scannedSerialId, String? scannedSerialLabel}) async {
+    if (product.productType == 'kit') {
+      await _addKitToCart(product);
+      return;
+    }
     if (widget.quotationId != null || widget.salesOrderId != null) {
       setState(() => message =
           'This checkout is linked to a saved quotation. Cancel conversion to change the items.');
@@ -1230,6 +1594,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
   }
 
   Future<void> checkout() async {
+    await refresh();
     if (busy || pricingPending) return;
     await _evaluatePromotions();
     _invalidateChangedApproval();
@@ -1801,6 +2166,10 @@ class CheckoutScreenState extends State<CheckoutScreen> {
         continue;
       }
       final milli = data['quantityMilli'] as int;
+      if (product.productType == 'kit' &&
+          data['kitDefinition'] != checkoutKitDefinitions[product.id]) {
+        problems.add('${product.name}: Kit definition changed. Review the item again.');
+      }
       byProduct.update(id, (old) => old + milli, ifAbsent: () => milli);
       if (product.priceCents != data['unitPriceCents']) priceChanged = true;
       final serials = (data['serialIds'] as List).cast<String>();
@@ -1827,11 +2196,17 @@ class CheckoutScreenState extends State<CheckoutScreen> {
           mode: data['mode'] as String,
           batchId: batchId,
           serialIds: serials,
-          extraCents: data['extraCents'] as int));
+          extraCents: data['extraCents'] as int,
+          kitDefinition: data['kitDefinition'] as String?,
+          kitChoices: {
+            for (final entry in ((data['kitChoices'] as Map?) ?? const {}).entries)
+              entry.key.toString(): KitComponentChoice.fromJson(
+                (entry.value as Map).cast<String, dynamic>())
+          }));
     }
     for (final entry in byProduct.entries) {
       final product = products.where((p) => p.id == entry.key).firstOrNull;
-      if (product != null &&
+      if (product != null && product.productType != 'kit' &&
           !product.business.madeToOrder &&
           (stockMilli[entry.key] ?? 0) < entry.value) {
         problems.add('${product.name}: some items are no longer available.');
@@ -2966,7 +3341,9 @@ class CheckoutScreenState extends State<CheckoutScreen> {
         !made &&
         available != null &&
         available <= product.lowStockThreshold * Quantity.scale;
-    final status = made
+    final status = product.productType == 'kit'
+        ? 'Available: ${(available ?? 0) ~/ Quantity.scale} kits'
+        : made
         ? 'Made to order'
         : out
             ? 'Out of stock'
@@ -2975,14 +3352,16 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                 : available == null
                     ? 'Checking stock'
                     : '${Quantity.format(available)}${product.business.weight ? ' ${product.business.unit.label}' : ''} available';
-    final specialty = product.serialTracking
+    final specialty = product.productType == 'kit'
+        ? 'Kit'
+        : product.serialTracking
         ? 'Serialized'
         : product.business.batch
             ? 'Batch'
             : product.business.weight
                 ? 'Weight'
                 : null;
-    final configurable = product.serialTracking ||
+    final configurable = product.productType == 'kit' || product.serialTracking ||
         product.business.batch ||
         product.business.weight ||
         product.business.tank ||
@@ -3032,7 +3411,7 @@ class CheckoutScreenState extends State<CheckoutScreen> {
                         if (low) _cardBadge(context, 'Low stock'),
                         if (out) _cardBadge(context, 'Out of stock'),
                       ]),
-                    if (!out && !low)
+                    if (product.productType == 'kit' || (!out && !low))
                       Text(status,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -3657,12 +4036,50 @@ class CheckoutScreenState extends State<CheckoutScreen> {
       }
     }
     for (final line in cart.lines) {
+      if (line.product.productType == 'kit' &&
+          (line.kitDefinition == null ||
+           line.kitDefinition != checkoutKitDefinitions[line.product.id])) {
+        return 'Kit definition changed. Review ${line.product.name} before checkout.';
+      }
       if (line.product.serialTracking &&
           line.serialIds.length * Quantity.scale != line.quantityMilli) {
         return 'Select a serial for each unit of ${line.product.name}.';
       }
       if (line.product.business.batch && line.batchId == null) {
         return 'Select a batch for ${line.product.name}.';
+      }
+    }
+    final demand = <String, int>{};
+    for (final line in cart.lines) {
+      if (line.product.productType == 'kit') {
+        if (line.quantityMilli % Quantity.scale != 0) {
+          return 'Kit quantity must be whole units.';
+        }
+        for (final part in checkoutKitAvailability[line.product.id]?.components ??
+            const <KitComponentView>[]) {
+          demand.update(part.productId,
+              (n) => n + part.quantityMilli * (line.quantityMilli ~/ Quantity.scale),
+              ifAbsent: () => part.quantityMilli * (line.quantityMilli ~/ Quantity.scale));
+          final component = products.where((p) => p.id == part.productId).firstOrNull;
+          if (component?.serialTracking == true &&
+              (line.kitChoices[part.productId]?.serialIds.length ?? 0) * Quantity.scale !=
+                  part.quantityMilli * (line.quantityMilli ~/ Quantity.scale)) {
+            return 'Select ${part.name} serials for ${line.product.name}.';
+          }
+          if (component?.business.batch == true &&
+              line.kitChoices[part.productId]?.batchId == null) {
+            return 'Select a ${part.name} batch for ${line.product.name}.';
+          }
+        }
+      } else if (!line.product.business.madeToOrder) {
+        demand.update(line.product.id, (n) => n + line.quantityMilli,
+            ifAbsent: () => line.quantityMilli);
+      }
+    }
+    for (final entry in demand.entries) {
+      if (entry.value > (stockMilli[entry.key] ?? 0)) {
+        final name = products.where((p) => p.id == entry.key).firstOrNull?.name ?? 'component';
+        return 'Not enough $name for this cart.';
       }
     }
     return null;
@@ -3676,6 +4093,24 @@ class CheckoutScreenState extends State<CheckoutScreen> {
     if (line.product.serialTracking &&
         milli != line.serialIds.length * Quantity.scale) {
       return 'Select a serial for each unit before changing quantity.';
+    }
+    if (line.product.productType == 'kit') {
+      if (milli % Quantity.scale != 0) return 'Kit quantity must be whole units.';
+      for (final part in checkoutKitAvailability[line.product.id]?.components ??
+          const <KitComponentView>[]) {
+        final needed = part.quantityMilli * (milli ~/ Quantity.scale) +
+            _componentDemandInCart(part.productId, exceptLineId: line.id);
+        if (needed > (stockMilli[part.productId] ?? 0)) {
+          return 'Not enough ${part.name} for this cart.';
+        }
+        final component = products.where((p) => p.id == part.productId).firstOrNull;
+        if (component?.serialTracking == true &&
+            (line.kitChoices[part.productId]?.serialIds.length ?? 0) * Quantity.scale !=
+                part.quantityMilli * (milli ~/ Quantity.scale)) {
+          return 'Remove and add the Kit again to select component serials.';
+        }
+      }
+      return null;
     }
     final available = stockMilli[line.product.id];
     final otherQuantity = cart.lines
@@ -4196,10 +4631,13 @@ class _ProductScreenState extends State<ProductScreen> {
   List<Category> categories = [];
   Map<String, List<InventoryLayer>> activeLayers = {};
   Map<String, (int physical, int reserved)> stockLevels = {};
+  Map<String, KitAvailability> kitAvailabilities = {};
   Map<String, InventoryPlanningRow> planning = {};
   Map<String, InventoryProductHealth> inventoryHealth = {};
   String? error;
   String search = '';
+  String? aliasSearchProductId;
+  int aliasSearchRevision = 0;
   late String filter = widget.initialFilter;
   @override
   void initState() {
@@ -4217,6 +4655,8 @@ class _ProductScreenState extends State<ProductScreen> {
     final categoryRows = await widget.repository.categories();
     final layerRows = await widget.repository.activeLayersByProduct();
     final levels = await widget.repository.stockLevels();
+    final kitLevels = await ProductKitRepository(widget.repository.db)
+        .availabilities(rows.where((p) => p.productType == 'kit').map((p) => p.id));
     final health = await InventoryHealthRepository(widget.repository.db).load();
     final plans = {
       for (final entry in health.products.entries)
@@ -4228,6 +4668,7 @@ class _ProductScreenState extends State<ProductScreen> {
         categories = categoryRows;
         activeLayers = layerRows;
         stockLevels = levels;
+        kitAvailabilities = kitLevels;
         planning = plans;
         inventoryHealth = health.products;
       });
@@ -4318,6 +4759,7 @@ class _ProductScreenState extends State<ProductScreen> {
     bool serialTracking = product?.serialTracking ?? false;
     bool made = product?.business.madeToOrder ?? false;
     String pricingPolicy = product?.pricingPolicy ?? 'current';
+    String productType = product?.productType ?? 'standard';
     String stockSetup = 'zero';
     final existingStock =
         product == null ? 0 : await widget.repository.stockMilli(product.id);
@@ -4561,6 +5003,24 @@ class _ProductScreenState extends State<ProductScreen> {
                                                                 labelText:
                                                                     'Product name *')),
                                                     const SizedBox(height: 12),
+                                                    DropdownButtonFormField<String>(
+                                                      initialValue: productType,
+                                                      decoration: const InputDecoration(labelText: 'Product type'),
+                                                      items: const [
+                                                        DropdownMenuItem(value: 'standard', child: Text('Standard')),
+                                                        DropdownMenuItem(value: 'kit', child: Text('Kit')),
+                                                      ],
+                                                      onChanged: product == null
+                                                          ? (value) => update(() {
+                                                              productType = value!;
+                                                              if (value == 'kit') {
+                                                                active = false;
+                                                                stockSetup = 'zero';
+                                                              }
+                                                            })
+                                                          : null,
+                                                    ),
+                                                    const SizedBox(height: 12),
                                                     Row(children: [
                                                       Expanded(
                                                           child: TextField(
@@ -4682,7 +5142,7 @@ class _ProductScreenState extends State<ProductScreen> {
                                                   style: Theme.of(context)
                                                       .textTheme
                                                       .titleMedium),
-                                              if (product == null && !made) ...[
+                                              if (product == null && !made && productType != 'kit') ...[
                                                 const SizedBox(height: 12),
                                                 for (final choice in <(
                                                   String,
@@ -4778,7 +5238,7 @@ class _ProductScreenState extends State<ProductScreen> {
                                                                 'Use one product price')),
                                                         DropdownMenuItem(
                                                             value: 'layer',
-                                                            enabled: !(refill ||
+                                                            enabled: productType != 'kit' && !(refill ||
                                                                 tank ||
                                                                 made),
                                                             child: const Text(
@@ -5829,6 +6289,7 @@ class _ProductScreenState extends State<ProductScreen> {
                                                 priceCents: priceCents,
                                                 costCents: costCents,
                                                 pricingPolicy: pricingPolicy,
+                                                productType: productType,
                                                 startingStockMilli:
                                                     initialMilli,
                                                 lowStockThreshold:
@@ -6078,6 +6539,9 @@ class _ProductScreenState extends State<ProductScreen> {
     final reserved = stock[1];
     final incoming = stock[2];
     final available = physical - reserved;
+    final kit = product.productType == 'kit'
+        ? await ProductKitRepository(widget.repository.db).availability(product.id)
+        : null;
     final unit = product.business.unit.label;
     if (!mounted) return;
     await showRecordDetailsDrawer<void>(
@@ -6092,10 +6556,11 @@ class _ProductScreenState extends State<ProductScreen> {
               color: product.isActive
                   ? null
                   : Theme.of(context).colorScheme.error),
-          if (physical <= 0)
+          if (kit != null) const DrawerStatusBadge('Kit'),
+          if (kit == null && physical <= 0)
             DrawerStatusBadge('Out of stock',
                 color: Theme.of(context).colorScheme.error),
-          if (physical > 0 &&
+          if (kit == null && physical > 0 &&
               physical <= product.lowStockThreshold * Quantity.scale)
             DrawerStatusBadge('Low stock',
                 color: Theme.of(context).colorScheme.tertiary),
@@ -6104,7 +6569,31 @@ class _ProductScreenState extends State<ProductScreen> {
         ],
         content:
             Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          DrawerSection(
+          if (kit != null) DrawerSection(
+            title: 'Kit summary',
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              DrawerLabelValue(label: 'Kit price', value: money(product.priceCents)),
+              DrawerLabelValue(label: 'Estimated component cost',
+                  value: kit.estimatedCostCents == null ? 'Unknown' : money(kit.estimatedCostCents!)),
+              DrawerLabelValue(label: 'Estimated margin',
+                  value: kit.estimatedCostCents == null ? 'Unknown' :
+                    '${money(product.priceCents - kit.estimatedCostCents!)} · ${product.priceCents == 0 ? 'Percentage unavailable' : '${((product.priceCents - kit.estimatedCostCents!) * 100 / product.priceCents).toStringAsFixed(1)}%'}'),
+              DrawerLabelValue(label: 'Available kits', value: '${kit.availableKits}'),
+              DrawerLabelValue(label: 'Component count', value: '${kit.components.length}'),
+              if (kit.limitingComponent != null)
+                DrawerLabelValue(label: 'Limiting component', value: kit.limitingComponent!),
+              const SizedBox(height: 8),
+              _KitComponentsEditor(repository: widget.repository, product: product,
+                components: kit.components, actor: actor, onChanged: () async {
+                  Navigator.pop(context);
+                  await refresh();
+                  final updated = (await widget.repository.products())
+                      .where((p) => p.id == product.id).firstOrNull;
+                  if (updated != null && mounted) await showProduct(updated);
+                }),
+            ]),
+          ),
+          if (kit == null) DrawerSection(
             title: 'Stock snapshot',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -6139,7 +6628,7 @@ class _ProductScreenState extends State<ProductScreen> {
               ],
             ),
           ),
-          DrawerSection(
+          if (kit == null) DrawerSection(
             title: 'Pricing & Margin',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -6190,7 +6679,7 @@ class _ProductScreenState extends State<ProductScreen> {
                         TextButton(onPressed: () => _showOlderPrices(product.id, actor),
                             child: const Text('Older price changes'))],
             )),
-          DrawerSection(
+          if (kit == null) DrawerSection(
             title: 'Inventory health',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -6316,7 +6805,11 @@ class _ProductScreenState extends State<ProductScreen> {
                     const DrawerStatusBadge('Made to order'),
                 ],
               )),
-          ExpansionTile(
+          _BarcodeAliasesSection(
+              repository: ProductBarcodeAliasRepository(widget.repository.db),
+              productId: product.id,
+              actor: actor),
+          if (kit == null) ExpansionTile(
               tilePadding: EdgeInsets.zero,
               title: const Text('Stock layers'),
               children: [
@@ -6406,7 +6899,7 @@ class _ProductScreenState extends State<ProductScreen> {
                   },
                 )
               ]),
-          FutureBuilder(
+          if (kit == null) FutureBuilder(
             future: widget.repository.movements(product.id),
             builder: (context, value) => ExpansionTile(
               title: const Text('View stock movements'),
@@ -6419,70 +6912,21 @@ class _ProductScreenState extends State<ProductScreen> {
               ],
             ),
           ),
-          if (product.serialTracking)
-            FutureBuilder<(List<SerialUnit>, List<InventoryLayer>)>(
-              future: (() async => (
-                    await widget.repository.availableSerials(product.id),
-                    await widget.repository.layersForProduct(product.id),
-                  ))(),
-              builder: (context, value) => ExpansionTile(
-                tilePadding: EdgeInsets.zero,
-                title:
-                    Text('AVAILABLE SERIALS (${value.data?.$1.length ?? 0})'),
-                children: [
-                  if ((value.data?.$1 ?? const <SerialUnit>[]).isEmpty)
-                    const ListTile(title: Text('No available serials.'))
-                  else
-                    SizedBox(
-                        height: (value.data?.$1.length ?? 0) > 4
-                            ? 240
-                            : ((value.data?.$1.length ?? 0) * 48 + 40)
-                                .toDouble(),
-                        child: SingleChildScrollView(
-                            child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: DataTable(
-                            headingRowHeight: 40,
-                            dataRowMinHeight: 40,
-                            dataRowMaxHeight: 48,
-                            columnSpacing: 18,
-                            columns: const [
-                              DataColumn(label: Text('Serial')),
-                              DataColumn(label: Text('Status')),
-                              DataColumn(label: Text('Cost')),
-                              DataColumn(label: Text('Selling')),
-                              DataColumn(label: Text('Source')),
-                              DataColumn(label: Text('Received')),
-                            ],
-                            rows: (value.data?.$1 ?? <SerialUnit>[])
-                                .map((serial) {
-                              final layer = value.data?.$2
-                                  .where((l) => l.id == serial.inventoryLayerId)
-                                  .firstOrNull;
-                              return DataRow(cells: [
-                                DataCell(Text(serial.serialNumber)),
-                                DataCell(Text(serial.status)),
-                                DataCell(Text(layer == null
-                                    ? '—'
-                                    : money(layer.unitCostCents))),
-                                DataCell(Text(product.pricingPolicy == 'layer'
-                                    ? (layer?.unitSellingPriceCents == null
-                                        ? '—'
-                                        : money(layer!.unitSellingPriceCents!))
-                                    : money(product.priceCents))),
-                                DataCell(Text(layer?.source == 'opening'
-                                    ? 'Opening stock'
-                                    : 'Supplier receiving')),
-                                DataCell(Text(layer == null
-                                    ? '—'
-                                    : MaterialLocalizations.of(context)
-                                        .formatMediumDate(layer.receivedAt))),
-                              ]);
-                            }).toList(),
-                          ),
-                        ))),
-                ],
-              ),
+          if (product.serialTracking && actor != null &&
+              (actor.can(PosPermission.stockReceiving) ||
+               actor.can(PosPermission.manageCatalog)))
+            ListTile(
+              leading: const Icon(Icons.qr_code_2),
+              title: const Text('Serials'),
+              subtitle: const Text('Search serial lifecycle history'),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => SerialExplorer(
+                  repository: SerialLifecycleRepository(widget.repository.db),
+                  user: actor, productId: product.id,
+                  canOpenRecord: (event) =>
+                      canOpenSerialRecord(event, actor),
+                  onOpenRecord: (event) => openSerialRecord(context, event,
+                      actor, widget.auth, widget.repository)))),
             ),
           if (product.business.batch)
             FutureBuilder(
@@ -6520,7 +6964,7 @@ class _ProductScreenState extends State<ProductScreen> {
                 _editPlanning(product, plan);
               },
               child: const Text('Reorder settings')),
-          if (widget.onReceiveStock != null && !product.business.madeToOrder)
+          if (widget.onReceiveStock != null && product.productType != 'kit' && !product.business.madeToOrder)
             OutlinedButton(
                 onPressed: () {
                   Navigator.pop(context);
@@ -6528,6 +6972,7 @@ class _ProductScreenState extends State<ProductScreen> {
                 },
                 child: const Text('Receive stock')),
           if (widget.onCreatePurchaseOrder != null &&
+              product.productType != 'kit' &&
               !product.business.madeToOrder)
             OutlinedButton(
                 onPressed: () {
@@ -6676,8 +7121,18 @@ class _ProductScreenState extends State<ProductScreen> {
             decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.search),
                 labelText: 'Search name, SKU, or barcode'),
-            onChanged: (value) =>
-                setState(() => search = value.toLowerCase().trim()),
+            onChanged: (value) async {
+              final revision = ++aliasSearchRevision;
+              setState(() {
+                search = value.toLowerCase().trim();
+                aliasSearchProductId = null;
+              });
+              final id = await ProductBarcodeAliasRepository(widget.repository.db)
+                  .productIdFor(value);
+              if (mounted && revision == aliasSearchRevision) {
+                setState(() => aliasSearchProductId = id);
+              }
+            },
           ),
           const SizedBox(height: 12),
           Wrap(spacing: 8, runSpacing: 4, children: [
@@ -6721,6 +7176,7 @@ class _ProductScreenState extends State<ProductScreen> {
           ...products
               .where((p) =>
                   (search.isEmpty ||
+                      p.id == aliasSearchProductId ||
                       p.name.toLowerCase().contains(search) ||
                       (p.sku ?? '').toLowerCase().contains(search) ||
                       (p.barcode ?? '').toLowerCase().contains(search) ||
@@ -6747,7 +7203,9 @@ class _ProductScreenState extends State<ProductScreen> {
                       filter == 'Low stock'))
               .map((p) {
             final available =
-                (stockLevels[p.id]?.$1 ?? 0) - (stockLevels[p.id]?.$2 ?? 0);
+                p.productType == 'kit'
+                    ? (kitAvailabilities[p.id]?.availableKits ?? 0) * Quantity.scale
+                    : (stockLevels[p.id]?.$1 ?? 0) - (stockLevels[p.id]?.$2 ?? 0);
             final plan = planning[p.id];
             final health = inventoryHealth[p.id];
             final narrow = MediaQuery.sizeOf(context).width < 700;
@@ -6784,15 +7242,18 @@ class _ProductScreenState extends State<ProductScreen> {
                             Text(
                                 '${p.sku ?? categories.where((c) => c.id == p.categoryId).firstOrNull?.name ?? ''}${p.isActive ? '' : ' · Inactive'}'),
                           Text(
-                              'Selling: ${_sellingRange(p)} / ${p.business.unit.label}   ·   Purchase cost: ${_costRange(p)}'),
+                              p.productType == 'kit'
+                                ? 'Kit price: ${money(p.priceCents)} · ${kitAvailabilities[p.id]?.components.length ?? 0} components'
+                                : 'Selling: ${_sellingRange(p)} / ${p.business.unit.label}   ·   Purchase cost: ${_costRange(p)}'),
                           if (narrow)
                             Text(
-                                '${Quantity.format(available)} ${p.business.unit.label} available'),
-                          if (plan != null && plan.incomingMilli > 0)
+                                p.productType == 'kit' ? 'Available: ${kitAvailabilities[p.id]?.availableKits ?? 0} kits' : '${Quantity.format(available)} ${p.business.unit.label} available'),
+                          if (p.productType != 'kit' && plan != null && plan.incomingMilli > 0)
                             Text(
                                 '${Quantity.format(plan.incomingMilli)} ${p.business.unit.label} incoming'),
                           const SizedBox(height: 4),
                           Wrap(spacing: 6, runSpacing: 4, children: [
+                            _badge(p.productType == 'kit' ? 'Kit' : 'Standard'),
                             if (p.serialTracking) _badge('Serialized'),
                             if (p.business.batch) _badge('Batch'),
                             if (p.business.weight) _badge('Weight'),
@@ -6822,7 +7283,7 @@ class _ProductScreenState extends State<ProductScreen> {
                             crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
                                 Text(
-                                    '${Quantity.format(available)} ${p.business.unit.label} available',
+                                    p.productType == 'kit' ? 'Available: ${kitAvailabilities[p.id]?.availableKits ?? 0} kits' : '${Quantity.format(available)} ${p.business.unit.label} available',
                                     style: const TextStyle(
                                         fontWeight: FontWeight.w600)),
                                 const Icon(Icons.chevron_right, size: 18),

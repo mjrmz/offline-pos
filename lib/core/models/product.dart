@@ -13,6 +13,7 @@ class PosProduct {
   final BusinessProduct business;
   final bool serialTracking;
   final String pricingPolicy;
+  final String productType;
   const PosProduct(
       this.id, this.name, this.barcode, this.priceCents, this.isActive,
       [this.sku,
@@ -21,5 +22,6 @@ class PosProduct {
       this.lowStockThreshold = 5,
       this.business = const BusinessProduct(),
       this.serialTracking = false,
-      this.pricingPolicy = 'current']);
+      this.pricingPolicy = 'current',
+      this.productType = 'standard']);
 }

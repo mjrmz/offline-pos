@@ -230,6 +230,7 @@ class RmaRepository {
         final product = await (db.select(db.products)
               ..where((p) => p.id.equals(item.productId)))
             .getSingle();
+        if (product.productType == 'kit') continue;
         final label =
             'Receipt #${sale.receiptNumber ?? 'Legacy sale'} · ${customer?.name ?? 'Walk-in'} · ${item.productName} ${serials.map((s) => s.serialNumber).join(', ')}';
         final searchable = '$label ${customer?.phone ?? ''} '
@@ -326,6 +327,9 @@ class RmaRepository {
         final product = await (db.select(db.products)
               ..where((p) => p.id.equals(item.productId)))
             .getSingle();
+        if (product.productType == 'kit') {
+          throw StateError('Kit Sale RMA needs component-specific handling and is unavailable in this release');
+        }
         final config =
             await BusinessFeatureRepository(db).businessProduct(product.id);
         if (quantityMilli <= 0 ||

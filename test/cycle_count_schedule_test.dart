@@ -198,11 +198,13 @@ void main() {
     await original.close();
     final raw = sqlite.sqlite3.open(file.path);
     raw.execute('DROP TABLE cycle_count_schedules');
+    raw.execute('DROP TABLE cash_shift_handover_denominations');
+    raw.execute('DROP TABLE cash_shift_handovers');
     raw.execute('PRAGMA user_version = 50');
     raw.dispose();
     final upgraded = AppDatabase.forTesting(NativeDatabase(file));
     addTearDown(upgraded.close);
-    expect(upgraded.schemaVersion, 51);
+    expect(upgraded.schemaVersion, 55);
     expect((await upgraded.select(upgraded.products).get()).single.name,
         'Keep me');
     expect(await upgraded.select(upgraded.cycleCountSchedules).get(), isEmpty);

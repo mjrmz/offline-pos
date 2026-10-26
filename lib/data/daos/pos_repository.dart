@@ -3,6 +3,7 @@ import '../../core/models/product.dart';
 import '../../core/models/business_product.dart';
 import '../../core/models/business_feature.dart';
 import '../../core/models/quantity.dart';
+import '../../core/models/kit_component_choice.dart';
 import '../../core/models/manual_discount.dart';
 import '../../core/models/promotion_evaluation.dart';
 import '../../core/services/promotion_engine.dart';
@@ -11,8 +12,10 @@ import 'business_feature_repository.dart';
 import 'inventory_layer_repository.dart';
 import '../../core/models/active_user.dart';
 import 'auth_repository.dart';
+import 'product_barcode_alias_repository.dart';
 import 'loyalty_repository.dart';
 import 'product_margin_repository.dart';
+import 'product_kit_repository.dart';
 import '../../core/services/auth_service.dart';
 import 'dart:convert';
 import '../database.dart';
@@ -27,12 +30,16 @@ class SaleLineRequest {
   final String? batchId;
   final List<String> serialIds;
   final String? lineKey;
+  final String? kitDefinition;
+  final Map<String, KitComponentChoice> kitChoices;
   const SaleLineRequest(this.productId, this.quantity,
       {this.quantityMilli,
       this.lineKey,
       this.mode = 'ordinary',
       this.batchId,
-      this.serialIds = const []});
+      this.serialIds = const [],
+      this.kitDefinition,
+      this.kitChoices = const {}});
 }
 
 class OpeningBatch {
@@ -56,6 +63,7 @@ class _ResolvedLine {
   final int lineCents;
   final List<SerialUnit> serials;
   final List<LayerConsumption> layers;
+  final List<_KitComponentPlan> kitComponents;
   const _ResolvedLine(
       this.product,
       this.config,
@@ -66,7 +74,22 @@ class _ResolvedLine {
       this.lineCents,
       this.serials,
       this.layers,
-      this.lineKey);
+      this.lineKey,
+      [this.kitComponents = const []]);
+}
+
+class _KitComponentPlan {
+  final Product product;
+  final BusinessProduct config;
+  final int requiredMilli;
+  final int totalMilli;
+  final ProductLot? batch;
+  final List<SerialUnit> serials;
+  final List<LayerConsumption> layers;
+  const _KitComponentPlan(this.product, this.config, this.requiredMilli,
+      this.totalMilli, this.batch, this.serials, this.layers);
+  int get costCents => layers.fold<int>(0, (sum, part) =>
+      sum + Quantity.lineCents(part.layer.unitCostCents, part.quantityMilli));
 }
 
 class CommittedSale {
@@ -101,7 +124,8 @@ class PosRepository {
           row.lowStockThreshold,
           business,
           row.serialTracking,
-          row.pricingPolicy);
+          row.pricingPolicy,
+          row.productType);
 
   Future<List<Category>> categories() => (db.select(db.categories)
         ..orderBy([(c) => OrderingTerm(expression: c.name)]))
@@ -289,13 +313,19 @@ class PosRepository {
   }
 
   Future<PosProduct?> barcode(String code) async {
+    code = ProductBarcodeAliasRepository.normalize(code);
     final rows = await (db.select(db.products)
           ..where((p) => p.barcode.equals(code)))
         .get();
     if (rows.length > 1) {
       throw StateError('Barcode conflict: $code matches multiple products');
     }
-    final row = rows.firstOrNull;
+    final aliasId = rows.isEmpty
+        ? await ProductBarcodeAliasRepository(db).productIdFor(code)
+        : null;
+    final row = rows.firstOrNull ?? (aliasId == null ? null :
+        await (db.select(db.products)..where((p) => p.id.equals(aliasId)))
+            .getSingleOrNull());
     if (row == null) return null;
     if (!row.isActive) throw StateError('Product is inactive');
     return _product(
@@ -315,6 +345,13 @@ class PosRepository {
         barcode.isNotEmpty &&
         p.barcode == barcode)) {
       throw StateError('Barcode already exists');
+    }
+    if (barcode != null && barcode.isNotEmpty) {
+      final owner = await ProductBarcodeAliasRepository(db)
+          .ownerName(barcode, exceptProductId: exceptId);
+      if (owner != null) {
+        throw StateError('This barcode is already assigned to $owner.');
+      }
     }
   }
 
@@ -354,11 +391,23 @@ class PosRepository {
       int? openingCostCents,
       int? openingSellingPriceCents,
       String? pricingPolicy,
+      String productType = 'standard',
       BusinessProduct? business,
       String? batchNumber,
       DateTime? batchExpiry,
       String? actorId}) async {
     final initialMilli = startingStockMilli ?? startingStock * Quantity.scale;
+    if (!{'standard', 'kit'}.contains(productType)) {
+      throw ArgumentError('Invalid product type');
+    }
+    if (productType == 'kit' &&
+        (initialMilli != 0 || openingBatches.isNotEmpty || openingSerials.isNotEmpty ||
+            serialTracking == true || pricingPolicy == 'layer')) {
+      throw StateError('Kits cannot own stock, serials, or stock layers');
+    }
+    if (id == null && productType == 'kit' && isActive) {
+      throw StateError('Create kit inactive, then add components');
+    }
     if (id != null && initialMilli != 0) {
       throw StateError(
           'Existing stock can only change through receiving or an inventory adjustment');
@@ -458,6 +507,15 @@ class PosRepository {
         final oldProduct = await (db.select(db.products)
               ..where((p) => p.id.equals(id)))
             .getSingle();
+        if (oldProduct.productType != productType) {
+          throw StateError('Product type cannot be changed');
+        }
+        if (productType == 'kit' && isActive) {
+          final parts = await db.customSelect(
+              'SELECT 1 FROM product_kit_components WHERE kit_product_id = ? LIMIT 1',
+              variables: [Variable.withString(id)]).get();
+          if (parts.isEmpty) throw StateError('Add a component before activating this kit');
+        }
         final previous =
             await BusinessFeatureRepository(db).businessProduct(id);
         final nextSerial = serialTracking ?? oldProduct.serialTracking;
@@ -557,6 +615,7 @@ class PosRepository {
       final row = await db.into(db.products).insertReturning(
           ProductsCompanion.insert(
               name: name.trim(),
+              productType: Value(productType),
               sku: Value(normalizedSku),
               barcode: Value(normalizedBarcode),
               categoryId: Value(categoryId),
@@ -569,9 +628,13 @@ class PosRepository {
         await (db.update(db.products)..where((p) => p.id.equals(row.id)))
             .write(const ProductsCompanion(serialTracking: Value(true)));
       }
-      await db
-          .into(db.inventory)
-          .insert(InventoryCompanion.insert(productId: row.id));
+      if (productType != 'kit') {
+        await db.into(db.inventory)
+            .insert(InventoryCompanion.insert(productId: row.id));
+      }
+      if (productType == 'kit' && actorId != null) {
+        await AuthRepository(db).audit(actorId, 'kit.created', row.id);
+      }
       if (initialMilli > 0) {
         final batches = openingBatches.isNotEmpty
             ? openingBatches
@@ -1066,6 +1129,7 @@ class PosRepository {
             await BusinessFeatureRepository(db).allProductConfigurations();
         final details = <_ResolvedLine>[];
         final plannedLayerMilli = <String, int>{};
+        final plannedProductMilli = <String, int>{};
         final plannedSerialIds = <String>{};
         var total = 0;
         for (final request in items) {
@@ -1074,6 +1138,103 @@ class PosRepository {
               .getSingleOrNull();
           if (product == null || !product.isActive) {
             throw StateError('Product is inactive or missing');
+          }
+          if (product.productType == 'kit') {
+            if (salesOrderId != null || layawayId != null || quotationId != null) {
+              throw StateError('Kit sales are not available for this linked checkout');
+            }
+            final kitMilli = request.quantityMilli ?? request.quantity * Quantity.scale;
+            if (kitMilli <= 0 || kitMilli % Quantity.scale != 0 || request.mode != 'ordinary') {
+              throw StateError('Kit quantity must be whole units');
+            }
+            final signature = await ProductKitRepository(db).definitionSignature(product.id);
+            if (signature == '[]') throw StateError('Kit has no components');
+            if (request.kitDefinition != signature) {
+              throw StateError('Kit definition changed. Review the item before checkout.');
+            }
+            final componentRows = await db.customSelect('''SELECT component_product_id,
+              quantity_milli FROM product_kit_components WHERE kit_product_id = ?
+              ORDER BY sort_order, id''',
+              variables: [Variable.withString(product.id)]).get();
+            final componentIds = componentRows
+                .map((r) => r.read<String>('component_product_id')).toList();
+            final componentProducts = {
+              for (final p in await (db.select(db.products)
+                ..where((p) => p.id.isIn(componentIds))).get()) p.id: p
+            };
+            final plans = <_KitComponentPlan>[];
+            for (final row in componentRows) {
+              final id = row.read<String>('component_product_id');
+              final component = componentProducts[id];
+              if (component == null || !component.isActive ||
+                  component.productType != 'standard') {
+                throw StateError('Kit component is no longer sellable');
+              }
+              final config = configs[id] ?? const BusinessProduct();
+              if (config.madeToOrder || config.refill || config.tank) {
+                throw StateError('${component.name} cannot be consumed by a kit sale');
+              }
+              final required = row.read<int>('quantity_milli');
+              final needed = required * (kitMilli ~/ Quantity.scale);
+              if (!config.fractional && needed % Quantity.scale != 0) {
+                throw StateError('${component.name} requires whole units');
+              }
+              final current = await stockMilli(id);
+              final available = current - await reservedStockMilli(id);
+              if (available < needed + (plannedProductMilli[id] ?? 0)) {
+                throw StateError('Not enough ${component.name} for ${product.name}: requires ${Quantity.format(needed)}, available ${Quantity.format((available - (plannedProductMilli[id] ?? 0)).clamp(0, available))}');
+              }
+              final choice = request.kitChoices[id] ?? const KitComponentChoice();
+              final serials = <SerialUnit>[];
+              if (component.serialTracking) {
+                if (choice.serialIds.length * Quantity.scale != needed ||
+                    choice.serialIds.toSet().length != choice.serialIds.length ||
+                    choice.serialIds.any(plannedSerialIds.contains)) {
+                  throw StateError('Select one unique ${component.name} serial per unit in ${product.name}');
+                }
+                for (final serialId in choice.serialIds) {
+                  final serial = await (db.select(db.serialUnits)
+                    ..where((s) => s.id.equals(serialId))).getSingleOrNull();
+                  if (serial == null || serial.productId != id || serial.status != 'available') {
+                    throw StateError('${component.name} serial is unavailable');
+                  }
+                  serials.add(serial);
+                }
+                plannedSerialIds.addAll(choice.serialIds);
+              } else if (choice.serialIds.isNotEmpty) {
+                throw StateError('Serial selection is invalid for ${component.name}');
+              }
+              ProductLot? batch;
+              if (config.batch) {
+                final today = DateTime.now();
+                final start = DateTime(today.year, today.month, today.day);
+                final eligible = (await batches(id)).where((b) =>
+                    b.quantityMilli >= needed &&
+                    (b.expiryDate == null || !b.expiryDate!.isBefore(start))).toList();
+                batch = eligible.where((b) => b.id == choice.batchId).firstOrNull;
+                if (batch == null) {
+                  throw StateError('Choose an eligible ${component.name} batch for ${product.name}');
+                }
+              } else if (choice.batchId != null) {
+                throw StateError('Batch selection is invalid for ${component.name}');
+              }
+              final layers = await InventoryLayerRepository(db).consume(id, needed,
+                batchNumber: batch?.batchNumber, serials: serials,
+                commit: false, reservedMilliByLayer: plannedLayerMilli);
+              for (final part in layers) {
+                plannedLayerMilli.update(part.layer.id, (n) => n + part.quantityMilli,
+                    ifAbsent: () => part.quantityMilli);
+              }
+              plannedProductMilli.update(id, (n) => n + needed,
+                  ifAbsent: () => needed);
+              plans.add(_KitComponentPlan(component, config, required, needed,
+                  batch, serials, layers));
+            }
+            final line = Quantity.lineCents(product.priceCents, kitMilli);
+            details.add(_ResolvedLine(product, const BusinessProduct(), kitMilli,
+                'ordinary', null, 0, line, const [], const [], request.lineKey, plans));
+            total += line;
+            continue;
           }
           final config = configs[product.id] ?? const BusinessProduct();
           config.validate(product.priceCents);
@@ -1181,7 +1342,7 @@ class PosRepository {
                       await reservedStockMilli(product.id,
                           exceptLayawayId: layawayId,
                           exceptSalesOrderId: salesOrderId) <
-                  milli) {
+                  milli + (plannedProductMilli[product.id] ?? 0)) {
             throw StateError('Insufficient stock for ${product.name}');
           }
           final extra = orderExtras[request.lineKey] ??
@@ -1203,6 +1364,8 @@ class PosRepository {
                 part.layer.id, (current) => current + part.quantityMilli,
                 ifAbsent: () => part.quantityMilli);
           }
+          plannedProductMilli.update(product.id, (n) => n + milli,
+              ifAbsent: () => milli);
           final useLayerPrice = product.pricingPolicy == 'layer' &&
               !quotedPrices.containsKey(product.id) && salesOrderId == null;
           final line = !useLayerPrice
@@ -1375,7 +1538,10 @@ class PosRepository {
                 detail.product.id, detail.quantityMilli,
                 salesOrderId == null ? detail.lineCents :
                     detail.lineCents - (detailDiscounts[detail] ?? 0),
-                detail.config.madeToOrder ? null : detail.layers.fold<int>(
+                detail.kitComponents.isNotEmpty
+                    ? detail.kitComponents.fold<int>(0,
+                        (sum, component) => sum + component.costCents)
+                    : detail.config.madeToOrder ? null : detail.layers.fold<int>(
                     0, (sum, part) => sum + Quantity.lineCents(
                         part.layer.unitCostCents, part.quantityMilli)),
                 detail.mode, detail.batch?.id,
@@ -1532,6 +1698,91 @@ class PosRepository {
         for (final detail in details) {
           final product = detail.product;
           final milli = detail.quantityMilli;
+          if (detail.kitComponents.isNotEmpty) {
+            final saleItem = await db.into(db.saleItems).insertReturning(
+              SaleItemsCompanion.insert(
+                saleId: sale.id,
+                productId: product.id,
+                productName: Value(product.name),
+                skuSnapshot: Value(product.sku),
+                quantity: milli ~/ Quantity.scale,
+                quantityMilli: Value(milli),
+                saleUnit: const Value('pcs'),
+                unitPriceCents: product.priceCents,
+                lineTotalCents: Value(detail.lineCents -
+                    (detailDiscounts[detail] ?? 0) -
+                    (promotionDiscounts[detail] ?? 0)),
+                manualDiscountCents: Value(detailDiscounts[detail] ?? 0),
+                promotionDiscountCents: Value(promotionDiscounts[detail] ?? 0)));
+            for (final component in detail.kitComponents) {
+              final consumed = await InventoryLayerRepository(db).consume(
+                component.product.id, component.totalMilli,
+                batchNumber: component.batch?.batchNumber,
+                serials: component.serials);
+              final actualCost = consumed.fold<int>(0, (sum, part) =>
+                  sum + Quantity.lineCents(part.layer.unitCostCents, part.quantityMilli));
+              final snapshotId = const Uuid().v4();
+              await db.customStatement('''INSERT INTO sale_item_kit_components
+                (id, sale_item_id, kit_product_id, component_product_id,
+                 component_name_snapshot, component_sku_snapshot,
+                 required_quantity_milli, kit_quantity_milli, total_quantity_milli,
+                 allocated_cost_cents, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', [
+                snapshotId, saleItem.id, product.id, component.product.id,
+                component.product.name, component.product.sku,
+                component.requiredMilli, milli, component.totalMilli,
+                actualCost, DateTime.now().millisecondsSinceEpoch ~/ 1000,
+              ]);
+              for (final part in consumed) {
+                final allocation = await db.into(db.saleItemInventoryAllocations)
+                    .insertReturning(SaleItemInventoryAllocationsCompanion.insert(
+                      saleItemId: saleItem.id,
+                      inventoryLayerId: part.layer.id,
+                      serialUnitId: Value(part.serialUnitId),
+                      quantityMilli: part.quantityMilli,
+                      unitCostSnapshotCents: part.layer.unitCostCents,
+                      unitSellingPriceSnapshotCents: 0));
+                await db.customStatement('''INSERT INTO sale_item_kit_allocations
+                  (kit_component_id, allocation_id) VALUES (?, ?)''',
+                  [snapshotId, allocation.id]);
+              }
+              for (final serial in component.serials) {
+                final changed = await (db.update(db.serialUnits)
+                  ..where((s) => s.id.equals(serial.id) & s.status.equals('available')))
+                    .write(SerialUnitsCompanion(
+                      status: const Value('sold'), saleItemId: Value(saleItem.id)));
+                if (changed != 1) throw StateError('Component serial was already sold');
+                await db.into(db.serialSaleLinks).insert(
+                  SerialSaleLinksCompanion.insert(
+                    serialUnitId: serial.id, saleItemId: saleItem.id));
+              }
+              final remaining = (await stockMilli(component.product.id)) - component.totalMilli;
+              final updated = await (db.update(db.inventory)
+                ..where((i) => i.productId.equals(component.product.id) &
+                    i.quantityMilli.isBiggerOrEqualValue(component.totalMilli)))
+                  .write(InventoryCompanion(
+                    quantity: Value(remaining ~/ Quantity.scale),
+                    quantityMilli: Value(remaining)));
+              if (updated != 1) throw StateError('Component stock changed during sale');
+              if (component.batch != null) {
+                final changed = await db.customUpdate('''UPDATE product_lots
+                  SET quantity_milli = quantity_milli - ?
+                  WHERE id = ? AND quantity_milli >= ?''',
+                  variables: [Variable.withInt(component.totalMilli),
+                    Variable.withString(component.batch!.id),
+                    Variable.withInt(component.totalMilli)],
+                  updates: {db.productLots});
+                if (changed != 1) throw StateError('Component batch stock changed');
+              }
+              await db.into(db.inventoryMovements).insert(
+                InventoryMovementsCompanion.insert(
+                  productId: component.product.id,
+                  quantityDelta: -(component.totalMilli ~/ Quantity.scale),
+                  quantityDeltaMilli: Value(-component.totalMilli),
+                  reason: 'sale', referenceId: Value(sale.id)));
+            }
+            continue;
+          }
           final consumed = detail.config.madeToOrder
               ? <LayerConsumption>[]
               : await InventoryLayerRepository(db).consume(product.id, milli,

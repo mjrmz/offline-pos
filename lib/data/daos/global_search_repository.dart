@@ -44,6 +44,7 @@ class GlobalSearchRepository {
   }
 
   Future<List<GlobalSearchResult>> search(ActiveUser user, String query) async {
+    final exactBarcode = query.trim();
     final term = query.trim().toLowerCase();
     final commandResults = commands(user, term);
     if (term.length < 2) return commandResults;
@@ -71,17 +72,24 @@ class GlobalSearchRepository {
         SELECT p.id, p.name AS title,
           'SKU ' || COALESCE(p.sku, '—') || ' · Barcode ' || COALESCE(p.barcode, '—')
             AS subtitle, p.sku AS reference, NULL AS status,
-          CASE WHEN lower(p.sku) = ? OR lower(p.barcode) = ? THEN 0
+          CASE WHEN lower(p.sku) = ? OR lower(p.barcode) = ? OR EXISTS
+            (SELECT 1 FROM product_barcode_aliases a WHERE a.product_id = p.id
+              AND a.is_active = 1 AND a.barcode = ?) THEN 0
             WHEN lower(p.name) LIKE ? OR lower(COALESCE(p.sku,'')) LIKE ?
               OR lower(COALESCE(p.barcode,'')) LIKE ? THEN 1 ELSE 2 END AS score
         FROM products p WHERE instr(lower(p.name), ?) > 0
           OR instr(lower(COALESCE(p.sku,'')), ?) > 0
           OR instr(lower(COALESCE(p.barcode,'')), ?) > 0
+          OR EXISTS (SELECT 1 FROM product_barcode_aliases a
+            WHERE a.product_id = p.id AND a.is_active = 1
+              AND a.barcode = ?)
         ORDER BY score, p.name LIMIT 5''',
         [Variable.withString(term), Variable.withString(term),
+          Variable.withString(exactBarcode),
           Variable.withString(prefix), Variable.withString(prefix),
           Variable.withString(prefix), Variable.withString(term),
-          Variable.withString(term), Variable.withString(term)],
+          Variable.withString(term), Variable.withString(term),
+          Variable.withString(exactBarcode)],
         GlobalSearchKind.product),
       group(user.can(PosPermission.viewContacts), '''
         SELECT c.id, c.name AS title, COALESCE(c.phone,'No phone') AS subtitle,

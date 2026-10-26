@@ -517,3 +517,47 @@ movement twice. `sale_loyalty` stores the original earning and redemption
 rules alongside the sale. Existing customers implicitly belong to Retail
 until an Owner selects another primary group. See
 [customer_loyalty.md](customer_loyalty.md) for calculation policies.
+
+# Phase N1 barcode aliases (schema version 53)
+
+`product_barcode_aliases` stores `id`, `product_id`, `barcode`, optional `type`
+and `label`, `created_by`, `created_at`, and `is_active`. Its unique barcode
+index and database triggers prevent collisions with product primary barcodes.
+Existing products migrate with no aliases and retain their primary barcodes.
+Inactive aliases remain reserved but do not resolve in product lookup.
+
+# Phase O1 product kits (schema version 54)
+
+`products.product_type` defaults to `standard` for all existing products. New kit
+masters use `kit` and retain their own catalog selling price, SKU, barcode, and
+barcode aliases. Product type cannot change after creation.
+
+`product_kit_components` stores each component product once per kit with a
+positive fixed point `quantity_milli` and sort order. Components must be active
+standard products. Kits start inactive and need a component before activation.
+Active kits prevent archival of their components and removal of their final
+component.
+
+Kits have no `inventory` row or FIFO layers. Kit availability is derived as the
+minimum of `floor(component available milli / required milli)`, using physical
+stock less active layaway, sales order, and RMA reservations. Estimated cost
+uses component FIFO layers and is unknown when enough costed stock is absent.
+Database guards reject kit rows in physical stock, reservation, procurement,
+stock count, and layaway tables.
+
+# Phase O2 kit sales (schema version 55)
+
+POS sells a kit as one `sale_items` row with the kit's own price, name, and SKU
+snapshot. `sale_item_kit_components` preserves each consumed component's name,
+SKU, required and total fixed point quantities, and actual FIFO cost.
+`sale_item_kit_allocations` links those components to normal
+`sale_item_inventory_allocations` for layer provenance. Component stock and
+movements are deducted once; the kit gains no inventory, layer, reservation,
+or hidden revenue line. Sales History reads the saved composition, so later
+kit edits do not change old sales.
+
+Kit sales use normal promotions, below cost authorization, cash and credit
+payments, and BIR sequencing. Kits remain unavailable in Sales Orders and
+quotation conversion while component reservation and fulfillment are not
+supported. Kit returns, RMA, refunds, and voids are blocked until component
+restoration can safely preserve original serial and batch provenance.

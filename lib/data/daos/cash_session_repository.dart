@@ -154,6 +154,13 @@ class CashSessionRepository {
         live.require(PosPermission.manageCashSession);
         final row = await active();
         if (row == null) throw StateError('No active cash session');
+        final pendingHandover = await db.customSelect(
+            "SELECT id FROM cash_shift_handovers WHERE cash_session_id = ? AND status = 'awaiting_acknowledgment' LIMIT 1",
+            variables: [Variable.withString(row.id)]).getSingleOrNull();
+        if (pendingHandover != null) {
+          throw StateError(
+              'Complete or cancel the pending shift handover before closing');
+        }
         if (row.openedByUserId != live.id &&
             !live.can(PosPermission.closeAnyCashSession)) {
           throw StateError(

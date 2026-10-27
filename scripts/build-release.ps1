@@ -2,7 +2,7 @@ param(
     [ValidateSet('windows', 'apk')]
     [string]$Target = 'windows',
     [string]$PublicKeyFile,
-    [string]$LicenseApiUrl = '',
+    [string]$LicenseApiUrl = 'https://offline-pos-wtl8.onrender.com',
     [switch]$IsolatedSmoke,
     [switch]$ValidateOnly
 )

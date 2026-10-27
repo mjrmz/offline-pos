@@ -2,6 +2,16 @@
 
 This deploys only `cloud/license_api` and its licensing/admin tables. The POS keeps its local SQLite business database and offline signed-license validation. Keep the existing Ed25519 keypair; never run `setup:keys` for this deployment.
 
+Current internal RC API origin: `https://offline-pos-wtl8.onrender.com`.
+
+## Hosted RC validation (2026-10-28)
+
+- `/healthz` returned HTTP 200 with `{"status":"ok"}`. A synthetic unknown-key activation returned database-backed `404 not_found`.
+- `scripts/hosted-smoke.mjs` authenticated through the protected admin API, checked both migrated plans, created a disposable customer/license, activated one synthetic device, checked its device record, and verified the hosted Ed25519 signature with the existing local public key. The test license expires after 24 hours. This validates the live licensing schema through the API; the `schema_migrations` ledger was not queried directly.
+- An isolated Windows Release build activated with the hosted API and unchanged public key, completed Owner setup/login, and displayed Home and POS. A separate launcher confirmed the Render HTTPS endpoint was unreachable before the same isolated profile restarted; login, Home, and POS worked offline.
+- A freshly installed Android emulator APK activated, reached Home and POS, then reopened after Wi-Fi and mobile data were disabled. While Render was unreachable from the emulator, local login, Home, and POS worked. Network access was restored afterward.
+- The test activation key was rotated once after its one-time terminal output was lost. Rotation did not change the already signed Windows license. No private key, database password, admin password, or activation key was committed.
+
 ## Supabase PostgreSQL
 
 1. Create a Supabase Free project dedicated to licensing. In the project, open **Connect** and copy the PostgreSQL **Session pooler** connection string (port 5432). This is suitable when direct IPv6 connectivity is unavailable. Replace the password placeholder locally; percent-encode reserved password characters. Do not paste the resulting URL into chat, Git, or logs.

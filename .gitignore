@@ -35,10 +35,14 @@ migrate_working_dir/
 /linux/flutter/ephemeral/
 /android/.kotlin/
 **/.env
-**/.env.*.local
-**/.env.production
+**/.env.*
+!**/.env.example
 **/*.dump
 **/*.sql.gz
+**/*.backup
+**/*.pem
+**/*.crt
+**/*.cer
 **/*.keystore
 **/*.jks
 **/*.p12

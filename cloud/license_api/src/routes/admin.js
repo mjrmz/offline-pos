@@ -11,8 +11,8 @@ function authConfig() {
   }
   return { user: ADMIN_USERNAME, hash: ADMIN_PASSWORD_HASH, secret: ADMIN_AUTH_SECRET };
 }
-function token(user, secret) {
-  const body = Buffer.from(JSON.stringify({ user, expires: Date.now() + ttl })).toString('base64url');
+function token(identity, secret, lifetime = ttl) {
+  const body = Buffer.from(JSON.stringify({ ...identity, expires: Date.now() + lifetime })).toString('base64url');
   return `${body}.${createHmac('sha256', secret).update(body).digest('base64url')}`;
 }
 function checkToken(value, secret) {
@@ -21,7 +21,7 @@ function checkToken(value, secret) {
     const expected = createHmac('sha256', secret).update(body).digest();
     if (!timingSafeEqual(Buffer.from(mac, 'base64url'), expected)) return null;
     const parsed = JSON.parse(Buffer.from(body, 'base64url').toString());
-    return parsed.expires > Date.now() ? parsed.user : null;
+    return parsed.expires > Date.now() ? parsed : null;
   } catch (_) { return null; }
 }
 function checkPassword(password, stored) {
@@ -45,26 +45,126 @@ export function makePasswordHash(password) {
 export function adminRouter(pool) {
   const router = express.Router();
   const config = authConfig();
-  router.post('/admin/login', rateLimit({windowMs:15*60*1000,limit:10,standardHeaders:'draft-7',legacyHeaders:false}), (req, res) => {
-    if (req.body?.username !== config.user || typeof req.body?.password !== 'string' ||
-        !checkPassword(req.body.password, config.hash)) return res.status(401).json({ error: 'Invalid credentials' });
-    res.cookie('admin_session', token(config.user, config.secret), { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/admin', maxAge: ttl });
-    return res.json({ user: config.user });
+  const cookieOptions = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'strict', path: '/admin', maxAge: ttl };
+  const accountFields = 'id,username,display_name,role,enabled,created_at,updated_at,last_login_at,password_changed_at';
+  const accountView = row => ({ id: row.id, username: row.username, displayName: row.display_name, role: row.role, lastLoginAt: row.last_login_at, passwordChangedAt: row.password_changed_at });
+  const recordEvent = (db, actor, action, targetId = null) => db.query('INSERT INTO admin_events(actor,action,target_id) VALUES($1,$2,$3)', [actor, action, targetId]);
+  const passwordRule = z.string().min(12).max(128);
+  const usernameRule = z.string().trim().min(3).max(64).regex(/^[A-Za-z0-9._-]+$/);
+  const originValid = req => req.headers.origin && process.env.ADMIN_ORIGIN && req.headers.origin === process.env.ADMIN_ORIGIN;
+  const setSession = (res, identity) => {
+    const lifetime = identity.recovery ? 10 * 60 * 1000 : ttl;
+    res.cookie('admin_session', token(identity, config.secret, lifetime), { ...cookieOptions, maxAge: lifetime });
+  };
+  router.post('/admin/login', rateLimit({windowMs:15*60*1000,limit:10,standardHeaders:'draft-7',legacyHeaders:false}), async (req, res, next) => {
+    const { username, password } = req.body ?? {};
+    if (typeof username !== 'string' || typeof password !== 'string') return res.status(401).json({ error: 'Invalid credentials' });
+    try {
+      const result = await pool.query('SELECT * FROM admin_accounts WHERE lower(username)=lower($1) AND enabled=true', [username]);
+      const account = result.rows.find(row => row.password_hash && row.id);
+      if (account && checkPassword(password, account.password_hash)) {
+        const session = await pool.query('INSERT INTO admin_sessions(account_id,expires_at) VALUES($1,now()+interval \'8 hours\') RETURNING id', [account.id]);
+        await pool.query('UPDATE admin_accounts SET last_login_at=now() WHERE id=$1', [account.id]);
+        await recordEvent(pool, account.username, 'admin.login', account.id);
+        setSession(res, { id: account.id, sid: session.rows[0].id });
+        return res.set('Cache-Control', 'no-store').json({ user: account.username, account: accountView(account) });
+      }
+      if (username === config.user && checkPassword(password, config.hash)) {
+        const existing = await pool.query("SELECT id FROM admin_accounts WHERE role='owner' LIMIT 1");
+        const recovery = Boolean(existing.rowCount);
+        await recordEvent(pool, config.user, recovery ? 'admin.recovery_login' : 'admin.bootstrap_login');
+        setSession(res, { recovery: true, bootstrap: !recovery, nonce: randomBytes(16).toString('hex') });
+        return res.set('Cache-Control', 'no-store').json({ user: config.user, recovery: true, bootstrap: !recovery });
+      }
+      return res.status(401).json({ error: 'Invalid credentials' });
+    } catch (e) { next(e); }
   });
-  router.use('/admin', (req, res, next) => {
+  router.use('/admin', async (req, res, next) => {
     const cookie = req.headers.cookie?.split(';').map(x => x.trim()).find(x => x.startsWith('admin_session='))?.slice(14);
-    const user = cookie && checkToken(cookie, config.secret);
-    if (!user) return res.status(401).json({ error: 'Admin login required' });
+    const identity = cookie && checkToken(cookie, config.secret);
+    if (!identity) return res.status(401).json({ error: 'Admin login required' });
     if (!['GET', 'HEAD'].includes(req.method)) {
-      const origin = req.headers.origin;
-      const expected = process.env.ADMIN_ORIGIN;
-      if (!origin || !expected || origin !== expected) return res.status(403).json({ error: 'Invalid origin' });
+      if (!originValid(req)) return res.status(403).json({ error: 'Invalid origin' });
     }
-    req.adminUser = user;
-    next();
+    try {
+      if (identity.recovery) {
+        const existing = await pool.query("SELECT id FROM admin_accounts WHERE role='owner' LIMIT 1");
+        req.recovery = true;
+        req.bootstrap = identity.bootstrap && !existing.rowCount;
+        req.adminUser = config.user;
+        if (identity.bootstrap && existing.rowCount) return res.status(401).json({ error: 'Bootstrap session expired. Sign in again' });
+        if (!req.bootstrap && !['/admin/me','/admin/logout','/admin/account/recover'].includes(req.originalUrl.split('?')[0])) return res.status(403).json({ error: 'Recovery access is limited to account recovery' });
+      } else if (identity.id && identity.sid) {
+        const result = await pool.query(`SELECT a.*,s.id AS session_id FROM admin_accounts a JOIN admin_sessions s ON s.account_id=a.id WHERE a.id=$1 AND s.id=$2 AND a.enabled=true AND s.revoked_at IS NULL AND s.expires_at>now()`, [identity.id, identity.sid]);
+        if (!result.rows[0]?.password_hash) return res.status(401).json({ error: 'Admin login required' });
+        req.account = result.rows[0]; req.sessionId = identity.sid; req.adminUser = req.account.username;
+      } else return res.status(401).json({ error: 'Admin login required' });
+      next();
+    } catch (e) { next(e); }
   });
-  router.post('/admin/logout', (_req, res) => { res.clearCookie('admin_session', { path: '/admin' }); res.json({ ok: true }); });
-  router.get('/admin/me', (req, res) => res.json({ user: req.adminUser }));
+  router.post('/admin/logout', async (req, res, next) => { try { if (req.sessionId) await pool.query('UPDATE admin_sessions SET revoked_at=now() WHERE id=$1', [req.sessionId]); res.clearCookie('admin_session', { path: '/admin' }); res.json({ ok: true }); } catch(e) { next(e); } });
+  router.get('/admin/me', (req, res) => res.set('Cache-Control','no-store').json({ user: req.adminUser, recovery: Boolean(req.recovery), bootstrap: Boolean(req.bootstrap), account: req.account ? accountView(req.account) : null }));
+  router.post('/admin/account/bootstrap', async (req, res, next) => {
+    if (!req.recovery || !req.bootstrap) return res.status(403).json({ error: 'Bootstrap access required' });
+    const parsed = z.object({ username: usernameRule, displayName: z.string().trim().min(1).max(100), password: passwordRule }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Enter a valid username, display name and password of at least 12 characters' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const created = await client.query(`INSERT INTO admin_accounts(username,display_name,password_hash,role) VALUES($1,$2,$3,'owner') RETURNING ${accountFields}`, [parsed.data.username, parsed.data.displayName, makePasswordHash(parsed.data.password)]);
+      await recordEvent(client, config.user, 'admin.account_bootstrap', created.rows[0].id);
+      await client.query('COMMIT');
+      res.clearCookie('admin_session', { path: '/admin' });
+      res.status(201).json({ account: accountView(created.rows[0]), signInRequired: true });
+    } catch(e) { await client.query('ROLLBACK'); if(e.code==='23505') return res.status(409).json({error:'Owner account or username already exists'}); next(e); } finally { client.release(); }
+  });
+  router.post('/admin/account/recover', rateLimit({windowMs:15*60*1000,limit:5,standardHeaders:'draft-7',legacyHeaders:false}), async (req, res, next) => {
+    if (!req.recovery || req.bootstrap) return res.status(403).json({ error: 'Recovery access required' });
+    const parsed = z.object({ newPassword: passwordRule }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Password must have at least 12 characters' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const owner = await client.query(`UPDATE admin_accounts SET password_hash=$1,password_changed_at=now(),updated_at=now(),enabled=true WHERE role='owner' RETURNING ${accountFields}`, [makePasswordHash(parsed.data.newPassword)]);
+      if (!owner.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Owner account not found' }); }
+      await client.query('UPDATE admin_sessions SET revoked_at=now() WHERE account_id=$1 AND revoked_at IS NULL', [owner.rows[0].id]);
+      await recordEvent(client, config.user, 'admin.password_recovered', owner.rows[0].id);
+      await client.query('COMMIT');
+      res.clearCookie('admin_session', { path: '/admin' }); res.json({ ok: true, signInRequired: true });
+    } catch(e) { await client.query('ROLLBACK'); next(e); } finally { client.release(); }
+  });
+  router.patch('/admin/account', async (req, res, next) => {
+    if (!req.account) return res.status(403).json({ error: 'Account access required' });
+    const parsed = z.object({ username: usernameRule, displayName: z.string().trim().min(1).max(100) }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Enter a valid username and display name' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const updated = await client.query(`UPDATE admin_accounts SET username=$1,display_name=$2,updated_at=now() WHERE id=$3 RETURNING ${accountFields}`, [parsed.data.username, parsed.data.displayName, req.account.id]);
+      if (parsed.data.username !== req.account.username) await recordEvent(client, req.account.username, 'admin.username_changed', req.account.id);
+      await client.query('COMMIT'); res.json({ account: accountView(updated.rows[0]) });
+    } catch(e) { await client.query('ROLLBACK'); if(e.code==='23505') return res.status(409).json({error:'Username is already in use'}); next(e); } finally { client.release(); }
+  });
+  router.post('/admin/account/password', rateLimit({windowMs:15*60*1000,limit:10,standardHeaders:'draft-7',legacyHeaders:false}), async (req, res, next) => {
+    if (!req.account) return res.status(403).json({ error: 'Account access required' });
+    const parsed = z.object({ currentPassword: z.string(), newPassword: passwordRule }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Password must have at least 12 characters' });
+    if (!checkPassword(parsed.data.currentPassword, req.account.password_hash)) return res.status(403).json({ error: 'Current password is incorrect' });
+    if (checkPassword(parsed.data.newPassword, req.account.password_hash)) return res.status(400).json({ error: 'Choose a different password' });
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const changed = await client.query('UPDATE admin_accounts SET password_hash=$1,password_changed_at=now(),updated_at=now() WHERE id=$2 AND password_hash=$3 RETURNING id', [makePasswordHash(parsed.data.newPassword),req.account.id,req.account.password_hash]);
+      if (!changed.rowCount) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Account changed. Please sign in again' }); }
+      await client.query('UPDATE admin_sessions SET revoked_at=now() WHERE account_id=$1 AND id<>$2 AND revoked_at IS NULL', [req.account.id, req.sessionId]);
+      await recordEvent(client, req.account.username, 'admin.password_changed', req.account.id);
+      await client.query('COMMIT'); res.json({ ok: true, otherSessionsSignedOut: true });
+    } catch(e) { await client.query('ROLLBACK'); next(e); } finally { client.release(); }
+  });
+  router.post('/admin/account/sessions/revoke-others', async (req, res, next) => {
+    if (!req.account) return res.status(403).json({ error: 'Account access required' });
+    try { await pool.query('UPDATE admin_sessions SET revoked_at=now() WHERE account_id=$1 AND id<>$2 AND revoked_at IS NULL', [req.account.id,req.sessionId]); res.json({ ok: true }); } catch(e) { next(e); }
+  });
   router.get('/admin/plans', async (_req, res, next) => { try { res.json((await pool.query('SELECT * FROM plans ORDER BY id')).rows); } catch (e) { next(e); } });
   router.get('/admin/customers', async (req, res, next) => {
     try { res.json((await pool.query('SELECT * FROM customers WHERE business_name ILIKE $1 ORDER BY created_at DESC LIMIT 100', [`%${req.query.q ?? ''}%`])).rows); } catch (e) { next(e); }

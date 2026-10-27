@@ -62,6 +62,17 @@ test('existing licenses and customers load, navigation and independent empty sta
   fireEvent.click(screen.getByRole('button',{name:'Activity'}));
   await screen.findByText('No activity yet');
 });
+test('settings validates account and password forms before requests',async()=>{
+  const x=mock();render(<App/>);await ready();
+  fireEvent.click(screen.getByRole('button',{name:'Settings'}));
+  expect(screen.getByRole('heading',{name:'Account & Security'})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'Save changes'}));
+  await screen.findByText(/Enter a display name and a username/);
+  expect(x.calls).not.toContain('PATCH /admin/account');
+  fireEvent.click(screen.getByRole('button',{name:'Change password'}));
+  await screen.findByText(/Check the password fields/);
+  expect(x.calls).not.toContain('POST /admin/account/password');
+});
 test('activity HTML 404 leaves licenses and customers usable',async()=>{
   mock({licenses:true,activityFailure:true});render(<App/>);await ready();
   expect(screen.getByText('0 / 2')).toBeTruthy();

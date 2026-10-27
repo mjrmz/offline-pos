@@ -36,3 +36,11 @@ with `Cache-Control: no-store`. Rotation requires the same admin cookie and
 Origin checks as other mutations, replaces only the key hash on a nonrevoked
 license, and records an admin event. The License ID and existing device
 licenses do not change. A lost key cannot be retrieved; rotate it instead.
+
+## Hosted admin accounts
+
+Run `npm run migrate` before deploying API code that uses admin accounts. Migration `004_admin_accounts.sql` adds only `admin_accounts` and `admin_sessions`; existing licensing tables and data are untouched. Run the migration against the hosted Supabase database before starting the new API.
+
+The first login with `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` opens Owner account setup. Create a database username and password, then sign in with that account for routine administration. After an Owner exists, the environment credential opens only the recovery screen. Recovery resets the Owner password, enables the Owner, revokes its sessions, and requires a fresh login. Keep the environment password in a secure vault as an emergency credential. Rotate it in Render if it is compromised. It cannot be edited from the dashboard.
+
+Database account sessions have server-side revocation records. A password change revokes other sessions; recovery revokes all Owner sessions. The current session remains active after a normal password change. `ADMIN_AUTH_SECRET`, `DATABASE_URL`, and signing keys stay server-side.

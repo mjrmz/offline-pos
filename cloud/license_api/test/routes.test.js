@@ -9,7 +9,7 @@ test('health, malformed activation, admin guard and login', async () => {
   process.env.ADMIN_PASSWORD_HASH=makePasswordHash('test-password-123');
   process.env.ADMIN_AUTH_SECRET='test-only-secret-with-more-than-32-characters';
   process.env.ADMIN_ORIGIN='http://localhost:5173';
-  const app=createApp({query:async()=>{throw Error('query should not run');}});
+  const app=createApp({query:async()=>({rows:[],rowCount:0})});
   const server=app.listen(0);
   try {
     const base=`http://127.0.0.1:${server.address().port}`;
@@ -36,7 +36,7 @@ test('admin can upgrade an existing license without changing its device binding'
     if (sql.startsWith('UPDATE licenses SET plan_id=')) return {rowCount:1,rows:[{id:params[0],plan_id:params[1]}]};
     return {rowCount:1,rows:[]};
   },release(){}};
-  const server=createApp({connect:async()=>client}).listen(0);
+  const server=createApp({connect:async()=>client,query:async()=>({rows:[],rowCount:0})}).listen(0);
   try {
     const base=`http://127.0.0.1:${server.address().port}`;
     const login=await fetch(`${base}/admin/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'test-admin',password:'test-password-123'})});
@@ -66,7 +66,7 @@ test('issue shows a one-time activation key and rotation replaces only its hash'
       ? {rowCount:1,rows:[{id}]} : {rowCount:0,rows:[]};
     return {rowCount:1,rows:[]};
   },release(){}};
-  const server=createApp({connect:async()=>client}).listen(0);
+  const server=createApp({connect:async()=>client,query:async()=>({rows:[],rowCount:0})}).listen(0);
   try {
     const base=`http://127.0.0.1:${server.address().port}`;
     const login=await fetch(`${base}/admin/login`,{method:'POST',headers:{'Content-Type':'application/json'},

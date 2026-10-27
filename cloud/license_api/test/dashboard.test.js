@@ -11,7 +11,7 @@ test('built dashboard shares the API origin without swallowing API routes',
     process.env.ADMIN_USERNAME = 'test-admin';
     process.env.ADMIN_PASSWORD_HASH = makePasswordHash('test-password-123');
     process.env.ADMIN_AUTH_SECRET = 'test-only-secret-with-more-than-32-characters';
-    const server = createApp({ query: async () => { throw Error('Unexpected database query'); } }).listen(0);
+    const server = createApp({ query: async () => ({rows:[],rowCount:0}) }).listen(0);
     try {
       const base = `http://127.0.0.1:${server.address().port}`;
       process.env.ADMIN_ORIGIN = base;

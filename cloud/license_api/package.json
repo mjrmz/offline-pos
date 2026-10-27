@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "build": "npm --prefix ../admin_dashboard ci --include=dev && npm --prefix ../admin_dashboard run build",
     "migrate": "node src/db/migrate.js",
     "test": "node --test",
     "check": "node --check src/server.js && node --check src/routes/activation.js && node --check src/routes/admin.js"

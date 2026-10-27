@@ -5,7 +5,13 @@ contains the signing private key or POS business data.
 
 Run `npm install`, copy `.env.example` to an untracked `.env` and set
 `VITE_LICENSE_API_URL`, then `npm run dev`. Configure the API's `ADMIN_ORIGIN`
-to match this dashboard's exact origin. Use HTTPS for both in deployment.
+to match this dashboard's exact origin. This URL is for local Vite development.
+
+For the hosted build, the License API serves this dashboard at `/` on the
+same HTTPS origin. Production requests use relative `/admin/...` paths, so
+`VITE_LICENSE_API_URL` is not needed in Render. Set the API's server-side
+`ADMIN_ORIGIN` to that same HTTPS origin. The session cookie remains
+`SameSite=Strict`.
 
 `npm run check` typechecks, and `npm run build` creates `dist/`. Login is
 handled by the License API with an HttpOnly signed cookie. The dashboard

@@ -1,4 +1,5 @@
-const base = import.meta.env.VITE_LICENSE_API_URL ?? 'http://localhost:3000';
+const base = import.meta.env.PROD ? '' :
+  (import.meta.env.VITE_LICENSE_API_URL ?? 'http://localhost:3000');
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number) { super(message); }

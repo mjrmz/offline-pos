@@ -21,9 +21,17 @@ Current internal RC API origin: `https://offline-pos-wtl8.onrender.com`.
 
 ## Render Web Service
 
+For the existing `offline-pos-wtl8` service, apply the settings in steps 2–4
+after reviewing and pushing the same-origin dashboard change. In **Settings →
+Build & Deploy**, change the old `cloud/license_api` Root Directory to `cloud`, then set
+the Build and Start commands below. Keep the current server secrets in Render;
+do not recreate or expose them. In **Environment**, keep `ADMIN_ORIGIN` set to
+`https://offline-pos-wtl8.onrender.com` and remove any `VITE_LICENSE_API_URL`
+entry if present. A separate Render Static Site is not needed.
+
 1. Create a Render account. Choose **New → Web Service**, connect the GitHub repository containing this working tree, and select the correct branch after these changes have been pushed by the repository owner.
-2. Set **Root Directory** to `cloud/license_api`, **Runtime** to Node, and **Instance Type** to Free if offered. Set `NODE_VERSION` to `20`.
-3. Set **Build Command** to `npm ci` and **Start Command** to `npm run migrate && npm start`. Set **Health Check Path** to `/healthz`.
+2. Set **Root Directory** to `cloud`, so Render can access both `license_api` and `admin_dashboard` without the Flutter tree. Set **Runtime** to Node and **Instance Type** to Free if offered. Set `NODE_VERSION` to a Node 20 release supported by Vite 7 (20.19 or newer) or a newer supported major release.
+3. Set **Build Command** to `cd license_api && npm ci && npm run build` and **Start Command** to `cd license_api && npm run migrate && npm start`. Set **Health Check Path** to `/healthz`. The API's build script installs and builds the dashboard; the API serves its compiled files at `/`.
 4. Add these environment variables in Render (never commit actual values):
 
    | Variable | Value/source |
@@ -34,18 +42,19 @@ Current internal RC API origin: `https://offline-pos-wtl8.onrender.com`.
    | `ADMIN_USERNAME` | Existing admin username |
    | `ADMIN_PASSWORD_HASH` | Existing salted scrypt hash; `npm run setup:admin` can produce one from a password on stdin |
    | `ADMIN_AUTH_SECRET` | Existing secret of at least 32 characters, or a newly generated admin session secret |
-   | `ADMIN_ORIGIN` | Exact HTTPS origin of a hosted admin dashboard, if deployed; for initial API-only testing, retain the trusted test client origin |
+   | `ADMIN_ORIGIN` | `https://offline-pos-wtl8.onrender.com` for the same-origin dashboard and API |
    | `NODE_ENV` | `production` |
    | `DB_POOL_MAX` | `5` to keep free database connection use modest |
 
    Render sets `PORT` automatically; the API binds that port on `0.0.0.0`. Do not add signing material to Flutter or the dashboard. A private key value already in the ignored local `.env` can be reused if it matches the existing public key; no re-encoding is needed.
+   The hosted dashboard needs no `VITE_LICENSE_API_URL`: its production bundle calls the API through relative same-origin paths. Leave any existing Render `VITE_LICENSE_API_URL` unset or remove it; never add backend secrets to a `VITE_` variable.
 5. Deploy and copy the **actual** Render HTTPS service URL. Check `https://<actual-host>/healthz` returns `{"status":"ok"}`. The endpoint reports process health only; the migration must succeed before the server starts.
 
 ## Validation and release configuration
 
 Use a clean test license and test account only. Confirm admin login, customer creation, license issuance, and activation using the current API contract; the full activation key is returned once. Admin requests require the signed cookie and exact `Origin` on mutations. Confirm the returned signed envelope verifies with the existing public key before building a POS release. Do not print keys, passwords, full database URLs, cookies, or activation keys in logs or chat.
 
-The local browser dashboard cannot simply point to a different-site Render URL: its admin cookie is `SameSite=Strict`. For initial API testing, use a trusted API client that retains the cookie and sends the configured `Origin` on admin mutations. Deploying the dashboard later requires an HTTPS same-site setup and matching `ADMIN_ORIGIN`; do not loosen cookie or CORS policy to bypass this.
+The hosted dashboard and API share one origin. The admin cookie remains `SameSite=Strict`, and admin mutations still require an exact `ADMIN_ORIGIN` match. The dashboard uses in-page navigation only, so the server serves `/` and Vite assets without a catch-all that could swallow API routes. For local Vite development, `VITE_LICENSE_API_URL` may still point to the local API.
 
 For release builds, pass the actual Render origin to `scripts/build-release.ps1 -LicenseApiUrl https://<actual-host>`. The script reads the existing ignored public key file and supplies `LICENSE_PUBLIC_KEY_BASE64`; it never packages the private key. Use `-IsolatedSmoke` for a Windows internal smoke build. On a clean isolated Windows profile, activate, close, disconnect, and reopen offline. Repeat on an Android emulator if available. The 15-second activation request stages may need adjustment only if measured cold starts consistently exceed them. Render Free services can sleep when idle, so the first activation may be slower; retry is already available in the activation UI.
 

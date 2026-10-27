@@ -16,6 +16,10 @@ See [licensing setup](../../docs/LICENSING.md#local-setup-and-manual-verificatio
 5. `npm run migrate`, then `npm start`.
 
 `npm run check` checks syntax. `npm test` runs signing and route tests.
+`npm run build` installs and builds the sibling `cloud/admin_dashboard`; the
+API then serves its compiled assets at `/`. The build requires both projects
+to be available under their common `cloud` directory. No client-side URL
+routes exist, so no SPA catch-all is installed. API routes retain priority.
 With `TEST_DATABASE_URL` set to a **disposable** PostgreSQL database, it
 also runs a real database concurrency and transfer test in a temporary
 schema. The test removes only that temporary schema afterward.

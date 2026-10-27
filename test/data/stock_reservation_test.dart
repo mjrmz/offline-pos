@@ -13,7 +13,7 @@ import 'package:modern_offline_pos/data/daos/stock_receiving_repository.dart';
 import 'package:modern_offline_pos/data/daos/purchase_return_repository.dart';
 import 'package:modern_offline_pos/data/daos/cash_session_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 
 Future<ActiveUser> seed(AppDatabase db) async {
   final id = await AuthService(AuthRepository(db)).bootstrap(
@@ -37,16 +37,9 @@ void main() {
     final order = await SalesOrderRepository(original).create(owner, 'c1',
         [const SalesOrderLineRequest('p1', 4000, 10000)]);
     await original.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP TABLE sales_order_fulfillment_lines');
-    raw.execute('DROP TABLE sales_order_fulfillments');
-    raw.execute('ALTER TABLE sales_order_lines DROP COLUMN sale_mode');
-    raw.execute('ALTER TABLE sales_order_lines DROP COLUMN extra_cents');
-    raw.execute('DROP TABLE stock_reservations');
-    raw.execute('PRAGMA user_version = 47');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 47);
     final db = AppDatabase.forTesting(NativeDatabase(file));
-    expect(db.schemaVersion, 50);
+    expect(db.schemaVersion, 55);
     expect((await db.select(db.inventory).get()).single.quantityMilli, 10000);
     expect((await db.select(db.salesOrders).get()).single.id, order.id);
     expect(await db.select(db.stockReservations).get(), isEmpty);

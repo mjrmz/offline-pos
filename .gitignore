@@ -36,6 +36,12 @@ migrate_working_dir/
 /android/.kotlin/
 **/.env
 **/.env.*.local
+**/.env.production
+**/*.dump
+**/*.sql.gz
+**/*.keystore
+**/*.jks
+**/*.p12
 **/node_modules/
 **/dist/
 **/*private*.key

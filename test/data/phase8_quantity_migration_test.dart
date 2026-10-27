@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/data/database.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 
 void main() {
   test('schema 9 to 10 scales historic quantities and keeps BIR and flags',
@@ -37,25 +37,7 @@ void main() {
       await db.customStatement(
           "INSERT INTO product_business_configurations (product_id, feature_id, configuration_json) VALUES ('p', 'expiryBatchTracking', '{\"enabled\":true}')");
       await db.close();
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE product_lots');
-      raw.execute('DROP TABLE made_orders');
-      raw.execute('DROP TABLE tank_empty_movements');
-      raw.execute('ALTER TABLE inventory DROP COLUMN quantity_milli');
-      raw.execute(
-          'ALTER TABLE inventory_movements DROP COLUMN quantity_delta_milli');
-      for (final column in [
-        'quantity_milli',
-        'sale_unit',
-        'sale_mode',
-        'batch_id',
-        'batch_number',
-        'extra_cents'
-      ]) {
-        raw.execute('ALTER TABLE sale_items DROP COLUMN $column');
-      }
-      raw.execute('PRAGMA user_version = 9');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 9);
       db = AppDatabase.forTesting(NativeDatabase(file));
       expect((await db.select(db.inventory).get()).single.quantityMilli, 5000);
       expect(

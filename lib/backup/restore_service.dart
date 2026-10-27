@@ -33,7 +33,12 @@ class RestoreService {
       if (staged.existsSync()) await staged.delete();
       throw StateError('Could not stage verified backup: $error');
     }
-    await closeDatabase();
+    try {
+      await closeDatabase();
+    } catch (error) {
+      if (staged.existsSync()) await staged.delete();
+      throw StateError('Could not close active database for restore: $error');
+    }
     var replaced = false;
     AppDatabase? reopened;
     try {

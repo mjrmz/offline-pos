@@ -3,9 +3,10 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import pg from 'pg';
 import 'dotenv/config';
+import { databaseConfig } from './config.js';
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new pg.Pool(databaseConfig());
 const client = await pool.connect();
 try {
   await client.query('BEGIN');

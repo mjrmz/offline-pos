@@ -1,7 +1,6 @@
 import 'package:drift/native.dart';
-import 'package:drift/drift.dart' show Value;
 import 'dart:io';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
@@ -119,40 +118,35 @@ void main() {
     try {
       final original = AppDatabase.forTesting(NativeDatabase(file));
       final pos = PosRepository(original);
+      final auth = AuthService(AuthRepository(original));
+      final ownerId = await auth.bootstrap('Owner', 'password123', 'Q?', 'answer');
+      await auth.login(ownerId, 'password123');
+      final supplier = await DirectoryRepository(original)
+          .saveSupplier(auth.current!, name: 'Supplier');
       final id = await pos.saveProduct(
           name: 'Existing',
           priceCents: 1000,
           costCents: 500,
           serialTracking: true);
-      final layer = await original
-          .into(original.inventoryLayers)
-          .insertReturning(InventoryLayersCompanion.insert(
-              productId: id,
-              source: const Value('receiving'),
-              quantityReceivedMilli: 1000,
-              quantityRemainingMilli: 1000,
-              unitCostCents: 500));
-      final serial = await original.into(original.serialUnits).insertReturning(
-          SerialUnitsCompanion.insert(
-              productId: id,
-              serialNumber: 'OLD-SN',
-              receivingItemId: const Value(null),
-              inventoryLayerId: Value(layer.id)));
+      await StockReceivingRepository(original).receive(auth.current!, supplier.id,
+          [ReceivingLineRequest(id, 1000, 500, serialNumbers: ['OLD-SN'])]);
+      final layer = (await pos.layersForProduct(id)).single;
+      final serial = (await pos.availableSerials(id)).single;
+      expect(serial.receivingItemId, isNotNull);
       await original.close();
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('PRAGMA user_version = 20');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 20);
       final upgraded = AppDatabase.forTesting(NativeDatabase(file));
       try {
         final units = await upgraded.select(upgraded.serialUnits).get();
         expect(units.single.id, serial.id);
+        expect(units.single.receivingItemId, serial.receivingItemId);
         expect(units.single.inventoryLayerId, layer.id);
-        await upgraded.into(upgraded.serialUnits).insert(
-            SerialUnitsCompanion.insert(
-                productId: id,
-                serialNumber: 'OPEN-SN',
-                receivingItemId: const Value(null),
-                inventoryLayerId: Value(layer.id)));
+        final opening = await PosRepository(upgraded).saveProduct(
+            name: 'New opening', priceCents: 1000, costCents: 500,
+            serialTracking: true, startingStock: 1,
+            openingSerials: ['OPEN-SN']);
+        expect((await PosRepository(upgraded).availableSerials(opening))
+            .single.receivingItemId, isNull);
       } finally {
         await upgraded.close();
       }

@@ -52,7 +52,7 @@ void main() {
     expect(snapshot.walkInContact, '0917 123 4567');
     expect((await PosRepository(db).stockLevels())[productId]!.$1, 5000);
     final backup = await BackupService(db, dir).create(BackupKind.manual);
-    expect(BackupService.verify(backup.file), 46);
+    expect(BackupService.verify(backup.file), 55);
     await reopened.remove(
         ActiveUser(owner, 'Owner', UserRole.owner), rows.first.id,
         discard: true);
@@ -143,7 +143,7 @@ void main() {
         .quickCreateCustomer(auth.current!, name: 'Moira');
     final pos = PosRepository(db);
     final id = await pos.saveProduct(
-        name: 'Keyboard', priceCents: 20000, costCents: 8000, startingStock: 2);
+        name: 'Keyboard', priceCents: 20000, costCents: 0, startingStock: 2);
     final discount = ManualDiscount(
         scope: 'order',
         kind: 'fixed',

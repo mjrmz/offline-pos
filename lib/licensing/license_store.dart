@@ -1,13 +1,16 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import '../core/services/release_smoke_data_root.dart';
 
 class LicenseStore {
   final File? fileOverride;
   const LicenseStore({this.fileOverride});
   Future<File> get file async =>
       fileOverride ??
-      File(p.join((await getApplicationSupportDirectory()).path,
+      File(p.join(
+          ReleaseSmokeDataRoot.directory?.path ??
+              (await getApplicationSupportDirectory()).path,
           'signed-license.json'));
   Future<String?> load() async {
     final target = await file;

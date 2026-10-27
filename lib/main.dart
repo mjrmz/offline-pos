@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'dart:async';
 import 'dart:io';
 import 'package:path/path.dart' as p;
@@ -24,6 +25,7 @@ import 'backup/compliance_protection.dart';
 import 'licensing/activation_client.dart';
 import 'licensing/device_id.dart';
 import 'licensing/license_store.dart';
+import 'licensing/license_api_configuration.dart';
 import 'licensing/signature_verifier.dart';
 import 'features/activation/activation_screen.dart';
 
@@ -53,6 +55,8 @@ class _PosAppState extends State<PosApp> {
   String? deviceId;
   String? licensingError;
   static const licenseApiUrl = String.fromEnvironment('LICENSE_API_URL');
+  bool get licenseApiUsable =>
+      LicenseApiConfiguration.isUsable(licenseApiUrl, release: kReleaseMode);
   @override
   void initState() {
     super.initState();
@@ -271,12 +275,14 @@ class _PosAppState extends State<PosApp> {
                       })
                   : licenseResult?.isValid != true
                       ? deviceId == null ||
-                              licenseApiUrl.isEmpty ||
-                              SignatureVerifier.embeddedPublicKeyBase64.isEmpty
+                              !licenseApiUsable ||
+                              !SignatureVerifier.hasValidEmbeddedPublicKey
                           ? Scaffold(
                               body: Center(
                                   child: Text(licensingError ??
-                                      'License configuration or device ID is unavailable. Contact support.')))
+                                      (!SignatureVerifier.hasValidEmbeddedPublicKey
+                                          ? 'License verification key is missing or invalid. Contact support.'
+                                          : 'License API configuration or device ID is unavailable. Existing valid licenses remain usable offline; contact support for activation.'))))
                           : ActivationScreen(
                               deviceId: deviceId!,
                               client: ActivationClient(Uri.parse(licenseApiUrl),
@@ -301,7 +307,7 @@ class _PosAppState extends State<PosApp> {
                                   protection: complianceProtection),
                               salesRepository: SalesRepository(db),
                               refreshLicense:
-                                  licenseApiUrl.isEmpty || deviceId == null
+                                  !licenseApiUsable || deviceId == null
                                       ? null
                                       : (key) async {
                                           currentAuth.requireSession(

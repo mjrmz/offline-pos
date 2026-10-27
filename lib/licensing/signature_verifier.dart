@@ -64,12 +64,21 @@ String canonicalLicensePayload(Map<String, dynamic> p) {
 class SignatureVerifier {
   static const embeddedPublicKeyBase64 =
       String.fromEnvironment('LICENSE_PUBLIC_KEY_BASE64');
+  static bool isValidPublicKeyBase64(String value) {
+    try {
+      return base64Decode(value).length == 32;
+    } catch (_) {
+      return false;
+    }
+  }
+  static bool get hasValidEmbeddedPublicKey =>
+      isValidPublicKeyBase64(embeddedPublicKeyBase64);
+  static List<int> get _embeddedPublicKey => hasValidEmbeddedPublicKey
+      ? base64Decode(embeddedPublicKeyBase64)
+      : const [];
   final List<int> publicKey;
   SignatureVerifier({List<int>? publicKey})
-      : publicKey = publicKey ??
-            (embeddedPublicKeyBase64.isEmpty
-                ? const []
-                : base64Decode(embeddedPublicKeyBase64));
+      : publicKey = publicKey ?? _embeddedPublicKey;
 
   Future<LicenseVerificationResult> verify(String blob, String deviceId,
       {DateTime? now}) async {

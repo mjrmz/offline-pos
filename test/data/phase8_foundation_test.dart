@@ -11,7 +11,7 @@ import 'package:modern_offline_pos/data/daos/business_feature_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/backup/backup_service.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 
 Future<void> deleteTempDirectory(Directory dir) async {
   for (var attempt = 0; attempt < 5; attempt++) {
@@ -99,27 +99,7 @@ void main() {
       await db.customStatement(
           "INSERT INTO sale_items (id, sale_id, product_id, product_name, quantity, unit_price_cents, line_total_cents) VALUES ('i', 's', 'p', 'Existing', 1, 125, 125)");
       await db.close();
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE product_lots');
-      raw.execute('DROP TABLE made_orders');
-      raw.execute('DROP TABLE tank_empty_movements');
-      raw.execute('ALTER TABLE inventory DROP COLUMN quantity_milli');
-      raw.execute(
-          'ALTER TABLE inventory_movements DROP COLUMN quantity_delta_milli');
-      for (final column in [
-        'quantity_milli',
-        'sale_unit',
-        'sale_mode',
-        'batch_id',
-        'batch_number',
-        'extra_cents'
-      ]) {
-        raw.execute('ALTER TABLE sale_items DROP COLUMN $column');
-      }
-      raw.execute('DROP TABLE business_feature_settings');
-      raw.execute('DROP TABLE product_business_configurations');
-      raw.execute('PRAGMA user_version = 8');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 8);
       db = AppDatabase.forTesting(NativeDatabase(file));
       expect((await db.select(db.products).get()).single.name, 'Existing');
       expect((await db.select(db.inventory).get()).single.quantity, 7);

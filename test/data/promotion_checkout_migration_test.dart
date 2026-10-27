@@ -3,7 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/backup/backup_service.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 
 void main() {
   test('version 41 sale migrates to 43 without changing historical totals',
@@ -21,13 +21,7 @@ void main() {
     await seed.customStatement(
         "INSERT INTO sale_items (id, sale_id, product_id, quantity, unit_price_cents, line_total_cents) VALUES ('i1', 's1', 'p1', 1, 10000, 10000)");
     await seed.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP INDEX sale_promotion_applications_sale');
-    raw.execute('DROP TABLE sale_promotion_applications');
-    raw.execute('ALTER TABLE sale_items DROP COLUMN promotion_discount_cents');
-    raw.execute('ALTER TABLE sales DROP COLUMN discount_source');
-    raw.execute('PRAGMA user_version = 41');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 41);
     final db = AppDatabase.forTesting(NativeDatabase(file));
     expect((await db.select(db.sales).get()).single.totalCents, 10000);
     expect((await db.select(db.sales).get()).single.discountSource, 'none');
@@ -36,7 +30,7 @@ void main() {
         (await db.select(db.saleItems).get()).single.promotionDiscountCents, 0);
     expect(await db.select(db.salePromotionApplications).get(), isEmpty);
     await db.close();
-    expect(BackupService.verify(file), 46);
+    expect(BackupService.verify(file), 55);
   });
 
   test('version 42 adds promotion analytics index without changing sales',
@@ -50,10 +44,7 @@ void main() {
     await seed.customStatement(
         "INSERT INTO sales (id, cashier_id, total_cents, created_at) VALUES ('s1', 'u1', 10000, 0)");
     await seed.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP INDEX sale_promotion_applications_promotion');
-    raw.execute('PRAGMA user_version = 42');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 42);
     final db = AppDatabase.forTesting(NativeDatabase(file));
     expect((await db.select(db.sales).get()).single.totalCents, 10000);
     final index = await db

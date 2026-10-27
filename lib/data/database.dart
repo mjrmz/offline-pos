@@ -11,6 +11,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 import '../core/models/active_user.dart';
+import '../core/services/release_smoke_data_root.dart';
 
 part 'database.g.dart';
 
@@ -1395,6 +1396,12 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
   AppDatabase.forTesting(super.executor);
   static Future<File> databaseFile() async {
+    final smokeRoot = ReleaseSmokeDataRoot.directory;
+    if (smokeRoot != null) {
+      final dataDirectory = Directory(p.join(smokeRoot.path, 'data'));
+      await dataDirectory.create(recursive: true);
+      return File(p.join(dataDirectory.path, 'modern_offline_pos.sqlite'));
+    }
     final dir = await getApplicationDocumentsDirectory();
     return File(p.join(dir.path, 'modern_offline_pos.sqlite'));
   }
@@ -2381,6 +2388,30 @@ class AppDatabase extends _$AppDatabase {
               await m.addColumn(saleItems, saleItems.skuSnapshot);
             }
             await _createKitSaleTables(this);
+          }
+          // Some historical onCreate schemas (including a genuine v22 backup)
+          // kept this source required. Opening serials need a nullable source,
+          // even when the database was already past the original v20 migration.
+          final serialColumns = await customSelect('PRAGMA table_info(serial_units)').get();
+          if (serialColumns.any((row) =>
+              row.read<String>('name') == 'receiving_item_id' &&
+              row.read<int>('notnull') == 1)) {
+            await customStatement('PRAGMA defer_foreign_keys = ON');
+            await customStatement('''CREATE TABLE serial_units_nullable_source (
+              id TEXT NOT NULL PRIMARY KEY,
+              product_id TEXT NOT NULL REFERENCES products(id),
+              serial_number TEXT NOT NULL UNIQUE,
+              status TEXT NOT NULL DEFAULT 'available',
+              receiving_item_id TEXT REFERENCES stock_receiving_items(id),
+              inventory_layer_id TEXT REFERENCES inventory_layers(id),
+              sale_item_id TEXT REFERENCES sale_items(id),
+              created_at INTEGER NOT NULL
+            )''');
+            await customStatement('''INSERT INTO serial_units_nullable_source
+              SELECT id, product_id, serial_number, status, receiving_item_id,
+                inventory_layer_id, sale_item_id, created_at FROM serial_units''');
+            await customStatement('DROP TABLE serial_units');
+            await customStatement('ALTER TABLE serial_units_nullable_source RENAME TO serial_units');
           }
         },
         beforeOpen: (details) async {

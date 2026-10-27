@@ -11,7 +11,7 @@ import 'package:modern_offline_pos/data/daos/business_feature_repository.dart';
 import 'package:modern_offline_pos/data/daos/directory_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/daos/stock_receiving_repository.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 
 void main() {
   test('v19 backfill preserves stock and marks unresolved opening quantity', () async {
@@ -31,11 +31,7 @@ void main() {
         [ReceivingLineRequest(product, 10000, 55000)]);
     expect(await pos.stockMilli(product), 15000);
     await original.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP TABLE sale_item_inventory_allocations');
-    raw.execute('DROP TABLE inventory_layers');
-    raw.execute('PRAGMA user_version = 19');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 19);
     final migrated = AppDatabase.forTesting(NativeDatabase(file));
     try {
       expect(await PosRepository(migrated).stockMilli(product), 15000);
@@ -85,11 +81,7 @@ void main() {
       SaleLineRequest(serial, 1, serialIds: [serialA.id]),
     ], 100000, ownerId);
     await original.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP TABLE sale_item_inventory_allocations');
-    raw.execute('DROP TABLE inventory_layers');
-    raw.execute('PRAGMA user_version = 19');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 19);
     final migrated = AppDatabase.forTesting(NativeDatabase(file));
     try {
       final batches = await PosRepository(migrated).layersForProduct(batch);

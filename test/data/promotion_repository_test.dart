@@ -6,7 +6,7 @@ import 'package:modern_offline_pos/core/services/auth_service.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
 import 'package:modern_offline_pos/data/daos/promotion_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 
 void main() {
   test('version 40 upgrades add promotion tables without changing products', () async {
@@ -17,16 +17,7 @@ void main() {
     await seed.customStatement("INSERT INTO categories (id, name) VALUES ('c1', 'Food')");
     await seed.customStatement("INSERT INTO products (id, name, price_cents, created_at) VALUES ('p1', 'Bread', 12500, 0)");
     await seed.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP INDEX sale_promotion_applications_sale');
-    raw.execute('DROP TABLE sale_promotion_applications');
-    raw.execute('ALTER TABLE sale_items DROP COLUMN promotion_discount_cents');
-    raw.execute('ALTER TABLE sales DROP COLUMN discount_source');
-    raw.execute('DROP TABLE promotion_product_targets');
-    raw.execute('DROP TABLE promotion_category_targets');
-    raw.execute('DROP TABLE promotions');
-    raw.execute('PRAGMA user_version = 40');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 40);
     final db = AppDatabase.forTesting(NativeDatabase(file));
     expect((await db.select(db.products).get()).single.priceCents, 12500);
     expect((await db.select(db.categories).get()).single.name, 'Food');

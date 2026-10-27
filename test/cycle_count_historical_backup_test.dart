@@ -22,15 +22,34 @@ void main() {
     expect(original.schemaVersion, lessThanOrEqualTo(50));
     final readOnly =
         sqlite.sqlite3.open(source.path, mode: sqlite.OpenMode.readOnly);
-    late final int productCount;
-    late final int countCount;
+    const preservedTables = [
+      'products',
+      'sales',
+      'sale_items',
+      'inventory_layers',
+      'customers',
+      'suppliers',
+      'audit_logs',
+      'bir_compliance_state',
+      'z_readings',
+      'stock_counts',
+    ];
+    final beforeCounts = <String, int>{};
     try {
-      productCount = readOnly
-          .select('SELECT COUNT(*) AS n FROM products')
-          .single['n'] as int;
-      countCount = readOnly
-          .select('SELECT COUNT(*) AS n FROM stock_counts')
-          .single['n'] as int;
+      expect(readOnly.select('PRAGMA user_version').single.values.single,
+          original.schemaVersion);
+      expect(readOnly.select('PRAGMA integrity_check').single.values.single,
+          'ok');
+      expect(readOnly.select('PRAGMA foreign_key_check'), isEmpty);
+      final existing = readOnly
+          .select("SELECT name FROM sqlite_master WHERE type='table'")
+          .map((row) => row['name'] as String)
+          .toSet();
+      for (final table in preservedTables.where(existing.contains)) {
+        beforeCounts[table] = readOnly
+            .select('SELECT COUNT(*) AS n FROM $table')
+            .single['n'] as int;
+      }
     } finally {
       readOnly.dispose();
     }
@@ -51,8 +70,22 @@ void main() {
               AppDatabase.forTesting(NativeDatabase(liveFile)));
       live = await restorer.restore(record);
       expect(live.schemaVersion, 55);
-      expect((await live.select(live.products).get()).length, productCount);
-      expect((await live.select(live.stockCounts).get()).length, countCount);
+      expect(
+          (await live.customSelect('PRAGMA user_version').getSingle())
+              .read<int>('user_version'),
+          55);
+      expect(
+          (await live.customSelect('PRAGMA integrity_check').getSingle())
+              .read<String>('integrity_check'),
+          'ok');
+      expect(await live.customSelect('PRAGMA foreign_key_check').get(), isEmpty);
+      for (final entry in beforeCounts.entries) {
+        final after = await live
+            .customSelect('SELECT COUNT(*) AS n FROM ${entry.key}')
+            .getSingle();
+        expect(after.read<int>('n'), entry.value,
+            reason: '${entry.key} rows changed during migration');
+      }
       expect(await live.select(live.cycleCountSchedules).get(), isEmpty);
       expect(BackupService.verify(copied), original.schemaVersion);
       expect(source.lastModifiedSync(), sourceModified);

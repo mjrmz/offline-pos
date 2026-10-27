@@ -14,6 +14,7 @@ import 'package:modern_offline_pos/features/dashboard/home_screen.dart';
 import 'package:modern_offline_pos/features/pos_checkout/pos_layout_preference.dart';
 import 'package:modern_offline_pos/shared/theme/app_theme.dart';
 import 'package:modern_offline_pos/shared/theme/theme_mode_controller.dart';
+import 'package:modern_offline_pos/shared/widgets/app_workspace.dart';
 
 void main() {
   Future<void> mount(WidgetTester tester, Size size,
@@ -46,6 +47,8 @@ void main() {
                 salesRepository: SalesRepository(db),
                 onChanged: () {}))));
     await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('POS'));
+    await tester.pumpAndSettle();
     if (openShift) {
       await tester.enterText(find.byKey(const Key('pos-opening-cash')), '0');
       await tester.pump();
@@ -63,6 +66,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('SELL'), findsOneWidget);
     expect(find.text('INVENTORY'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('ADMIN & SETTINGS'), 200,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
     expect(find.text('ADMIN & SETTINGS'), findsOneWidget);
     expect(find.byType(NavigationBar), findsNothing);
     expect(find.byKey(const Key('desktop-pos-two-pane')), findsOneWidget);
@@ -171,7 +178,7 @@ void main() {
       (tester) async {
     await mount(tester, const Size(390, 844));
     final bar = tester.widget<NavigationBar>(find.byType(NavigationBar));
-    expect(bar.destinations.length, 5);
+    expect(bar.destinations.length, 6);
     await tester.tap(find.text('More'));
     await tester.pumpAndSettle();
     expect(find.text('Stock Receiving'), findsNothing);
@@ -262,6 +269,8 @@ void main() {
               salesRepository: SalesRepository(db),
               onChanged: () {})));
       await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('POS'));
+      await tester.pumpAndSettle();
     }
 
     await mountApp();
@@ -279,11 +288,19 @@ void main() {
     expect((await cash.active())?.startingCashCents, 100000);
     expect(find.byKey(const Key('desktop-pos-two-pane')), findsOneWidget);
     expect(find.textContaining('Shift open'), findsOneWidget);
+    await tester.scrollUntilVisible(find.byTooltip('Cash session'), 200,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
     await tester.tap(find.byTooltip('Cash session'));
     await tester.pumpAndSettle();
     expect(find.text('CURRENT SHIFT'), findsOneWidget);
     expect(find.text('₱1,000.00'), findsWidgets);
     expect(find.byKey(const Key('pos-shift-status')), findsNothing);
+    await tester.scrollUntilVisible(find.byTooltip('POS'), -200,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
     await tester.tap(find.byTooltip('POS'));
     await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox.shrink());
@@ -322,6 +339,10 @@ void main() {
     expect(find.text('Overview'), findsWidgets);
     expect(find.text('Products'), findsWidgets);
     expect(find.text('Receiving'), findsWidgets);
+    await tester.scrollUntilVisible(find.text('Movements'), 300,
+        scrollable: find.descendant(
+            of: find.byType(AppWorkspaceTabs),
+            matching: find.byType(Scrollable)));
     expect(find.text('Movements'), findsWidgets);
     await tester.tap(find.text('Products').first);
     await tester.pumpAndSettle();

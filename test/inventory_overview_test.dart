@@ -98,14 +98,21 @@ void main() {
         home: InventoryWorkspace(
             repository: repo, auth: auth, user: auth.current!)));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Tools'), 300,
+        scrollable: find.descendant(
+            of: find.byType(AppWorkspaceTabs),
+            matching: find.byType(Scrollable)));
     await tester.tap(find.text('Tools').first);
     await tester.pumpAndSettle();
     expect(find.text('Inventory utilities and maintenance tools.'),
         findsOneWidget);
-    await tester.tap(find.text('Open'));
+    await tester.tap(find.descendant(
+        of: find.ancestor(
+            of: find.text('Expiry Monitor'), matching: find.byType(Card)),
+        matching: find.widgetWithText(OutlinedButton, 'Open')));
     await tester.pumpAndSettle();
     expect(find.text('Expiry Monitor'), findsOneWidget);
-    expect(find.text('Overview'), findsWidgets);
+    expect(find.byType(AppWorkspaceTabs), findsOneWidget);
     expect(find.text('LOT-1'), findsOneWidget);
     expect(find.text('2 days overdue'), findsOneWidget);
     expect(find.byKey(const Key('expiry-list-panel')), findsOneWidget);
@@ -182,7 +189,7 @@ void main() {
             repository: repo,
             auth: auth,
             user: auth.current!,
-            initialView: 4)));
+            initialView: 7)));
     await tester.pumpAndSettle();
     expect(find.text('Inventory movements'), findsOneWidget);
     expect(find.text('Opening device'), findsOneWidget);
@@ -208,7 +215,7 @@ void main() {
             repository: repo,
             auth: auth,
             user: auth.current!,
-            initialView: 4)));
+            initialView: 7)));
     await tester.pumpAndSettle();
     expect(find.text('DEL-42'), findsOneWidget);
     expect(find.text('Stock received'), findsOneWidget);

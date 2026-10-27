@@ -41,6 +41,10 @@ void main() {
         pos: PosRepository(db), salesRepository: SalesRepository(db),
         onChanged: () {})));
     await tester.pumpAndSettle();
+    if (shift) {
+      await tester.tap(find.byTooltip('POS'));
+      await tester.pumpAndSettle();
+    }
     return (db, auth);
   }
 

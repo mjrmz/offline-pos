@@ -32,10 +32,15 @@ void main() {
       await tester.pumpWidget(MaterialApp(theme: ThemeData.light(),
         darkTheme: ThemeData.dark(), themeMode: mode,
         home: InventoryWorkspace(repository: repo, auth: auth,
-          user: auth.current!, initialView: 7)));
+          user: auth.current!, initialView: 8)));
       await tester.pumpAndSettle();
       expect(find.text('Label Printing'), findsOneWidget);
-      await tester.tap(find.widgetWithText(OutlinedButton, 'Open').last);
+      final labelButton = find.descendant(
+          of: find.ancestor(
+              of: find.text('Label Printing'), matching: find.byType(Card)),
+          matching: find.widgetWithText(OutlinedButton, 'Open'));
+      await tester.ensureVisible(labelButton);
+      await tester.tap(labelButton);
       await tester.pumpAndSettle();
       expect(find.text('No labels selected'), findsOneWidget);
       await tester.enterText(find.widgetWithText(TextField,

@@ -15,7 +15,7 @@ import 'package:modern_offline_pos/data/daos/business_feature_repository.dart';
 import 'package:modern_offline_pos/core/models/business_feature.dart';
 import 'package:modern_offline_pos/core/models/business_product.dart';
 import 'package:modern_offline_pos/data/database.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 import 'package:modern_offline_pos/backup/compliance_protection.dart';
 import 'package:modern_offline_pos/data/daos/customer_credit_repository.dart';
 
@@ -39,16 +39,9 @@ void main() {
     await StockReservationRepository(seed).reserve(owner,
         (await SalesOrderRepository(seed).lines(order.id)).single.id, 4000);
     await seed.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP TABLE sales_order_fulfillment_lines');
-    raw.execute('DROP TABLE sales_order_fulfillments');
-    raw.execute('ALTER TABLE stock_reservations DROP COLUMN consumed_milli');
-    raw.execute('ALTER TABLE sales_order_lines DROP COLUMN sale_mode');
-    raw.execute('ALTER TABLE sales_order_lines DROP COLUMN extra_cents');
-    raw.execute('PRAGMA user_version = 48');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 48);
     final db = AppDatabase.forTesting(NativeDatabase(file));
-    expect(db.schemaVersion, 50);
+    expect(db.schemaVersion, 55);
     expect((await db.select(db.salesOrders).get()).single.id, order.id);
     expect((await db.select(db.stockReservations).get()).single.quantityMilli,
         4000);

@@ -199,9 +199,8 @@ void main() {
     expect((await repo.availableSerials(product.id)).length, 2);
     await tester.tap(find.text('Opening board').first);
     await tester.pumpAndSettle();
-    expect(find.text('AVAILABLE SERIALS (2)'), findsOneWidget);
-    await tester.ensureVisible(find.text('AVAILABLE SERIALS (2)'));
-    await tester.tap(find.text('AVAILABLE SERIALS (2)'));
+    await tester.ensureVisible(find.text('Serials'));
+    await tester.tap(find.text('Serials'));
     await tester.pumpAndSettle();
     expect(find.text('SN-1'), findsOneWidget);
     expect(find.text('SN-2'), findsOneWidget);
@@ -375,11 +374,12 @@ void main() {
     expect(find.byKey(const Key('record-details-drawer')), findsOneWidget);
     expect(find.text('Rice'), findsNothing);
     expect(find.text('No physical stock on hand.'), findsOneWidget);
-    expect(find.text('AVAILABLE SERIALS (0)'), findsOneWidget);
-    await tester.ensureVisible(find.text('AVAILABLE SERIALS (0)'));
-    await tester.tap(find.text('AVAILABLE SERIALS (0)'));
+    await tester.ensureVisible(find.text('Serials'));
+    await tester.tap(find.text('Serials'));
     await tester.pumpAndSettle();
-    expect(find.text('No available serials.'), findsOneWidget);
+    expect(find.text('Serial Explorer'), findsWidgets);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Receive stock'));
     expect(shortcut, laptop);
   });

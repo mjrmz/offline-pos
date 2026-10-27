@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 import 'package:modern_offline_pos/core/models/active_user.dart';
 import 'package:modern_offline_pos/core/models/business_feature.dart';
 import 'package:modern_offline_pos/core/models/business_product.dart';
@@ -250,18 +250,9 @@ void main() {
       final receipt = await StockReceivingRepository(prior).receive(
           actor, supplier.id, [ReceivingLineRequest(product, 5000, 450)]);
       await prior.close();
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE purchase_return_lines');
-      raw.execute('DROP TABLE purchase_returns');
-      raw.execute('DROP TABLE supplier_payment_allocations');
-      raw.execute('DROP TABLE supplier_payments');
-      raw.execute('DROP TABLE supplier_payable_sources');
-      raw.execute(
-          'ALTER TABLE inventory_movements DROP COLUMN inventory_layer_id');
-      raw.execute('PRAGMA user_version = 43');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 43);
       final upgraded = AppDatabase.forTesting(NativeDatabase(file));
-      expect(upgraded.schemaVersion, 46);
+      expect(upgraded.schemaVersion, 55);
       expect(
           (await StockReceivingRepository(upgraded).items(receipt.id))
               .single

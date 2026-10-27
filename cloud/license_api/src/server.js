@@ -5,6 +5,7 @@ import 'dotenv/config';
 import { activationRouter } from './routes/activation.js';
 import { adminRouter } from './routes/admin.js';
 import { signingKeyFromEnvironment } from './services/licenseSigningService.js';
+import { databaseConfig } from './db/config.js';
 
 export function createApp(pool) {
   const app = express();
@@ -32,7 +33,7 @@ export function createApp(pool) {
 
 if (process.argv[1]?.endsWith('server.js')) {
   signingKeyFromEnvironment();
-  const pool = new pg.Pool({connectionString:process.env.DATABASE_URL,max:Number(process.env.DB_POOL_MAX ?? 20)});
-  const server = createApp(pool).listen(Number(process.env.PORT ?? 3000), () => console.log('License API ready'));
+  const pool = new pg.Pool({...databaseConfig(),max:Number(process.env.DB_POOL_MAX ?? 5)});
+  const server = createApp(pool).listen(Number(process.env.PORT ?? 3000), '0.0.0.0', () => console.log('License API ready'));
   process.on('SIGTERM', async () => { server.close(); await pool.end(); });
 }

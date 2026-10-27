@@ -232,6 +232,44 @@ void main() {
     expect(await BackupService(db, directory).listValid(), isEmpty);
   });
 
+  test('backup inspection rejects metadata that disagrees with SQLite',
+      () async {
+    final record = await BackupService(db, directory).create(BackupKind.manual);
+    final metadata = File('${record.file.path}.json');
+    final original = await metadata.readAsString();
+    final changed = jsonDecode(original) as Map<String, dynamic>;
+    changed['schemaVersion'] = record.schemaVersion - 1;
+    await metadata.writeAsString(jsonEncode(changed));
+    expect(() => BackupService.inspect(record.file), throwsStateError);
+    await metadata.writeAsString(original);
+    expect(BackupService.inspect(record.file).schemaVersion,
+        record.schemaVersion);
+  });
+
+  test('failed database close leaves live data and removes restore staging',
+      () async {
+    final liveFile = File('${directory.path}/close-failure.sqlite');
+    final live = AppDatabase.forTesting(NativeDatabase(liveFile));
+    try {
+      await AuthService(AuthRepository(live))
+          .bootstrap('Owner', 'password123', 'Question?', 'answer');
+      await PosRepository(live).addCategory('Preserved');
+      final backups = Directory('${directory.path}/close-failure-backups');
+      final backup = await BackupService(live, backups).create(BackupKind.manual);
+      final restorer = RestoreService(liveFile, backups,
+          closeDatabase: () async => throw StateError('Injected close failure'),
+          openDatabase: () async =>
+              AppDatabase.forTesting(NativeDatabase(liveFile)));
+      await expectLater(restorer.restore(backup), throwsStateError);
+      expect(File('${liveFile.path}.restore-pending').existsSync(), isFalse);
+      expect(File('${liveFile.path}.before-restore').existsSync(), isFalse);
+      expect((await live.select(live.categories).get()).single.name,
+          'Preserved');
+    } finally {
+      await live.close();
+    }
+  });
+
   test(
       'verified restore reopens prior state and failed validation preserves live data',
       () async {
@@ -306,6 +344,20 @@ void main() {
     await expectLater(restorer.restore(futureRecord), throwsStateError);
     expect((await live.select(live.categories).get()).length, 2);
     live = await restorer.restore(backup);
+    final preRestore = File('${liveFile.path}.before-restore');
+    expect(preRestore.existsSync(), isTrue);
+    expect(BackupService.verify(preRestore), live.schemaVersion);
+    final preserved = sqlite.sqlite3.open(preRestore.path,
+        mode: sqlite.OpenMode.readOnly);
+    try {
+      expect(
+          preserved
+              .select("SELECT COUNT(*) AS n FROM categories WHERE name='After'")
+              .single['n'],
+          1);
+    } finally {
+      preserved.dispose();
+    }
     expect(
         (await live.select(live.auditLogs).get())
             .where((row) => row.action == 'backup.restore')

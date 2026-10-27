@@ -39,6 +39,8 @@ void main() {
             salesRepository: SalesRepository(db),
             onChanged: () {})));
     await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Inventory'));
+    await tester.pumpAndSettle();
     expect(find.byType(CheckoutScreen), findsNothing);
     expect(find.text('Sales History'), findsNothing);
     expect(find.byType(InventoryWorkspace), findsOneWidget);

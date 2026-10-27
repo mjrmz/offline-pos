@@ -606,49 +606,91 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
         }
         return AppWorkspacePadding(
             child: Column(children: [
-          Row(children: [
-            Text(selected?.reference ?? 'Stock Counts',
-                style: Theme.of(context).textTheme.titleLarge),
-            const Spacer(),
-            if (selected != null)
-              TextButton.icon(
-                  onPressed: () => setState(() => selected = null),
-                  icon: const Icon(Icons.arrow_back),
-                  label: const Text('Back')),
-            if (selected == null) ...[
-              OutlinedButton(
-                  onPressed: busy ? null : _newCount,
-                  child: const Text('+ New Stock Count')),
-              const SizedBox(width: 8),
-              if (widget.user.can(PosPermission.stockAdjust))
-                FilledButton.tonal(
-                    onPressed: busy ? null : () => _adjust(),
-                    child: const Text('Adjust Stock')),
-            ]
-          ]),
+          LayoutBuilder(builder: (context, constraints) {
+            final title = Text(selected?.reference ?? 'Stock Counts',
+                style: Theme.of(context).textTheme.titleLarge);
+            final actions = <Widget>[
+              if (selected != null)
+                TextButton.icon(
+                    onPressed: () => setState(() => selected = null),
+                    icon: const Icon(Icons.arrow_back),
+                    label: const Text('Back')),
+              if (selected == null) ...[
+                OutlinedButton(
+                    onPressed: busy ? null : _newCount,
+                    child: const Text('+ New Stock Count')),
+                if (widget.user.can(PosPermission.stockAdjust))
+                  FilledButton.tonal(
+                      onPressed: busy ? null : () => _adjust(),
+                      child: const Text('Adjust Stock')),
+              ],
+            ];
+            if (constraints.maxWidth < 700) {
+              return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    title,
+                    const SizedBox(height: 8),
+                    Wrap(spacing: 8, runSpacing: 8, children: actions),
+                  ]);
+            }
+            return Row(children: [
+              title,
+              const Spacer(),
+              Wrap(spacing: 8, children: actions),
+            ]);
+          }),
           const SizedBox(height: 10),
           if (selected == null) ...[
-            Row(children: [
-              SegmentedButton<bool>(
-                  segments: const [
-                    ButtonSegment(value: false, label: Text('Counts')),
-                    ButtonSegment(value: true, label: Text('Adjustments'))
-                  ],
-                  selected: {
-                    adjustments
-                  },
-                  onSelectionChanged: (v) =>
-                      setState(() => adjustments = v.first)),
-              const SizedBox(width: 12),
-              Expanded(
-                  child: TextField(
-                      decoration: const InputDecoration(
-                          isDense: true,
-                          prefixIcon: Icon(Icons.search),
-                          hintText: 'Search'),
-                      onChanged: (s) =>
-                          setState(() => search = s.toLowerCase()))),
-            ]),
+            LayoutBuilder(
+                builder: (context, constraints) => constraints.maxWidth < 420
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                            SegmentedButton<bool>(
+                                segments: const [
+                                  ButtonSegment(
+                                      value: false, label: Text('Counts')),
+                                  ButtonSegment(
+                                      value: true, label: Text('Adjustments'))
+                                ],
+                                selected: {
+                                  adjustments
+                                },
+                                onSelectionChanged: (v) =>
+                                    setState(() => adjustments = v.first)),
+                            const SizedBox(height: 8),
+                            TextField(
+                                decoration: const InputDecoration(
+                                    isDense: true,
+                                    prefixIcon: Icon(Icons.search),
+                                    hintText: 'Search'),
+                                onChanged: (s) =>
+                                    setState(() => search = s.toLowerCase())),
+                          ])
+                    : Row(children: [
+                        SegmentedButton<bool>(
+                            segments: const [
+                              ButtonSegment(
+                                  value: false, label: Text('Counts')),
+                              ButtonSegment(
+                                  value: true, label: Text('Adjustments'))
+                            ],
+                            selected: {
+                              adjustments
+                            },
+                            onSelectionChanged: (v) =>
+                                setState(() => adjustments = v.first)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                            child: TextField(
+                                decoration: const InputDecoration(
+                                    isDense: true,
+                                    prefixIcon: Icon(Icons.search),
+                                    hintText: 'Search'),
+                                onChanged: (s) =>
+                                    setState(() => search = s.toLowerCase()))),
+                      ])),
             const SizedBox(height: 8),
             Expanded(child: adjustments ? _adjustmentList() : _countList()),
           ] else ...[
@@ -684,7 +726,8 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
                           aliasSearchProductId = null;
                         });
                         final id = await ProductBarcodeAliasRepository(
-                            widget.repository.db).productIdFor(s);
+                                widget.repository.db)
+                            .productIdFor(s);
                         if (mounted && revision == aliasSearchRevision) {
                           setState(() => aliasSearchProductId = id);
                         }
@@ -709,51 +752,62 @@ class _StockCountsScreenState extends State<StockCountsScreen> {
         ]));
       });
 
-  Widget _countList() => ListView(children: [
-        const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(children: [
-              SizedBox(width: 115, child: Text('REFERENCE')),
-              SizedBox(width: 140, child: Text('DATE')),
-              Expanded(flex: 2, child: Text('SCOPE')),
-              SizedBox(width: 110, child: Text('STATUS')),
-              SizedBox(width: 115, child: Text('COUNTED')),
-              SizedBox(width: 100, child: Text('VARIANCES')),
-              Expanded(child: Text('CREATED BY')),
-            ])),
-        for (final c in counts.where((c) =>
-            c.reference.toLowerCase().contains(search) ||
-            c.scope.toLowerCase().contains(search)))
-          InkWell(
-              onTap: () {
-                selected = c;
-                countErrors.clear();
-                countWriteError = null;
-                filter = 'All';
-                reload();
-              },
-              child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  child: Row(children: [
-                    SizedBox(width: 115, child: Text(c.reference)),
-                    SizedBox(
-                        width: 140,
-                        child: Text(
-                            c.createdAt.toLocal().toString().substring(0, 16))),
-                    Expanded(flex: 2, child: Text(c.scope)),
-                    SizedBox(width: 110, child: Text(c.status.toUpperCase())),
-                    SizedBox(
-                        width: 115,
-                        child: Text(
-                            '${countLines[c.id]?.where((l) => l.countedMilli != null).length ?? 0} / ${countLines[c.id]?.length ?? 0}')),
-                    SizedBox(
-                        width: 100,
-                        child: Text(
-                            '${countLines[c.id]?.where((l) => l.countedMilli != null && l.countedMilli != l.expectedMilli).length ?? 0}')),
-                    Expanded(child: Text(users[c.createdBy] ?? c.createdBy)),
-                  ]))),
-      ]);
+  Widget _countList() => LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(
+              width: constraints.maxWidth < 800 ? 800 : constraints.maxWidth,
+              height: constraints.maxHeight,
+              child: ListView(children: [
+                const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: Row(children: [
+                      SizedBox(width: 115, child: Text('REFERENCE')),
+                      SizedBox(width: 140, child: Text('DATE')),
+                      Expanded(flex: 2, child: Text('SCOPE')),
+                      SizedBox(width: 110, child: Text('STATUS')),
+                      SizedBox(width: 115, child: Text('COUNTED')),
+                      SizedBox(width: 100, child: Text('VARIANCES')),
+                      Expanded(child: Text('CREATED BY')),
+                    ])),
+                for (final c in counts.where((c) =>
+                    c.reference.toLowerCase().contains(search) ||
+                    c.scope.toLowerCase().contains(search)))
+                  InkWell(
+                      onTap: () {
+                        selected = c;
+                        countErrors.clear();
+                        countWriteError = null;
+                        filter = 'All';
+                        reload();
+                      },
+                      child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 10),
+                          child: Row(children: [
+                            SizedBox(width: 115, child: Text(c.reference)),
+                            SizedBox(
+                                width: 140,
+                                child: Text(c.createdAt
+                                    .toLocal()
+                                    .toString()
+                                    .substring(0, 16))),
+                            Expanded(flex: 2, child: Text(c.scope)),
+                            SizedBox(
+                                width: 110,
+                                child: Text(c.status.toUpperCase())),
+                            SizedBox(
+                                width: 115,
+                                child: Text(
+                                    '${countLines[c.id]?.where((l) => l.countedMilli != null).length ?? 0} / ${countLines[c.id]?.length ?? 0}')),
+                            SizedBox(
+                                width: 100,
+                                child: Text(
+                                    '${countLines[c.id]?.where((l) => l.countedMilli != null && l.countedMilli != l.expectedMilli).length ?? 0}')),
+                            Expanded(
+                                child: Text(users[c.createdBy] ?? c.createdBy)),
+                          ]))),
+              ]))));
 
   Widget _adjustmentList() => ListView(children: [
         const Padding(

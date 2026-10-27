@@ -9,7 +9,7 @@ import 'package:modern_offline_pos/data/daos/directory_repository.dart';
 import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/daos/sales_order_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 
 void main() {
   test('schema 49 migration preserves order and initializes physical state', () async {
@@ -25,27 +25,16 @@ void main() {
     final order = await SalesOrderRepository(seed).create(owner, customer.id,
       [SalesOrderLineRequest(product, 1000, 10000)]);
     await seed.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP INDEX IF EXISTS sales_orders_physical_queue');
-    raw.execute('DROP INDEX IF EXISTS sales_order_physical_events_order');
-    raw.execute('DROP TABLE sales_order_physical_events');
-    for (final column in ['physical_status','scheduled_at','contact_name_snapshot',
-      'contact_phone_snapshot','delivery_address_snapshot','fulfillment_instructions',
-      'delivery_fee_cents','recipient_name','physical_completed_at']) {
-      raw.execute('ALTER TABLE sales_orders DROP COLUMN $column');
-    }
-    raw.execute('ALTER TABLE sales DROP COLUMN delivery_fee_cents');
-    raw.execute('PRAGMA user_version = 49');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 49);
     final db = AppDatabase.forTesting(NativeDatabase(file));
-    expect(db.schemaVersion, 50);
+    expect(db.schemaVersion, 55);
     final migrated = (await db.select(db.salesOrders).get()).single;
     expect(migrated.id, order.id);
     expect(migrated.physicalStatus, 'pending');
     expect(migrated.deliveryAddressSnapshot, isNull);
     expect(migrated.deliveryFeeCents, 0);
     final backup = await BackupService(db, dir).create(BackupKind.manual);
-    expect(BackupService.verify(backup.file), 50);
+    expect(BackupService.verify(backup.file), 55);
     await db.close();
   });
 

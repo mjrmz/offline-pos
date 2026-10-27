@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 import 'package:modern_offline_pos/core/models/active_user.dart';
 import 'package:modern_offline_pos/core/models/cart.dart';
 import 'package:modern_offline_pos/core/services/auth_service.dart';
@@ -157,13 +158,7 @@ void main() {
             (await priorAuth.repository.user(id))!.pinHash,
     };
     await old.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP TRIGGER users_valid_role_insert');
-    raw.execute('DROP TRIGGER users_valid_role_update');
-    raw.execute('DROP TABLE role_permissions');
-    raw.execute('DROP TABLE roles');
-    raw.execute('PRAGMA user_version = 39');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 39);
     final upgraded = AppDatabase.forTesting(NativeDatabase(file));
     addTearDown(upgraded.close);
     final rows = await AuthRepository(upgraded).managedUsers();
@@ -184,7 +179,7 @@ void main() {
         .createRole('Stock Staff', '', {PosPermission.stockReceiving});
     await auth.createUserWithRole('Staff', code, 'staffPassword123');
     final backup = await BackupService(db, dir).create(BackupKind.manual);
-    expect(BackupService.verify(backup.file), 46);
+    expect(BackupService.verify(backup.file), db.schemaVersion);
     final raw = sqlite.sqlite3.open(backup.file.path);
     expect(
         raw.select(

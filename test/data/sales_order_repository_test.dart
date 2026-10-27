@@ -6,7 +6,7 @@ import 'package:modern_offline_pos/core/services/auth_service.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
 import 'package:modern_offline_pos/data/daos/sales_order_repository.dart';
 import 'package:modern_offline_pos/data/database.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 
 void main() {
   test('schema 46 adds order tables without changing business rows', () async {
@@ -17,16 +17,9 @@ void main() {
     await seed.customStatement(
         "INSERT INTO categories (id, name) VALUES ('c1', 'Food')");
     await seed.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP TABLE sales_order_fulfillment_lines');
-    raw.execute('DROP TABLE sales_order_fulfillments');
-    raw.execute('DROP TABLE stock_reservations');
-    raw.execute('DROP TABLE sales_order_lines');
-    raw.execute('DROP TABLE sales_orders');
-    raw.execute('PRAGMA user_version = 46');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 46);
     final db = AppDatabase.forTesting(NativeDatabase(file));
-    expect(db.schemaVersion, 50);
+    expect(db.schemaVersion, 55);
     expect((await db.select(db.categories).get()).single.name, 'Food');
     expect(await db.select(db.salesOrders).get(), isEmpty);
     expect(await db.select(db.salesOrderLines).get(), isEmpty);

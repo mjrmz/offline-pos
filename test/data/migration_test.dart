@@ -3,6 +3,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/data/database.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 import 'package:modern_offline_pos/backup/backup_service.dart';
 
 // The v3 schema is the common base for these upgrade fixtures. Versions 4 and
@@ -143,10 +144,8 @@ void main() {
         "VALUES ('cs1', 'owner', 1000, 0)");
     raw.execute("INSERT INTO audit_logs (id, user_id, action, created_at) "
         "VALUES ('a1', 'owner', 'login_success', 0)");
-    raw.execute('DROP TABLE cash_movements');
-    raw.execute('DROP INDEX cash_sessions_one_open');
-    raw.execute('PRAGMA user_version = 6');
     raw.dispose();
+    await rebuildAsHistoricalFixture(file, 6);
     expect(BackupService.verify(file), 6);
     db = AppDatabase.forTesting(NativeDatabase(file));
     try {

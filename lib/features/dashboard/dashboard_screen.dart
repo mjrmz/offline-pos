@@ -425,7 +425,7 @@ class _MetricTile extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(8),
       child: Container(
-          height: 106,
+          height: 112,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
               border: Border.all(color: Theme.of(context).dividerColor),

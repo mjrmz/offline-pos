@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:modern_offline_pos/backup/backup_service.dart';
+import 'package:modern_offline_pos/backup/restore_service.dart';
 import 'package:modern_offline_pos/backup/compliance_protection.dart';
 import 'package:modern_offline_pos/core/services/auth_service.dart';
 import 'package:modern_offline_pos/data/daos/auth_repository.dart';
@@ -90,10 +91,14 @@ void main() {
       await CashSessionRepository(db, birReady: true, protection: protection)
           .close(user, 500);
       expect((await db.select(db.zReadings).get()).single.grandTotalCents, 500);
-      await db.close();
-      await backup.file.copy(live.path);
-      db = AppDatabase.forTesting(NativeDatabase(live));
-      await protection.reconcile(db, actorId: ownerId);
+      final restorer = RestoreService(live, backup.file.parent,
+          closeDatabase: () => db.close(),
+          openDatabase: () async =>
+              AppDatabase.forTesting(NativeDatabase(live)),
+          afterVerify: (opened) =>
+              protection.reconcile(opened, actorId: ownerId));
+      db = await restorer.restore(backup);
+      expect(File('${live.path}.before-restore').existsSync(), isTrue);
       final state = (await db.select(db.birComplianceState).get()).single;
       expect(state.highestInvoiceNumber, 4);
       expect(state.grandTotalCents, 500);

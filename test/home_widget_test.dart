@@ -393,10 +393,18 @@ void main() {
     expect(find.byKey(const Key('pos-shift-status')), findsNothing);
     final sale = (await db.select(db.sales).get()).single;
     expect(sale.cashierId, ownerId);
+    await tester.scrollUntilVisible(find.byTooltip('Sales History'), -150,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
     await tester.tap(find.byTooltip('Sales History'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Receipt #POS-'), findsWidgets);
     expect(find.textContaining(sale.id), findsNothing);
+    await tester.scrollUntilVisible(find.byTooltip('Reports'), 150,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
     await tester.tap(find.byTooltip('Reports'));
     await tester.pumpAndSettle();
     expect(find.text('Net sales'), findsWidgets);

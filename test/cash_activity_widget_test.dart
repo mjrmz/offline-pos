@@ -77,6 +77,10 @@ void main() {
             salesRepository: SalesRepository(db),
             onChanged: () {})));
     await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.byTooltip('Expenses'), 200,
+        scrollable: find.descendant(
+            of: find.byKey(const Key('sidebar-navigation')),
+            matching: find.byType(Scrollable)));
     await tester.tap(find.byTooltip('Expenses'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Petty Cash'));

@@ -9,7 +9,7 @@ import 'package:modern_offline_pos/data/daos/pos_repository.dart';
 import 'package:modern_offline_pos/data/daos/quotation_repository.dart';
 import 'package:modern_offline_pos/data/daos/petty_cash_repository.dart';
 import 'package:modern_offline_pos/data/daos/cash_session_repository.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 
 void main() {
   test(
@@ -28,11 +28,7 @@ void main() {
           .record(auth.current!, amountCents: 12000, category: 'Transport');
       await db.close();
       db = null;
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE business_cash_movements');
-      raw.execute('DROP TABLE cash_expense_categories');
-      raw.execute('PRAGMA user_version = 29');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 29);
       db = AppDatabase.forTesting(NativeDatabase(file));
       expect((await db.select(db.pettyCashEntries).get()).single.id, legacy.id);
       expect(await CashSessionRepository(db).expected(shift.id), 88000);
@@ -62,29 +58,13 @@ void main() {
           .create(auth.current!, [QuoteLineRequest(product, 1000)]);
       await db.close();
       db = null;
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('CREATE TABLE quotation_items_v28 ('
-          'id TEXT NOT NULL PRIMARY KEY, quotation_id TEXT NOT NULL, '
-          'product_id TEXT NOT NULL, product_name_snapshot TEXT NOT NULL, '
-          'sku_snapshot TEXT, barcode_snapshot TEXT, '
-          'sale_mode TEXT NOT NULL DEFAULT \'ordinary\', '
-          'extra_cents INTEGER NOT NULL DEFAULT 0, quantity_milli INTEGER NOT NULL, '
-          'unit_snapshot TEXT NOT NULL, unit_price_cents INTEGER NOT NULL, '
-          'line_total_cents INTEGER NOT NULL)');
-      raw.execute('INSERT INTO quotation_items_v28 SELECT id, quotation_id, '
-          'product_id, product_name_snapshot, sku_snapshot, barcode_snapshot, '
-          'sale_mode, extra_cents, quantity_milli, unit_snapshot, '
-          'unit_price_cents, line_total_cents FROM quotation_items');
-      raw.execute('DROP TABLE quotation_items');
-      raw.execute('ALTER TABLE quotation_items_v28 RENAME TO quotation_items');
-      raw.execute('PRAGMA user_version = 28');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 28);
       db = AppDatabase.forTesting(NativeDatabase(file));
       final restored = (await (db.select(db.quotationItems)
                 ..where((item) => item.quotationId.equals(quote.id)))
               .get())
           .single;
-      expect(db.schemaVersion, 46);
+      expect(db.schemaVersion, 55);
       expect(restored.productId, product);
       expect(restored.unitPriceCents, 50000);
       expect(restored.customNotes, isNull);
@@ -105,12 +85,9 @@ void main() {
           "VALUES ('legacy-rma', 'RMA-OLD', 'customer', 'Fault', 'Unknown', 1000, 'pending', 0)");
       await db.close();
       db = null;
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE serial_warranty_snapshots');
-      raw.execute('PRAGMA user_version = 22');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 22);
       db = AppDatabase.forTesting(NativeDatabase(file));
-      expect(db.schemaVersion, 46);
+      expect(db.schemaVersion, 55);
       expect((await db.select(db.rmaCases).get()).single.reference, 'RMA-OLD');
       expect(await db.select(db.serialWarrantySnapshots).get(), isEmpty);
     } finally {
@@ -130,14 +107,11 @@ void main() {
           "VALUES ('legacy-rma', 'RMA-OLD', 'customer', 'Fault', 'Unknown', 1000, 'pending', 0)");
       await db.close();
       db = null;
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE rma_lifecycle_events');
-      raw.execute('PRAGMA user_version = 21');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 21);
       db = AppDatabase.forTesting(NativeDatabase(file));
       expect((await db.select(db.rmaCases).get()).single.reference, 'RMA-OLD');
       expect(await db.select(db.rmaLifecycleEvents).get(), isEmpty);
-      expect(db.schemaVersion, 46);
+      expect(db.schemaVersion, 55);
     } finally {
       await db?.close();
       await dir.delete(recursive: true);
@@ -156,19 +130,12 @@ void main() {
           "VALUES ('r', 'RMA-18', 'inbound', 'Fault', 'Intact', 1000, 'pending', 0)");
       await db.close();
       db = null;
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE sale_item_refunds');
-      raw.execute('DROP TABLE inbound_rma_replacements');
-      raw.execute('DROP INDEX customer_refund_rma_case');
-      raw.execute(
-          'ALTER TABLE customer_refund_obligations DROP COLUMN rma_case_id');
-      raw.execute('PRAGMA user_version = 18');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 18);
       db = AppDatabase.forTesting(NativeDatabase(file));
       expect((await db.select(db.rmaCases).get()).single.reference, 'RMA-18');
       expect(await db.select(db.saleItemRefunds).get(), isEmpty);
       expect(await db.select(db.inboundRmaReplacements).get(), isEmpty);
-      expect(db.schemaVersion, 46);
+      expect(db.schemaVersion, 55);
     } finally {
       await db?.close();
       await dir.delete(recursive: true);
@@ -187,16 +154,12 @@ void main() {
           "VALUES ('r', 'RMA-OLD', 'customer', 'Fault', 'Intact', 1000, 'pending', 0)");
       await db.close();
       db = null;
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute(
-          'ALTER TABLE rma_cases DROP COLUMN replacement_serial_unit_id');
-      raw.execute('PRAGMA user_version = 17');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 17);
       db = AppDatabase.forTesting(NativeDatabase(file));
       final cases = await db.select(db.rmaCases).get();
       expect(cases.single.reference, 'RMA-OLD');
       expect(cases.single.replacementSerialUnitId, isNull);
-      expect(db.schemaVersion, 46);
+      expect(db.schemaVersion, 55);
     } finally {
       await db?.close();
       await dir.delete(recursive: true);
@@ -217,25 +180,9 @@ void main() {
       await db.customStatement(
           "INSERT INTO customer_credit_entries (id, customer_id, user_id, amount_cents, kind, created_at) VALUES ('e', 'c', 'u', 500, 'credit_sale', 0)");
       await db.close();
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE layaway_payments');
-      raw.execute('DROP TABLE layaway_serials');
-      raw.execute('DROP TABLE layaway_items');
-      raw.execute('DROP TABLE layaways');
-      raw.execute('DROP TABLE quotation_items');
-      raw.execute('DROP TABLE quotations');
-      raw.execute('DROP TABLE rma_events');
-      raw.execute('DROP TABLE rma_cases');
-      raw.execute('DROP TABLE serial_sale_links');
-      raw.execute('DROP TABLE serial_units');
-      raw.execute('DROP TABLE customer_refund_settlements');
-      raw.execute('DROP TABLE customer_refund_obligations');
-      raw.execute('ALTER TABLE cash_movements DROP COLUMN reference_id');
-      raw.execute('ALTER TABLE products DROP COLUMN serial_tracking');
-      raw.execute('PRAGMA user_version = 16');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 16);
       db = AppDatabase.forTesting(NativeDatabase(file));
-      expect(db.schemaVersion, 46);
+      expect(db.schemaVersion, 55);
       expect(
           (await db.select(db.customerCreditEntries).get()).single.amountCents,
           500);
@@ -260,33 +207,7 @@ void main() {
       await db.customStatement(
           "INSERT INTO customer_credit_entries (id, customer_id, user_id, amount_cents, kind, created_at) VALUES ('e', 'c', 'u', 50000, 'credit_sale', 0)");
       await db.close();
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE layaway_payments');
-      raw.execute('DROP TABLE layaway_serials');
-      raw.execute('DROP TABLE layaway_items');
-      raw.execute('DROP TABLE layaways');
-      raw.execute('DROP TABLE quotation_items');
-      raw.execute('DROP TABLE quotations');
-      raw.execute('DROP TABLE rma_events');
-      raw.execute('DROP TABLE rma_cases');
-      raw.execute('DROP TABLE serial_sale_links');
-      raw.execute('DROP TABLE serial_units');
-      raw.execute('DROP TABLE customer_refund_settlements');
-      raw.execute('DROP TABLE customer_refund_obligations');
-      raw.execute('ALTER TABLE cash_movements DROP COLUMN reference_id');
-      raw.execute('ALTER TABLE products DROP COLUMN serial_tracking');
-      raw.execute(
-          'ALTER TABLE customer_credit_entries DROP COLUMN payment_method');
-      for (final column in [
-        'store_address',
-        'store_contact',
-        'receipt_header',
-        'receipt_footer'
-      ]) {
-        raw.execute('ALTER TABLE settings DROP COLUMN $column');
-      }
-      raw.execute('PRAGMA user_version = 14');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 14);
       db = AppDatabase.forTesting(NativeDatabase(file));
       expect(
           (await db.select(db.customerCreditEntries).get()).single.amountCents,
@@ -322,31 +243,7 @@ void main() {
       await db.customStatement(
           "INSERT INTO cash_movements (id, session_id, sale_id, amount_cents, kind, created_at) VALUES ('m', 'c', 's', 50000, 'cash_sale', 0)");
       await db.close();
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE layaway_payments');
-      raw.execute('DROP TABLE layaway_serials');
-      raw.execute('DROP TABLE layaway_items');
-      raw.execute('DROP TABLE layaways');
-      raw.execute('DROP TABLE quotation_items');
-      raw.execute('DROP TABLE quotations');
-      raw.execute('DROP TABLE rma_events');
-      raw.execute('DROP TABLE rma_cases');
-      raw.execute('DROP TABLE serial_sale_links');
-      raw.execute('DROP TABLE serial_units');
-      raw.execute('DROP TABLE customer_refund_settlements');
-      raw.execute('DROP TABLE customer_refund_obligations');
-      raw.execute('ALTER TABLE cash_movements DROP COLUMN reference_id');
-      raw.execute('ALTER TABLE products DROP COLUMN serial_tracking');
-      raw.execute('DROP INDEX IF EXISTS stock_receivings_supplier');
-      raw.execute('DROP TABLE stock_receiving_items');
-      raw.execute('DROP TABLE stock_receivings');
-      raw.execute('DROP INDEX IF EXISTS sales_cash_session');
-      raw.execute('DROP INDEX IF EXISTS customer_credit_entries_customer');
-      raw.execute('DROP TABLE customer_credit_entries');
-      raw.execute('ALTER TABLE sales DROP COLUMN customer_id');
-      raw.execute('ALTER TABLE sales DROP COLUMN cash_session_id');
-      raw.execute('PRAGMA user_version = 11');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 11);
       db = AppDatabase.forTesting(NativeDatabase(file));
       expect((await db.select(db.sales).get()).single.cashSessionId, 'c');
       await db.close();
@@ -371,41 +268,9 @@ void main() {
       await db.customStatement(
           "INSERT INTO product_lots (id, product_id, batch_number, quantity_milli, received_at) VALUES ('b', 'p', 'Lot A', 2000, 0)");
       await db.close();
-      final raw = sqlite.sqlite3.open(file.path);
-      raw.execute('DROP TABLE layaway_payments');
-      raw.execute('DROP TABLE layaway_serials');
-      raw.execute('DROP TABLE layaway_items');
-      raw.execute('DROP TABLE layaways');
-      raw.execute('DROP TABLE quotation_items');
-      raw.execute('DROP TABLE quotations');
-      raw.execute('DROP TABLE rma_events');
-      raw.execute('DROP TABLE rma_cases');
-      raw.execute('DROP TABLE serial_sale_links');
-      raw.execute('DROP TABLE serial_units');
-      raw.execute('DROP TABLE customer_refund_settlements');
-      raw.execute('DROP TABLE customer_refund_obligations');
-      raw.execute('ALTER TABLE cash_movements DROP COLUMN reference_id');
-      raw.execute('ALTER TABLE products DROP COLUMN serial_tracking');
-      raw.execute('DROP INDEX IF EXISTS stock_receivings_supplier');
-      raw.execute('DROP TABLE stock_receiving_items');
-      raw.execute('DROP TABLE stock_receivings');
-      for (final table in [
-        'customers',
-        'suppliers',
-        'petty_cash_entries',
-        'price_history'
-      ]) {
-        raw.execute('DROP TABLE $table');
-      }
-      raw.execute('DROP INDEX IF EXISTS customer_credit_entries_customer');
-      raw.execute('DROP TABLE customer_credit_entries');
-      raw.execute('DROP INDEX IF EXISTS sales_cash_session');
-      raw.execute('ALTER TABLE sales DROP COLUMN customer_id');
-      raw.execute('ALTER TABLE sales DROP COLUMN cash_session_id');
-      raw.execute('PRAGMA user_version = 10');
-      raw.dispose();
+      await rebuildAsHistoricalFixture(file, 10);
       db = AppDatabase.forTesting(NativeDatabase(file));
-      expect(db.schemaVersion, 46);
+      expect(db.schemaVersion, 55);
       expect((await db.select(db.products).get()).single.name, 'Rice');
       expect(
           (await db.select(db.productLots).get()).single.quantityMilli, 2000);

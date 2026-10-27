@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqlite3/sqlite3.dart' as sqlite;
+import '../support/historical_fixture.dart';
 import 'package:modern_offline_pos/backup/backup_service.dart';
 import 'package:modern_offline_pos/data/database.dart';
 import 'package:modern_offline_pos/data/daos/inventory_health_repository.dart';
@@ -17,16 +17,13 @@ void main() {
     await db.customStatement(
         "INSERT INTO products (id, name, price_cents, created_at) VALUES ('p', 'Preserved', 100, 1)");
     await db.close();
-    final raw = sqlite.sqlite3.open(file.path);
-    raw.execute('DROP TABLE inventory_health_settings');
-    raw.execute('PRAGMA user_version = 36');
-    raw.dispose();
+    await rebuildAsHistoricalFixture(file, 36);
     db = AppDatabase.forTesting(NativeDatabase(file));
     try {
       expect((await db.select(db.products).get()).single.name, 'Preserved');
       expect(
           (await InventoryHealthRepository(db).settings()).slowMovingDays, 60);
-      expect(db.schemaVersion, 46);
+      expect(db.schemaVersion, 55);
     } finally {
       await db.close();
       await dir.delete(recursive: true);

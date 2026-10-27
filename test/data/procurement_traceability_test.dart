@@ -131,7 +131,7 @@ void main() {
       expect((await po.activity(order.id)).map((e) => e.title),
           contains('PO closed'));
       final backup = await BackupService(db, dir).create(BackupKind.manual);
-      expect(BackupService.verify(backup.file), 46);
+      expect(BackupService.verify(backup.file), db.schemaVersion);
       final restored = AppDatabase.forTesting(NativeDatabase(backup.file));
       try {
         expect(
